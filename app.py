@@ -34,6 +34,7 @@ os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"  # skip Windows Media Foundatio
 
 import sys
 import csv
+import sqlite3
 import io
 import threading
 import time
@@ -1455,6 +1456,64 @@ def engine_action(test_id: str, b: EngineAction, request: Request):
 
 
 # ── Database — session management ──────────────────────────────────────────
+
+# ── Students — the roster screen3 picks from ───────────────────────────────
+#
+# Before this the roster was a hardcoded object in screen3.html, so the name
+# recorded against every measurement came from the template. Not scoped by
+# coach: a class belongs to the school, and two coaches testing the same
+# class must see the same children.
+
+class StudentCreate(BaseModel):
+    name: str
+    grade: str
+    roll_no: Optional[str] = None
+    reg_no: Optional[str] = None
+    school: Optional[str] = None
+
+
+@app.get("/api/classes")
+def list_classes():
+    return {"ok": True, "classes": db.list_classes()}
+
+
+@app.get("/api/students")
+def list_students(grade: Optional[str] = Query(default=None)):
+    """?grade=Class%204-A for one class; omit it for the whole school."""
+    return {"ok": True, "students": db.list_students(grade=grade)}
+
+
+@app.post("/api/students")
+def create_student(body: StudentCreate):
+    name = (body.name or "").strip()
+    grade = (body.grade or "").strip()
+    if not name or not grade:
+        return JSONResponse(
+            {"ok": False, "error": "A student needs a name and a class."},
+            status_code=400,
+        )
+    try:
+        student_id = db.add_student(
+            name=name, grade=grade,
+            roll_no=(body.roll_no or "").strip() or None,
+            reg_no=(body.reg_no or "").strip() or None,
+            school=(body.school or "").strip() or None,
+        )
+    except sqlite3.IntegrityError:
+        return JSONResponse(
+            {"ok": False,
+             "error": f"Roll number {body.roll_no!r} is already used in {grade}."},
+            status_code=409,
+        )
+    return {"ok": True, "student": db.get_student(student_id)}
+
+
+@app.delete("/api/students/{student_id}")
+def delete_student(student_id: int):
+    if not db.delete_student(student_id):
+        return JSONResponse({"ok": False, "error": "No such student"}, status_code=404)
+    return {"ok": True}
+
 
 @app.post("/api/session")
 def create_session(body: SessionCreate, request: Request):

@@ -65,6 +65,25 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── School roster ─────────────────────────────────────────────────────────
+-- The list of students a coach picks from. Until now this lived in
+-- screen3.html as a hardcoded two-entry `mockDb` object, so the name written
+-- into every session row came from the template rather than from anywhere
+-- real. Deliberately NOT scoped per coach: a class roster belongs to the
+-- school, and two coaches testing the same class must see the same children.
+CREATE TABLE IF NOT EXISTS students (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    grade      TEXT NOT NULL,          -- the "class", e.g. "Class 4-A"
+    roll_no    TEXT,
+    reg_no     TEXT,
+    school     TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
+    -- Two children in one class can share a name; a roll number is what the
+    -- school uses to tell them apart, so that pair is what must be unique.
+    UNIQUE (grade, roll_no)
+);
+
 -- ── BMI / Height Estimator ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS bmi (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,6 +307,51 @@ class GoForFitDB:
         q += " ORDER BY created_at DESC"
         with _conn() as con:
             return [dict(r) for r in con.execute(q, params).fetchall()]
+
+    # ── Students (the roster screen3 picks from) ─────────────────────────
+
+    def list_classes(self) -> list[str]:
+        with _conn() as con:
+            return [r["grade"] for r in con.execute(
+                "SELECT DISTINCT grade FROM students ORDER BY grade")]
+
+    def list_students(self, grade: str = None) -> list[dict]:
+        q = "SELECT * FROM students"
+        params = ()
+        if grade is not None:
+            q += " WHERE grade=?"
+            params = (grade,)
+        # Roll numbers are strings but read as numbers, so "10" must not sort
+        # before "9". CAST puts the numeric ones in human order and leaves
+        # anything non-numeric (e.g. "12B") to fall back on the text sort.
+        q += " ORDER BY CAST(roll_no AS INTEGER), roll_no, name"
+        with _conn() as con:
+            return [dict(r) for r in con.execute(q, params)]
+
+    def get_student(self, student_id: int) -> dict:
+        with _conn() as con:
+            row = con.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+            return dict(row) if row else None
+
+    def add_student(self, name: str, grade: str, roll_no: str = None,
+                    reg_no: str = None, school: str = None) -> int:
+        """Returns the new id, or raises sqlite3.IntegrityError if that class
+        already has a student with this roll number."""
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO students (name, grade, roll_no, reg_no, school)
+                   VALUES (?,?,?,?,?)""",
+                (name, grade, roll_no, reg_no, school),
+            )
+            return cur.lastrowid
+
+    def delete_student(self, student_id: int) -> bool:
+        """Removes a student from the roster. Their past results are NOT
+        touched — those live in sessions keyed by name, and deleting a child
+        from the register must never quietly erase measurements already taken.
+        """
+        with _conn() as con:
+            return con.execute("DELETE FROM students WHERE id=?", (student_id,)).rowcount > 0
 
     def list_coaches(self) -> list[str]:
         """Coach names seen before, for the sign-in screen's pick list."""

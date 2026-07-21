@@ -28,8 +28,6 @@
                 <label class="block text-sm font-bold text-gray-900">Select Class</label>
                 <select id="class-select" onchange="updateStudents()" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
                     <option value="">-- Select Class --</option>
-                    <option value="Class 1-D">Class 1-D</option>
-                    <option value="Class 4-A">Class 4-A</option>
                 </select>
             </div>
             <div class="space-y-1.5">
@@ -37,6 +35,28 @@
                 <select id="student-select" onchange="loadStudentMeta()" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
                     <option value="">-- Select Student --</option>
                 </select>
+                <button type="button" onclick="toggleAddStudent()" id="add-student-toggle"
+                        class="text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
+                    + Add a student
+                </button>
+            </div>
+        </div>
+
+        <!-- A fresh install has an empty roster and no other way to fill it. -->
+        <div id="add-student-form" class="hidden mt-4 border border-indigo-200 bg-indigo-50/50 rounded-lg p-4 space-y-3">
+            <p class="text-sm font-bold text-gray-900">Add a student to the roster</p>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <input id="new-name"  placeholder="Full name"        class="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700" />
+                <input id="new-grade" placeholder="Class, e.g. 4-A"  class="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700" />
+                <input id="new-roll"  placeholder="Roll no"          class="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700" />
+                <input id="new-reg"   placeholder="Reg no (optional)" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white text-gray-700" />
+            </div>
+            <div class="flex gap-2 items-center">
+                <button type="button" onclick="saveNewStudent()"
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg">Save student</button>
+                <button type="button" onclick="toggleAddStudent()"
+                        class="text-xs text-gray-500 hover:text-gray-700 px-2">Cancel</button>
+                <span id="add-student-msg" class="text-xs"></span>
             </div>
         </div>
 
@@ -158,10 +178,10 @@
     <script>
         const testId = {{ test.id|tojson }};
         const TEST_TIMED = {{ 'true' if test.timed else 'false' }};
-        const mockDb = {
-            "Class 1-D": [{ id: "9105", name: "Ayaan Yadav", roll: "5", reg: "REG-2026-001" }],
-            "Class 4-A": [{ id: "4402", name: "Meera Sharma", roll: "12", reg: "REG-2026-112" }]
-        };
+        // The roster comes from the server (students table). It used to be a
+        // hardcoded object right here, which meant the name written onto every
+        // saved measurement came from the template rather than a real record.
+        let roster = [];   // students of the currently selected class
         let tInterval = null, startTime = null;
 
         async function testCamera(paramName) {
@@ -206,22 +226,100 @@
             btn.innerText = 'Test';
         }
 
-        function updateStudents() {
+        async function loadClasses() {
+            const sel = document.getElementById('class-select');
+            const previous = sel.value;
+            try {
+                const r = await fetch('/api/classes');
+                const d = await r.json();
+                sel.innerHTML = '<option value="">-- Select Class --</option>';
+                (d.classes || []).forEach(c => sel.add(new Option(c, c)));
+                if (previous) sel.value = previous;
+                if (!(d.classes || []).length) {
+                    // Empty roster is the first-run state, not an error — say so
+                    // where the coach is already looking.
+                    sel.innerHTML = '<option value="">-- No students yet --</option>';
+                }
+            } catch (e) { console.error('Could not load classes:', e); }
+        }
+
+        async function updateStudents() {
             const cls = document.getElementById('class-select').value;
-            const res = document.getElementById('student-select');
-            res.innerHTML = '<option value="">-- Select Student --</option>';
-            if(cls && mockDb[cls]) mockDb[cls].forEach(s => res.add(new Option(s.name, s.id)));
+            const sel = document.getElementById('student-select');
+            sel.innerHTML = '<option value="">-- Select Student --</option>';
+            roster = [];
+            if (!cls) return loadStudentMeta();
+            try {
+                const r = await fetch(`/api/students?grade=${encodeURIComponent(cls)}`);
+                const d = await r.json();
+                roster = d.students || [];
+                // value is the database id; the label carries the roll number
+                // because two children in a class can share a name.
+                roster.forEach(s => sel.add(new Option(
+                    s.roll_no ? `${s.name} (roll ${s.roll_no})` : s.name, String(s.id))));
+            } catch (e) { console.error('Could not load students:', e); }
+            loadStudentMeta();
+        }
+
+        function currentStudent() {
+            const id = document.getElementById('student-select').value;
+            return roster.find(s => String(s.id) === id) || null;
         }
 
         function loadStudentMeta() {
             const cls = document.getElementById('class-select').value;
-            const id = document.getElementById('student-select').value;
-            const student = mockDb[cls]?.find(s => s.id === id);
+            const student = currentStudent();
             document.getElementById('m-name').innerText = student ? student.name : '-';
-            document.getElementById('m-reg').innerText = student ? student.reg : '-';
-            document.getElementById('m-class').innerText = student ? cls : '-';
-            document.getElementById('m-roll').innerText = student ? student.roll : '-';
+            document.getElementById('m-reg').innerText = student && student.reg_no ? student.reg_no : '-';
+            document.getElementById('m-class').innerText = student ? student.grade : (cls || '-');
+            document.getElementById('m-roll').innerText = student && student.roll_no ? student.roll_no : '-';
             loadSavedResults();
+        }
+
+        function toggleAddStudent() {
+            const form = document.getElementById('add-student-form');
+            form.classList.toggle('hidden');
+            document.getElementById('add-student-msg').innerText = '';
+            if (!form.classList.contains('hidden')) {
+                // Pre-fill the class they were already looking at.
+                document.getElementById('new-grade').value =
+                    document.getElementById('class-select').value || '';
+                document.getElementById('new-name').focus();
+            }
+        }
+
+        async function saveNewStudent() {
+            const msg = document.getElementById('add-student-msg');
+            const body = {
+                name:    document.getElementById('new-name').value.trim(),
+                grade:   document.getElementById('new-grade').value.trim(),
+                roll_no: document.getElementById('new-roll').value.trim(),
+                reg_no:  document.getElementById('new-reg').value.trim(),
+            };
+            if (!body.name || !body.grade) {
+                msg.innerText = 'Name and class are both needed.';
+                msg.className = 'text-xs text-rose-600';
+                return;
+            }
+            const res = await fetch('/api/students', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                msg.innerText = data.error || 'Could not save.';
+                msg.className = 'text-xs text-rose-600';
+                return;
+            }
+            msg.innerText = `${data.student.name} added.`;
+            msg.className = 'text-xs text-emerald-700';
+            ['new-name', 'new-roll', 'new-reg'].forEach(id => document.getElementById(id).value = '');
+            // Land the coach on the student they just created, ready to test.
+            await loadClasses();
+            document.getElementById('class-select').value = data.student.grade;
+            await updateStudents();
+            document.getElementById('student-select').value = String(data.student.id);
+            loadStudentMeta();
         }
 
         function toggleTimer() {
@@ -508,10 +606,9 @@
             }
         }
         async function goToAI() {
-            const id = document.getElementById('student-select').value;
             const cls = document.getElementById('class-select').value;
-            if(!id) return alert('Select a student first.');
-            const student = mockDb[cls].find(s => s.id === id);
+            const student = currentStudent();
+            if(!student) return alert('Select a student first.');
 
             // Only params the launch endpoint actually insists on block the
             // hand-off — the rest have a server-side default, and demanding
@@ -534,8 +631,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         student_name: student.name,
-                        grade: cls,
-                        notes: `Roll: ${student.roll} | Reg: ${student.reg}`
+                        grade: student.grade,
+                        notes: `Roll: ${student.roll_no || '-'} | Reg: ${student.reg_no || '-'}`
                     })
                 });
                 const data = await res.json();
@@ -550,8 +647,8 @@
                 test: testId,
                 id: student.id,
                 name: student.name,
-                roll: student.roll,
-                class_info: cls,
+                roll: student.roll_no || '',
+                class_info: student.grade,
                 trainerId: '995',
                 traiName: 'Hareram Singh',
                 exerdseName: {{ test.title|tojson }}
@@ -571,6 +668,7 @@
         }
         // Load immediately, then retry after 1 s so we catch results that
         // the server stages right as the engine stops (tiny race window).
+        loadClasses();
         loadPendingResult();
         setTimeout(loadPendingResult, 1000);
         loadSavedResults();
