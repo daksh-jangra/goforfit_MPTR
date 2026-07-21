@@ -1,0 +1,29 @@
+{
+  // templates/*.html are Jinja, not plain HTML. VS Code's built-in HTML
+  // language service doesn't know that, so it reads server-side syntax inside
+  // <script> tags as JavaScript and reports it as broken:
+  //
+  //     const testId = {{ test.id|tojson }};
+  //
+  // becomes "Property assignment expected", "Cannot redeclare block-scoped
+  // variable 'test'", "',' expected" — ~100 phantom errors across screen3 and
+  // screen4. The browser never sees any of it; Jinja substitutes the value
+  // server-side before the page is sent.
+  //
+  // This turns off type-checking of JavaScript embedded in HTML files only.
+  // Python and standalone .js files are unaffected. The richer alternative is
+  // a Jinja/Django-HTML extension plus a files.associations mapping, which
+  // keeps validation AND understands the syntax — worth doing if anyone wants
+  // real linting back in the templates.
+  "html.validate.scripts": false,
+
+  // Same root cause, and the same reason pyrightconfig.json exists: the engine
+  // modules live in tests/ and are imported by bare name after a runtime
+  // sys.path.insert, which no static analyser can see.
+  "python.analysis.extraPaths": ["tests"],
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true
+  }
+}
