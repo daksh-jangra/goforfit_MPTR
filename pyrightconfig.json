@@ -1,8 +1,8 @@
 {
-  "//": "The engine modules live in tests/ and are imported by bare name after app.py does sys.path.insert(0, TESTS_DIR) at runtime. Pylance/pyright don't execute that, so without extraPaths they report 'Import \"web_engines\" could not be resolved' — a false positive, not a broken import. extraPaths tells the analyser what the runtime already does.",
+  "//": "Both entries below are runtime sys.path.insert()s that no static analyser can see. tests/ is added by app.py before importing web_engines/dual_feed_engines by bare name. tests/600m_new is added by Run600mEngine.__init__ before importing config/color_detector/lane_manager/state_machine/timer. Without them Pylance reports 'could not be resolved' for imports that work fine — false positives, not broken imports.",
   "include": ["."],
   "exclude": ["**/__pycache__", ".venv", "output"],
-  "extraPaths": ["tests"],
+  "extraPaths": ["tests", "tests/600m_new"],
   "venvPath": ".",
   "venv": ".venv",
   "typeCheckingMode": "off",
