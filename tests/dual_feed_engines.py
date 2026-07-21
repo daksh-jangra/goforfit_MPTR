@@ -70,13 +70,21 @@ def _release_capture(cap):
 
 
 class DualFeedEngine:
-    # NOTE — no cv2.flip() here, deliberately. The self-facing tests
-    # (bmi/wingspan/curl_up/wall_toss/sit_reach/vertical_jump) mirror their
-    # preview selfie-style because the athlete watches themselves. These field
-    # tests are watched by the coach from behind the camera, and their
-    # detection logic is direction-sensitive (lane order, finish-line side,
-    # travel direction) — mirroring would both look wrong to the coach and
-    # silently invert lane/direction semantics.
+    # Mirrored selfie-style, like every other engine — a subject facing the
+    # camera sees their real right hand on the right of the screen. The flip
+    # happens in _run_loop BEFORE _process_pair, so detection, overlays and
+    # browser calibration clicks all share one coordinate space.
+    #
+    # Safe for the direction-sensitive logic here: 600m infers travel
+    # direction on the Y axis and keys lanes by shirt colour; dash_50m detects
+    # finishes via background-subtraction motion inside a coach-calibrated
+    # strip (direction-agnostic); shuttle_run's lane boundaries are clicked by
+    # the coach on this same flipped feed.
+    # CAVEAT: positional lane numbering (shuttle_run's sorted boundary clicks,
+    # dash_50m's overhead column split) is screen-relative — lane 1 is the
+    # leftmost lane AS DISPLAYED, which mirroring moves to the other side of
+    # the track. Confirm lane order on the live feed before a timed run.
+    MIRROR = True
     JPEG_QUALITY = 75
     FRAME_W = 960
     FRAME_H = 540
@@ -252,6 +260,10 @@ class DualFeedEngine:
                 if not ok_a or not ok_b:
                     time.sleep(0.02)
                     continue
+                if self.MIRROR:
+                    # Before _process_pair so detection/overlays/clicks agree.
+                    frame_a = cv2.flip(frame_a, 1)
+                    frame_b = cv2.flip(frame_b, 1)
                 drawn_a, drawn_b = self._process_pair(frame_a, frame_b)
                 self._publish(drawn_a, drawn_b)
         except Exception as exc:

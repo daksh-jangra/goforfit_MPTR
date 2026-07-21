@@ -1,13 +1,15 @@
-"""Every self-facing engine must publish a MIRRORED (selfie-style) preview.
+"""EVERY engine must publish a MIRRORED (selfie-style) preview.
 
-The athlete watches themselves on screen4, so their real-world right must
-appear on screen right — and the flip must happen BEFORE inference so
-landmarks/overlays live in the same flipped space. This was inconsistent
-once (curl_up and sit_reach streamed un-mirrored while bmi/wingspan/etc.
-mirrored); this test pins the contract.
+A subject facing the camera must see their real right hand on the right of
+the screen — and the flip must happen BEFORE inference/detection so
+landmarks, overlays and browser calibration clicks all live in the same
+flipped space.
 
-Field tests (shuttle_run/dash_50m/run_600m) are deliberately NOT mirrored —
-coach-view, direction-sensitive lane logic — see DualFeedEngine's note.
+This drifted twice in practice: first curl_up and sit_reach streamed
+un-mirrored while bmi/wingspan/etc. mirrored, then the dual-camera field
+tests (shuttle_run/dash_50m/run_600m) were left un-mirrored while everything
+else mirrored — which is what a coach reported as "I raise my right hand and
+it shows on the left". These tests pin the contract for both families.
 
 Slower than the other tests: each engine loads its real MediaPipe model and
 runs real inference on synthetic frames (~2-3s per engine).
@@ -79,6 +81,48 @@ def test_self_facing_engine_publishes_mirrored_preview(engine_name, kwargs):
     engine = getattr(web_engines, engine_name)(**kwargs)
     assert _published_square_side(engine) == "right", (
         f"{engine_name} published an un-mirrored frame — the left-side square "
-        "stayed on the left. Self-facing previews must be selfie-mirrored, "
-        "with cv2.flip(frame, 1) BEFORE inference."
+        "stayed on the left. Previews must be selfie-mirrored, with "
+        "cv2.flip(frame, 1) BEFORE inference."
+    )
+
+
+def test_dual_feed_engine_mirrors_before_processing(monkeypatch):
+    """The field tests share one flip in DualFeedEngine._run_loop. Assert the
+    frames handed to _process_pair are already mirrored — that ordering is
+    what keeps detection, overlays and calibration clicks in one space."""
+    import cv2
+    import dual_feed_engines as dfe
+
+    seen = {}
+
+    class Probe(dfe.DualFeedEngine):
+        def _load_models(self):
+            pass
+
+        def _release_models(self):
+            pass
+
+        def _process_pair(self, frame_a, frame_b):
+            if "a" not in seen:
+                band = frame_a[frame_a.shape[0] // 2]
+                left = band[: frame_a.shape[1] // 3].mean()
+                right = band[-frame_a.shape[1] // 3:].mean()
+                seen["a"] = "right" if right > left else "left"
+            return frame_a, frame_b
+
+        def _state_locked(self):
+            return {}
+
+    monkeypatch.setattr(cv2, "VideoCapture", SynthCap)
+    eng = Probe("0", "1")
+    eng.start()
+    try:
+        assert wait_until(lambda: "a" in seen, timeout=8.0), "_process_pair never ran"
+    finally:
+        eng.stop()
+
+    assert seen["a"] == "right", (
+        "DualFeedEngine handed _process_pair an un-mirrored frame — the "
+        "left-side square stayed on the left. Set MIRROR/flip before "
+        "_process_pair so detection and clicks share the displayed space."
     )
