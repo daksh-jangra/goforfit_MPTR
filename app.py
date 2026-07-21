@@ -146,6 +146,12 @@ _RUNS: dict = {}
 # some platforms, one silently starves the other of frames.
 _CAMERA_CLAIMS: dict = {}
 
+# Camera keys claimed but whose engine hasn't been registered yet. Opening a
+# camera takes seconds, and during that window the claim is real while the
+# engine legitimately doesn't exist — pruning must not mistake that for a
+# dead run and hand the device to someone else mid-open.
+_LAUNCHING_CLAIMS: set = set()
+
 
 # ── Engine registry ────────────────────────────────────────────────────────
 # One slot per in-process camera engine. Everything the HTTP layer needs to
@@ -818,9 +824,30 @@ def _active_test_id_locked(coach: str) -> Optional[str]:
     return None
 
 
+def _prune_camera_claims_locked() -> None:
+    """Drop claims whose engine is no longer running.
+
+    A claim is taken at launch and released on stop — but an engine can also
+    stop by ITSELF: its loop raises, the capture wedges and the watchdog
+    reports it dead, or the coach closes the tab and never presses STOP.
+    Without this the claim outlived the engine and the camera was locked out
+    of the whole server until a restart, reported as "the webcam stopped
+    working". Liveness is the source of truth; the claim is just a cache.
+    Requires _state_lock.
+    """
+    for key, holder in list(_CAMERA_CLAIMS.items()):
+        if key in _LAUNCHING_CLAIMS:
+            continue  # mid-launch: the engine legitimately doesn't exist yet
+        eng = _RUNS.get(holder)
+        if eng is None or not eng.is_running():
+            del _CAMERA_CLAIMS[key]
+            _RUNS.pop(holder, None)
+
+
 def _camera_conflict_locked(coach: str, sources) -> Optional[tuple]:
     """(other_coach, their_test) if someone else already holds one of these
     cameras, else None. Requires _state_lock."""
+    _prune_camera_claims_locked()
     for src in sources:
         holder = _CAMERA_CLAIMS.get(_camera_mod.source_key(src))
         if holder is not None and holder[0] != coach:
@@ -830,13 +857,23 @@ def _camera_conflict_locked(coach: str, sources) -> Optional[tuple]:
 
 def _claim_cameras_locked(coach: str, test_id: str, sources) -> None:
     for src in sources:
-        _CAMERA_CLAIMS[_camera_mod.source_key(src)] = (coach, test_id)
+        key = _camera_mod.source_key(src)
+        _CAMERA_CLAIMS[key] = (coach, test_id)
+        _LAUNCHING_CLAIMS.add(key)
+
+
+def _claims_settled_locked(coach: str, test_id: str) -> None:
+    """The engine is registered — its claims are now backed by a live run."""
+    for key, holder in _CAMERA_CLAIMS.items():
+        if holder == (coach, test_id):
+            _LAUNCHING_CLAIMS.discard(key)
 
 
 def _release_cameras_locked(coach: str, test_id: str) -> None:
     for key, holder in list(_CAMERA_CLAIMS.items()):
         if holder == (coach, test_id):
             del _CAMERA_CLAIMS[key]
+            _LAUNCHING_CLAIMS.discard(key)
 
 # ── Pending (staged-but-not-saved) AI results ──────────────────────────────
 # AI test scripts no longer write straight to the DB. They POST their raw
@@ -1203,6 +1240,7 @@ def _launch_engine(slot: _EngineSlot, body: dict):
 
     with _state_lock:
         _RUNS[(coach, slot.test_id)] = engine
+        _claims_settled_locked(coach, slot.test_id)
         # Clear only THIS coach's stale result — another coach's staged
         # reading for the same test is theirs and must survive.
         _pending.pop((coach, slot.test_id), None)

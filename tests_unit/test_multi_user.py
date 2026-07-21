@@ -231,3 +231,32 @@ def test_sessions_are_stamped_and_scoped(client):
 
     # don't leave the probe row behind
     client.delete(f"/api/session/{created['session_id']}", headers=PRIYA)
+
+
+# ── claims must not outlive the engine ───────────────────────────────────
+
+def test_a_camera_is_freed_when_its_engine_dies_on_its_own(app_mod, client):
+    """The bug that took the webcam out of service: claims were released on
+    STOP and on a failed launch, but an engine can also die by itself — its
+    loop raises, the capture wedges, or the coach closes the tab without
+    pressing STOP. The claim then outlived the run and locked the device out
+    of the whole server until a restart."""
+    _launch(client, PRIYA, "bmi", camera="0")
+    engine = app_mod._built[-1]
+
+    engine._running = False  # died; nobody called /api/stop
+
+    r = _launch(client, RAJ, "curl_up", camera="0")
+    assert r.json()["ok"] is True, "a dead engine kept holding the camera"
+
+
+def test_a_live_engine_still_holds_its_camera(app_mod, client):
+    """The pruning must not be so eager that it frees a running test."""
+    _launch(client, PRIYA, "bmi", camera="0")
+    assert _launch(client, RAJ, "curl_up", camera="0").status_code == 409
+
+
+def test_a_dead_run_is_not_reported_as_running(app_mod, client):
+    _launch(client, PRIYA, "bmi", camera="0")
+    app_mod._built[-1]._running = False
+    assert client.get("/api/status/bmi", headers=PRIYA).json()["running"] is False
