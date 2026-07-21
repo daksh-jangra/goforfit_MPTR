@@ -130,6 +130,51 @@ def test_unlock_with_the_wrong_code_does_not(client):
     assert "gf_token" not in r.cookies
 
 
+def test_non_ascii_token_is_refused_not_a_500(client):
+    """secrets.compare_digest raises TypeError on non-ASCII str, so a code
+    typed with an accent used to come back as a traceback instead of a
+    refusal. (The header route reaches the same comparison but httpx won't
+    send a non-ASCII header at all — curl will, which is how this surfaced.)"""
+    assert client.post("/unlock", data={"token": "café", "next": "/"}).status_code == 401
+
+
+def test_tokens_match_is_total():
+    """The comparison must never raise, whatever arrives in a cookie."""
+    import auth
+
+    for junk in ("café", "", "🎽", "x" * 10_000, None, 42, b"bytes"):
+        assert auth.tokens_match(junk, "the-real-token") is False
+    assert auth.tokens_match("the-real-token", "the-real-token") is True
+
+
+def test_a_stale_cookie_does_not_block_a_valid_token_link(client):
+    """The common case, not an edge case: an unconfigured server mints a new
+    token every restart, so every previously-unlocked device holds a dead
+    cookie. A fresh ?token= link must still get them in."""
+    client.cookies.set("gf_token", "token-from-a-previous-run")
+    r = client.get("/screen2?token=" + TOKEN)
+
+    assert r.status_code == 303
+    assert "/unlock" not in r.headers["location"]
+    assert r.cookies.get("gf_token") == TOKEN, "stale cookie was not replaced"
+
+
+def test_the_token_never_reaches_the_unlock_page(client):
+    """A rejected request must not carry the attempted token into `next`,
+    where it would sit in the form, the address bar and history."""
+    r = client.get("/screen2?category=All&token=whatever-was-tried")
+    assert r.status_code == 303
+    assert "whatever-was-tried" not in r.headers["location"]
+    assert "category" in r.headers["location"]
+
+
+def test_a_valid_header_wins_over_a_stale_cookie(client):
+    """Checking only the first credential PRESENT would fail this."""
+    client.cookies.set("gf_token", "stale")
+    r = client.get("/api/sessions", headers={"X-GoForFit-Token": TOKEN})
+    assert r.status_code == 200
+
+
 def test_unlock_will_not_bounce_to_another_host(client):
     """`next` is attacker-controllable — it must stay same-site."""
     r = client.post("/unlock", data={"token": TOKEN, "next": "//evil.example/x"})

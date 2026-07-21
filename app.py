@@ -14,7 +14,7 @@ a small `url_for` compatibility shim below lets them keep using Flask-style
 calls like `url_for('screen2', category='All Tests')`.
 
 Usage:
-    pip install -r requirements.txt   (needs Python <= 3.12 — see README)
+    pip install -r requirements.txt   (Python 3.10+ — see README)
     python app.py
     Then open  http://localhost:5001  in your browser.
     (Port 5001 because macOS AirPlay owns 5000; localhost-only by default —
@@ -34,7 +34,6 @@ os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"  # skip Windows Media Foundatio
 
 import sys
 import csv
-import secrets
 import io
 import threading
 import time
@@ -873,7 +872,7 @@ async def unlock_submit(request: Request):
     target = auth_mod._safe_next(form.get("next"))
     if ACCESS_TOKEN is None:
         return RedirectResponse(target, status_code=303)
-    if not secrets.compare_digest(supplied, ACCESS_TOKEN):
+    if not auth_mod.tokens_match(supplied, ACCESS_TOKEN):
         # 401, not a redirect: a wrong code must not look like success, and
         # the status makes a failed unlock visible in the server log.
         return templates.TemplateResponse(

@@ -57,6 +57,19 @@ def resolve_token():
     return secrets.token_urlsafe(9), True
 
 
+def tokens_match(supplied, expected):
+    """Constant-time compare that survives arbitrary input.
+
+    secrets.compare_digest raises TypeError on a str containing non-ASCII,
+    so a coach typing a code with an accent — or any junk in a cookie —
+    used to come back as a 500 with a traceback instead of a clean refusal.
+    Comparing the UTF-8 bytes keeps it constant-time and total.
+    """
+    if not isinstance(supplied, str) or not expected:
+        return False
+    return secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _safe_next(raw):
     """Only same-site relative paths — an attacker-supplied `next` must not
     be able to bounce the coach off to another host after unlocking."""
@@ -75,15 +88,19 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         self.token = token
 
     def _authorised(self, request):
-        supplied = (
-            request.cookies.get(COOKIE_NAME)
-            or request.headers.get(HEADER_NAME)
-            or request.query_params.get(QUERY_NAME)
-        )
-        if not supplied:
-            return False
-        # compare_digest to keep the check constant-time.
-        return secrets.compare_digest(supplied, self.token)
+        # Any of the three may be stale while another is valid, so check them
+        # all rather than stopping at the first one that is merely PRESENT.
+        return any(tokens_match(supplied, self.token) for supplied in (
+            request.cookies.get(COOKIE_NAME),
+            request.headers.get(HEADER_NAME),
+            request.query_params.get(QUERY_NAME),
+        ))
+
+    def _clean_target(self, request):
+        """Where this request wanted to go, with the token stripped out — it
+        must never reach the unlock page's `next`, a Referer, or history."""
+        remaining = [(k, v) for k, v in request.query_params.multi_items() if k != QUERY_NAME]
+        return request.url.path + (f"?{urlencode(remaining)}" if remaining else "")
 
     async def dispatch(self, request, call_next):
         if self.token is None or request.url.path in PUBLIC_PATHS:
@@ -95,20 +112,21 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
                     {"ok": False, "error": "Unauthorised — unlock this server first."},
                     status_code=401,
                 )
-            nxt = request.url.path
-            if request.url.query:
-                nxt += "?" + request.url.query
-            return RedirectResponse(f"/unlock?{urlencode({'next': nxt})}", status_code=303)
+            target = urlencode({"next": self._clean_target(request)})
+            return RedirectResponse(f"/unlock?{target}", status_code=303)
 
         # Arrived with ?token=… — trade it for the cookie and strip it back
-        # out of the URL so it stops travelling in history and Referer.
-        if request.query_params.get(QUERY_NAME) and not request.cookies.get(COOKIE_NAME):
-            if request.method == "GET" and not request.url.path.startswith("/api/"):
-                remaining = [(k, v) for k, v in request.query_params.multi_items() if k != QUERY_NAME]
-                clean = request.url.path + (f"?{urlencode(remaining)}" if remaining else "")
-                response = RedirectResponse(clean, status_code=303)
-                set_token_cookie(response, self.token)
-                return response
+        # out of the URL. This runs even when a cookie is ALREADY set, because
+        # the usual reason a link like this gets used is that the existing
+        # cookie is stale: an unconfigured server mints a fresh token every
+        # restart, so every previously-unlocked device is holding a dead one.
+        # Skipping the swap in that case left the QR-code path permanently
+        # broken for exactly the devices most likely to use it.
+        if request.query_params.get(QUERY_NAME) \
+                and request.method == "GET" and not request.url.path.startswith("/api/"):
+            response = RedirectResponse(self._clean_target(request), status_code=303)
+            set_token_cookie(response, self.token)
+            return response
 
         return await call_next(request)
 

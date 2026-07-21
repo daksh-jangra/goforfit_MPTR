@@ -1,0 +1,10 @@
+{
+  "//": "The engine modules live in tests/ and are imported by bare name after app.py does sys.path.insert(0, TESTS_DIR) at runtime. Pylance/pyright don't execute that, so without extraPaths they report 'Import \"web_engines\" could not be resolved' — a false positive, not a broken import. extraPaths tells the analyser what the runtime already does.",
+  "include": ["."],
+  "exclude": ["**/__pycache__", ".venv", "output"],
+  "extraPaths": ["tests"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "off",
+  "reportMissingImports": "warning"
+}
