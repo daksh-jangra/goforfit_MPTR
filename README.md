@@ -76,9 +76,10 @@ pip install -r requirements.txt
 ```
 
 For a byte-for-byte reproduction of the known-working environment (pinned
-transitive dependencies included), use the lockfile instead — note it still
-pins `mediapipe==0.10.21` and therefore still needs Python ≤ 3.12; regenerate
-it from a fresh install if you want the lockfile on the new floor too:
+transitive dependencies included), use the lockfile instead. It was
+regenerated from a clean install on 2026-07-21 and now tracks the Tasks-API
+floor (`mediapipe==0.10.35`); its header records exactly what was and wasn't
+verified against that set:
 
 ```bash
 pip install -r requirements.lock
