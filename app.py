@@ -454,7 +454,6 @@ TESTS = {
         "subtitle":    "MediaPipe pose-based height measurement + BMI calculation",
         "icon":        "📏",
         "category":    "Anthropometry",
-        "script":      "bmi__3_.py",
         "description": (
             "Estimates height from webcam using MediaPipe PoseLandmarker. "
             "Calibrate once with a known height, then measure anyone instantly. "
@@ -478,7 +477,6 @@ TESTS = {
         "subtitle":    "Middle-fingertip to middle-fingertip in real cm",
         "icon":        "🦅",
         "category":    "Anthropometry",
-        "script":      "wingspan2.py",
         "description": (
             "Uses MediaPipe Hand + Pose landmarkers to measure arm span accurately. "
             "Auto-downloads model files on first run. Calibrate for your distance, "
@@ -502,7 +500,6 @@ TESTS = {
         "subtitle":    "Timed abdominal strength test — 30 seconds",
         "icon":        "🏋️",
         "category":    "Muscular Endurance",
-        "script":      "parcurlup.py",
         "description": (
             "Counts partial curl-ups in 30 seconds using hip-angle analysis and "
             "shoulder-rise detection. Full-screen display with live rep counter, "
@@ -525,7 +522,6 @@ TESTS = {
         "subtitle":    "Alternate-hand ball toss — 30 seconds",
         "icon":        "🎯",
         "category":    "Coordination",
-        "script":      "wtt.py",
         "description": (
             "Counts alternating wall-toss catches using HSV ball tracking and "
             "MediaPipe hand detection. Five-state machine ensures only true "
@@ -549,7 +545,6 @@ TESTS = {
         "subtitle":    "Dual camera, whistle-triggered start — up to 4 lanes",
         "icon":        "🏃",
         "category":    "Agility",
-        "script":      "shuttleruntest.py",
         "description": (
             "Times a 10 m shuttle run using two cameras facing each other across the "
             "track, one at each end. Up to 4 students run in fixed lanes; a whistle "
@@ -605,7 +600,6 @@ TESTS = {
         "subtitle":    "Two-camera sprint timing with automatic finish detection",
         "icon":        "⚡",
         "category":    "Speed",
-        "script":      "sprint_timer.py",
         "description": (
             "Automatically times a 50 m sprint using two cameras: a perpendicular "
             "FINISH camera for precise crossing detection, and an OVERHEAD camera "
@@ -667,7 +661,6 @@ TESTS = {
         "subtitle":    "Flexibility measurement via finger tracking",
         "icon":        "🤸",
         "category":    "Flexibility",
-        "script":      "snr.py",
         "description": (
             "Measures forward reach distance in cm using MediaPipe pose landmarks. "
             "Calibrated with your hip-to-ankle length for accurate cm output. "
@@ -699,7 +692,6 @@ TESTS = {
         "subtitle":    "Standing reach + max jump height — 5 attempts",
         "icon":        "🐰",
         "category":    "Power",
-        "script":      "vertical_jump.py",
         "description": (
             "Uses MediaPipe Pose to track reach height and measure vertical jump. "
             "Capture your standing reach, calibrate it in cm, then take 5 jump "
@@ -723,7 +715,6 @@ TESTS = {
         "subtitle":    "Multi-lane endurance run — coloured T-shirt tracking, up to 5 lanes",
         "icon":        "🏃‍♂️",
         "category":    "Endurance",
-        "script":      "600m_new/main.py",
         "description": (
             "Tracks up to 5 runners at once using HSV colour segmentation on "
             "coloured T-shirts. A virtual finish line inside the frame counts "
