@@ -527,6 +527,11 @@ class CurlUpEngine(BaseWebEngine):
                     time.sleep(0.005)
                     continue
 
+                # Mirror BEFORE inference so landmarks/overlays live in the same
+                # flipped space — every self-facing test previews selfie-style
+                # (subject's right on screen right), matching bmi/wingspan/etc.
+                # Mirror-safe here: the count uses L/R landmark midpoints + angles.
+                frame = cv2.flip(frame, 1)
                 h, w = frame.shape[:2]
                 frame_idx += 1
                 ts = int(frame_idx * 1000 / fps)
@@ -843,6 +848,12 @@ class SitReachEngine(BaseWebEngine):
                     time.sleep(0.005)
                     continue
 
+                # Mirror BEFORE inference so landmarks/overlays live in the same
+                # flipped space (selfie-style preview, consistent with the other
+                # self-facing tests). Mirror-safe: both fingertips are tracked
+                # symmetrically and the reach vector is locked in this same
+                # flipped coordinate space at measurement start.
+                frame = cv2.flip(frame, 1)
                 fh, fw = frame.shape[:2]
                 mp_image = snr_mod.mp.Image(
                     image_format=snr_mod.mp.ImageFormat.SRGB,

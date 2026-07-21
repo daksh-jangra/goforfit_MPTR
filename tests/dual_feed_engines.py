@@ -70,6 +70,13 @@ def _release_capture(cap):
 
 
 class DualFeedEngine:
+    # NOTE — no cv2.flip() here, deliberately. The self-facing tests
+    # (bmi/wingspan/curl_up/wall_toss/sit_reach/vertical_jump) mirror their
+    # preview selfie-style because the athlete watches themselves. These field
+    # tests are watched by the coach from behind the camera, and their
+    # detection logic is direction-sensitive (lane order, finish-line side,
+    # travel direction) — mirroring would both look wrong to the coach and
+    # silently invert lane/direction semantics.
     JPEG_QUALITY = 75
     FRAME_W = 960
     FRAME_H = 540
