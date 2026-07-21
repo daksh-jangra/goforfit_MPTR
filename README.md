@@ -104,6 +104,24 @@ The server defaults to **localhost only, port 5001, no auto-reload**:
   (auto-reload restarts the server on any file change — never use it during a
   live test, the restart kills the camera engine and loses staged results).
 
+## Running the tests
+
+Unit tests live in `tests_unit/` (NOT `tests/` — that directory holds the
+OpenCV/MediaPipe engine scripts; `pytest.ini` scopes collection so pytest
+never imports them). The suite fakes `cv2.VideoCapture`, so no camera is
+needed, but the real engine modules are imported — run it inside the venv:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+It covers the engine lifecycle invariants (a failed start releases the
+camera; stop never releases a capture under a live loop thread; clean cycles
+release exactly once) and the result-staging contract (partial results stage
+exactly once on stop, worker-staged results are never overwritten, a failing
+stage callback can't block shutdown).
+
 ## Test IDs
 
 | ID | Test |
