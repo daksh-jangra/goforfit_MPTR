@@ -75,6 +75,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For a byte-for-byte reproduction of the known-working environment (pinned
+transitive dependencies included), use the lockfile instead:
+
+```bash
+pip install -r requirements.lock
+```
+
 ## Run
 
 ```bash

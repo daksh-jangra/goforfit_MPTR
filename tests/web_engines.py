@@ -103,6 +103,7 @@ class BaseWebEngine:
         # and _safe_stage locks its _error write.
         self._lock = threading.RLock()
         self._jpeg = None
+        self._frame_seq = 0   # bumped per publish — feed streams dedupe on this, not identity
         self._running = False
         self._thread = None
         self._error = None
@@ -201,6 +202,12 @@ class BaseWebEngine:
         if ok:
             with self._lock:
                 self._jpeg = buf.tobytes()
+                self._frame_seq += 1
+
+    def get_frame(self):
+        """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""
+        with self._lock:
+            return self._jpeg, self._frame_seq
 
     def _safe_stage(self, *args):
         """Calls on_stage(*args) and records failures without killing the loop."""

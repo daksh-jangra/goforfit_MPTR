@@ -137,16 +137,14 @@
             const sessionId = urlParams.get('session_id') ? parseInt(urlParams.get('session_id')) : null;
 
             // ── Per-test config for the generic live-feed panel ─────────────────
-            // To bring a NEW AI test into the browser (instead of a desktop
-            // window): add "live_feed": True to its TESTS entry in app.py, build
-            // its engine + /api/<test>/feed|state|action endpoints the same way
-            // wingspan/vertical_jump did, then add one entry here describing its
-            // buttons and how to read its state. No template changes needed.
+            // To bring a NEW AI test into the browser: register it in app.py's
+            // _ENGINES registry (engine class + builder + one entry — the
+            // /api/<test>/feed|state|action routes are shared), then add one
+            // entry here describing its buttons and how to render its state.
+            // Stream URLs and camera topology are NOT written here — they're
+            // derived from the backend registry just below this object.
             const LIVE_ENGINES = {
                 wingspan: {
-                    feedUrl:   '/api/wingspan/feed',
-                    stateUrl:  '/api/wingspan/state',
-                    actionUrl: '/api/wingspan/action',
                     calibAction: 'enter_cm',
                     calibPrompt: 'Spread both arms wide and hold still, then enter your real wingspan below',
                     calibPlaceholder: 'Your wingspan in cm (e.g. 175)',
@@ -190,9 +188,6 @@
                     },
                 },
                 bmi: {
-                    feedUrl:   '/api/bmi/feed',
-                    stateUrl:  '/api/bmi/state',
-                    actionUrl: '/api/bmi/action',
                     calibAction: 'calibrate',
                     calibPrompt: 'Stand still, fully in frame, then enter your real height below',
                     calibPlaceholder: 'Real height in cm (e.g. 175)',
@@ -221,9 +216,6 @@
                 },
 
                 curl_up: {
-                    feedUrl:   '/api/curl_up/feed',
-                    stateUrl:  '/api/curl_up/state',
-                    actionUrl: '/api/curl_up/action',
                     buttons: [
                         { id: 'start', label: 'START (30s)', action: 'start', color: 'bg-sky-600' },
                         { id: 'reset', label: 'RESET',       action: 'reset', color: 'bg-rose-600' },
@@ -247,9 +239,6 @@
                 },
 
                 wall_toss: {
-                    feedUrl:   '/api/wall_toss/feed',
-                    stateUrl:  '/api/wall_toss/state',
-                    actionUrl: '/api/wall_toss/action',
                     buttons: [
                         { id: 'start', label: 'START',  action: 'start',      color: 'bg-sky-600' },
                         { id: 'p1', label: 'ORANGE', action: 'set_preset', value: 1, color: 'bg-orange-600' },
@@ -271,9 +260,6 @@
                     },
                 },
                 sit_reach: {
-                    feedUrl:   '/api/sit_reach/feed',
-                    stateUrl:  '/api/sit_reach/state',
-                    actionUrl: '/api/sit_reach/action',
                     buttons: [
                         { id: 'mark',  label: 'MARK / LOCK', action: 'mark',  color: 'bg-sky-600' },
                         { id: 'reset', label: 'RESET',        action: 'reset', color: 'bg-rose-600' },
@@ -294,9 +280,6 @@
                     },
                 },
                 vertical_jump: {
-                    feedUrl:   '/api/vertical_jump/feed',
-                    stateUrl:  '/api/vertical_jump/state',
-                    actionUrl: '/api/vertical_jump/action',
                     calibAction: 'calibrate',
                     calibPrompt: 'Stand tall, reach straight up, hold still — then enter your real standing reach below',
                     calibPlaceholder: 'Standing reach in cm (e.g. 198)',
@@ -326,11 +309,6 @@
                     },
                 },
                 shuttle_run: {
-                    dualFeed: true,
-                    feedUrl:   '/api/shuttle_run/feed_a',
-                    feedUrlB:  '/api/shuttle_run/feed_b',
-                    stateUrl:  '/api/shuttle_run/state',
-                    actionUrl: '/api/shuttle_run/action',
                     clickCalibrate: true,
                     buttons: [
                         { id: 'manual_start', label: 'MANUAL START', action: 'manual_start', color: 'bg-sky-600' },
@@ -369,11 +347,6 @@
                     },
                 },
                 dash_50m: {
-                    dualFeed: true,
-                    feedUrl:   '/api/dash_50m/feed_a',
-                    feedUrlB:  '/api/dash_50m/feed_b',
-                    stateUrl:  '/api/dash_50m/state',
-                    actionUrl: '/api/dash_50m/action',
                     clickCalibrate: true,
                     buttons: [
                         { id: 'manual_start', label: 'MANUAL START', action: 'manual_start', color: 'bg-sky-600' },
@@ -406,10 +379,6 @@
                     },
                 },
                 run_600m: {
-                    dualFeed: false,
-                    feedUrl:   '/api/run_600m/feed_a',
-                    stateUrl:  '/api/run_600m/state',
-                    actionUrl: '/api/run_600m/action',
                     buttons: [
                         { id: 'space', label: 'START / STOP', action: 'space', color: 'bg-sky-600' },
                     ],
@@ -429,6 +398,24 @@
                     },
                 },
             };
+
+            // ── Mechanical wiring, generated from app.py's _ENGINES registry ──
+            // Stream URLs and single/dual-camera topology are derived here so
+            // they can never drift from the backend. Only the UI behaviour
+            // (buttons, status rendering, sync fields) is written by hand above.
+            const ENGINE_FEEDS = {{ engine_feeds | tojson }};
+            for (const [id, cfg] of Object.entries(LIVE_ENGINES)) {
+                const feeds = ENGINE_FEEDS[id];
+                if (!feeds) { console.warn(`LIVE_ENGINES['${id}'] has no backend engine slot`); continue; }
+                cfg.stateUrl  = `/api/${id}/state`;
+                cfg.actionUrl = `/api/${id}/action`;
+                cfg.dualFeed  = feeds.includes('feed_b');
+                cfg.feedUrl   = `/api/${id}/${feeds[0]}`;
+                cfg.feedUrlB  = cfg.dualFeed ? `/api/${id}/feed_b` : null;
+            }
+            for (const id of Object.keys(ENGINE_FEEDS)) {
+                if (!LIVE_ENGINES[id]) console.warn(`Backend engine '${id}' has no LIVE_ENGINES UI entry`);
+            }
 
             const engineCfg = LIVE_ENGINES[testId] || null;
             let feedPollTimer = null;
@@ -607,6 +594,9 @@
             }
 
             async function saveAndExit() {
+                // A stray tap mid-test would end it and lose the live reading —
+                // confirm only while a test is actually running.
+                if (runActive && !confirm('Stop the test and save the result?')) return;
                 if (runActive) { runActive = false; }
                 if (engineCfg) stopFeed();
                 await fetch(`/api/stop/${testId}`, { method: 'POST' });
@@ -623,6 +613,9 @@
             // Laravel parent window; everything else runs the normal screen3
             // review/save flow via saveAndExit().
             async function handleStopClick() {
+                // A stray tap mid-test would end it and lose the live reading —
+                // confirm only while a test is actually running.
+                if (runActive && !confirm('Stop the test and save the result?')) return;
                 // 1. Always stop the engine/camera process first.
                 if (runActive) { runActive = false; }
                 if (engineCfg) stopFeed();

@@ -275,17 +275,8 @@
         // name Laravel expects. Only "wingspan" has been confirmed against
         // Bhawani's sample code — confirm the rest with him before relying
         // on them for other tests.
-        const EXERCISE_SYNC_MAP = {
-            bmi:         { exerciseType: 'BMI',        scoreKey: 'bmiScore' },
-            wingspan:    { exerciseType: 'Wingspan',   scoreKey: 'wingspanScore' },   // confirmed
-            curl_up:     { exerciseType: 'CurlUp',     scoreKey: 'curlUpScore' },
-            wall_toss:   { exerciseType: 'WallToss',   scoreKey: 'wallTossScore' },
-            shuttle_run: { exerciseType: 'ShuttleRun', scoreKey: 'shuttleRunScore' },
-            dash_50m:    { exerciseType: 'Dash50m',    scoreKey: 'dash50mScore' },
-            sit_reach:   { exerciseType: 'SitReach',   scoreKey: 'sitReachScore' },
-            vertical_jump: { exerciseType: 'VerticalJump', scoreKey: 'verticalJumpScore' },
-            run_600m:    { exerciseType: 'Run600m',    scoreKey: 'run600mScore' },
-        };
+        // Injected from app.py's LARAVEL_SYNC — edit it there, not here.
+        const EXERCISE_SYNC_MAP = {{ sync_map | tojson }};
 
         function syncResultToLaravel(scoreValue) {
             if (!window.opener) return; // opened directly (e.g. dev/testing) — nothing to sync to

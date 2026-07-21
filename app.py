@@ -713,6 +713,24 @@ TESTS = {
     },
 }
 
+# ── Laravel sync field map ─────────────────────────────────────────────────
+# Rendered into screen3.html as EXERCISE_SYNC_MAP (single source of truth —
+# previously hand-synced in the template). exerciseType/scoreKey are the
+# labels the Laravel parent window expects in the postMessage payload. Only
+# "wingspan" has been confirmed against Bhawani's sample code — confirm the
+# rest with the integration owner before relying on them.
+LARAVEL_SYNC = {
+    "bmi":           {"exerciseType": "BMI",          "scoreKey": "bmiScore"},
+    "wingspan":      {"exerciseType": "Wingspan",     "scoreKey": "wingspanScore"},   # confirmed
+    "curl_up":       {"exerciseType": "CurlUp",       "scoreKey": "curlUpScore"},
+    "wall_toss":     {"exerciseType": "WallToss",     "scoreKey": "wallTossScore"},
+    "shuttle_run":   {"exerciseType": "ShuttleRun",   "scoreKey": "shuttleRunScore"},
+    "dash_50m":      {"exerciseType": "Dash50m",      "scoreKey": "dash50mScore"},
+    "sit_reach":     {"exerciseType": "SitReach",     "scoreKey": "sitReachScore"},
+    "vertical_jump": {"exerciseType": "VerticalJump", "scoreKey": "verticalJumpScore"},
+    "run_600m":      {"exerciseType": "Run600m",      "scoreKey": "run600mScore"},
+}
+
 # ── Track running processes ────────────────────────────────────────────────
 _running: dict[str, subprocess.Popen] = {}
 
@@ -862,14 +880,23 @@ def screen2(request: Request, category: Optional[str] = None):
 def screen3(request: Request, test: Optional[str] = None):
     test_id = test or "wall_toss"
     test_cfg = TESTS.get(test_id, TESTS["wall_toss"])
-    return templates.TemplateResponse(request, "screen3.html", {"test": test_cfg})
+    return templates.TemplateResponse(
+        request, "screen3.html",
+        {"test": test_cfg, "sync_map": LARAVEL_SYNC},
+    )
 
 
 @app.get("/screen4", name="screen4")
 def screen4(request: Request, test: Optional[str] = None):
     test_id = test or "wall_toss"
     test_cfg = TESTS.get(test_id, TESTS["wall_toss"])
-    return templates.TemplateResponse(request, "screen4.html", {"test": test_cfg})
+    # Feed topology comes from the engine registry, so screen4's JS never
+    # hardcodes which tests are dual-camera or what their stream URLs are.
+    engine_feeds = {tid: list(slot.feeds) for tid, slot in _ENGINES.items()}
+    return templates.TemplateResponse(
+        request, "screen4.html",
+        {"test": test_cfg, "engine_feeds": engine_feeds},
+    )
 
 
 @app.get("/results", name="results")
@@ -1150,24 +1177,24 @@ def _not_running(slot: _EngineSlot) -> JSONResponse:
     return JSONResponse({"ok": False, "error": f"{slot.label} isn't running"}, status_code=409)
 
 
-def _mjpeg_response(eng, get_jpeg):
+def _mjpeg_response(eng, get_frame):
     """Stream eng's frames until it stops. Captures `eng` — a relaunch swaps
     the slot's instance, but an open stream must not silently switch engines."""
     def gen():
         boundary = b"--frame"
         FRAME_INTERVAL = 0.05   # 20 fps cap — browser can't usefully render faster
-        last_sent = None        # dedupe: _publish allocates fresh bytes per frame
+        last_seq = None         # dedupe on the engine's publish counter
         next_send = time.monotonic()
         while eng.is_running():
             now = time.monotonic()
             if now < next_send:
                 time.sleep(max(0, next_send - now))
                 continue
-            jpg = get_jpeg(eng)
-            if jpg is None or jpg is last_sent:
+            jpg, seq = get_frame(eng)
+            if jpg is None or seq == last_seq:
                 time.sleep(0.005)
                 continue
-            last_sent = jpg
+            last_seq = seq
             next_send = now + FRAME_INTERVAL
             yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
 
@@ -1175,9 +1202,9 @@ def _mjpeg_response(eng, get_jpeg):
 
 
 _FEED_GETTERS = {
-    "feed":   lambda e: e.get_jpeg(),
-    "feed_a": lambda e: e.get_jpeg_a(),
-    "feed_b": lambda e: e.get_jpeg_b(),
+    "feed":   lambda e: e.get_frame(),
+    "feed_a": lambda e: e.get_frame_a(),
+    "feed_b": lambda e: e.get_frame_b(),
 }
 
 

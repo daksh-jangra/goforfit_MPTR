@@ -98,6 +98,7 @@ class WingspanEngine:
 
         self._lock = threading.Lock()
         self._jpeg = None
+        self._frame_seq = 0   # bumped per publish — feed streams dedupe on this, not identity
         self._running = False
         self._thread = None
         self._error = None
@@ -216,6 +217,11 @@ class WingspanEngine:
     def get_jpeg(self):
         with self._lock:
             return self._jpeg
+
+    def get_frame(self):
+        """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""
+        with self._lock:
+            return self._jpeg, self._frame_seq
 
     def get_state(self):
         with self._lock:
@@ -387,6 +393,7 @@ class WingspanEngine:
                     if ok:
                         with self._lock:
                             self._jpeg = buf.tobytes()
+                            self._frame_seq += 1
                     continue
 
                 if h_result.hand_landmarks:
@@ -471,6 +478,7 @@ class WingspanEngine:
                     jpeg_bytes = buf.tobytes()
                     with self._lock:
                         self._jpeg = jpeg_bytes
+                        self._frame_seq += 1
 
         except Exception as e:
             with self._lock:

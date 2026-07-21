@@ -184,6 +184,7 @@ class VerticalJumpEngine:
         self._cap = None
         self._model = None
         self._jpeg = None
+        self._frame_seq = 0   # bumped per publish — feed streams dedupe on this, not identity
         self._staged = False
 
         self.pixel_to_cm = load_calibration()
@@ -272,6 +273,11 @@ class VerticalJumpEngine:
     def get_jpeg(self):
         with self._lock:
             return self._jpeg
+
+    def get_frame(self):
+        """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""
+        with self._lock:
+            return self._jpeg, self._frame_seq
 
     # ── state for the browser ───────────────────────────────────────────
 
@@ -406,6 +412,7 @@ class VerticalJumpEngine:
                 ok, buf = cv.imencode(".jpg", frame, [cv.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
                     self._jpeg = buf.tobytes()
+                    self._frame_seq += 1
 
     def _process_frame(self, frame, width, height, results):
         """Must be called with self._lock held."""

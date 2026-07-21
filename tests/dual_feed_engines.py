@@ -86,6 +86,8 @@ class DualFeedEngine:
         self._lock = threading.RLock()
         self._jpeg_a = None
         self._jpeg_b = None
+        self._seq_a = 0   # bumped per publish — feed streams dedupe on this, not identity
+        self._seq_b = 0
         self._running = False
         self._thread = None
         self._error = None
@@ -213,8 +215,19 @@ class DualFeedEngine:
         with self._lock:
             if ok_a:
                 self._jpeg_a = buf_a.tobytes()
+                self._seq_a += 1
             if ok_b:
                 self._jpeg_b = buf_b.tobytes()
+                self._seq_b += 1
+
+    def get_frame_a(self):
+        """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""
+        with self._lock:
+            return self._jpeg_a, self._seq_a
+
+    def get_frame_b(self):
+        with self._lock:
+            return self._jpeg_b, self._seq_b
 
     def _safe_stage(self, *args):
         if self.on_stage:
