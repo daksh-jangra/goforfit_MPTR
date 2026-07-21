@@ -37,7 +37,7 @@ import threading
 import time
 import concurrent.futures
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 import cv2
@@ -102,15 +102,8 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     _traceback.print_exc()
     print("=" * 70)
 
-_wingspan_engine = None
-_vertical_jump_engine = None
-_shuttle_engine = None
-_dash50m_engine = None
-_run600m_engine = None
-_bmi_engine = None
-_curl_up_engine = None
-_wall_toss_engine = None
-_sit_reach_engine = None
+# Per-test engine instances live in _ENGINES[test_id].instance — see the
+# engine registry below the shared-state lock.
 
 # ── Shared-state lock ──────────────────────────────────────────────────────
 # FastAPI runs `def` endpoints in a threadpool and `async def` endpoints on
@@ -125,9 +118,230 @@ _sit_reach_engine = None
 # Plain attribute reads (is_running(), session_id, .count, …) are safe.
 _state_lock = threading.RLock()
 
-# Test id currently mid-launch (guard set → engine global assigned). Camera
+# Test id currently mid-launch (guard set → engine slot assigned). Camera
 # open takes seconds; this keeps a second launch out of that window.
 _launching: Optional[str] = None
+
+
+# ── Engine registry ────────────────────────────────────────────────────────
+# One slot per in-process camera engine. Everything the HTTP layer needs to
+# serve a test — how to build it from a request body, which actions it
+# accepts, which MJPEG feeds it exposes — lives here, so adding a test is a
+# builder + one registry entry instead of edits scattered across the file.
+
+class _EngineSlot:
+    def __init__(self, test_id, label, cls, builder, actions, feeds):
+        self.test_id = test_id
+        self.label = label        # human name used in "<label> isn't running" errors
+        self.cls = cls            # engine class, or None if its module failed to import
+        self.builder = builder    # (body: dict) -> engine instance | JSONResponse error
+        self.actions = actions    # {action_name: (engine, value) -> response}
+        self.feeds = feeds        # subset of ("feed", "feed_a", "feed_b")
+        self.instance = None      # current engine — read/write under _state_lock
+
+
+def _pending_stage(test_id: str, payload: dict) -> None:
+    """on_stage sink for engine worker threads — stages a result for screen3."""
+    with _state_lock:
+        _pending[test_id] = payload
+
+
+# ── Per-test builders: parse the launch body, wire the on_stage payload ────
+
+def _build_wingspan(body: dict):
+    session_id = body.get("session_id")
+    return WingspanEngine(
+        session_id=session_id,
+        on_stage=lambda cm: _pending_stage("wingspan", {"session_id": session_id, "wingspan_cm": cm}),
+    )
+
+
+def _build_vertical_jump(body: dict):
+    session_id = body.get("session_id")
+
+    def _stage(jump_cm, average_jump_cm, standing_reach_cm, attempts):
+        _pending_stage("vertical_jump", {
+            "session_id":        session_id,
+            "jump_cm":           jump_cm,
+            "average_jump_cm":   average_jump_cm,
+            "standing_reach_cm": standing_reach_cm,
+            "attempts":          attempts,
+        })
+
+    return VerticalJumpEngine(session_id=session_id, on_stage=_stage)
+
+
+def _build_bmi(body: dict):
+    session_id = body.get("session_id")
+
+    def _stage(height_cm, calibration_used):
+        _pending_stage("bmi", {
+            "session_id": session_id, "height_cm": height_cm,
+            "weight_kg": None, "calibration_used": calibration_used,
+        })
+
+    return BmiEngine(session_id=session_id, on_stage=_stage)
+
+
+def _build_curl_up(body: dict):
+    session_id = body.get("session_id")
+    return CurlUpEngine(
+        session_id=session_id,
+        on_stage=lambda reps: _pending_stage(
+            "curl_up", {"session_id": session_id, "reps": reps, "duration_sec": 30}),
+    )
+
+
+def _build_wall_toss(body: dict):
+    session_id = body.get("session_id")
+
+    def _stage(catches, ball_colour):
+        _pending_stage("wall_toss", {
+            "session_id": session_id, "catches": catches,
+            "duration_sec": 30, "ball_colour": ball_colour,
+        })
+
+    return WallTossEngine(session_id=session_id, on_stage=_stage)
+
+
+def _build_sit_reach(body: dict):
+    session_id = body.get("session_id")
+    leg_cm = body.get("leg_cm")
+    if leg_cm is None or str(leg_cm).strip() == "":
+        return JSONResponse({"ok": False, "error": "Missing required parameter: Hip-to-ankle length (cm)"}, status_code=400)
+    try:
+        leg_cm = float(leg_cm)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Hip-to-ankle length must be a number"}, status_code=400)
+
+    def _stage(reach_cm, leg_cm_val, rating):
+        _pending_stage("sit_reach", {
+            "session_id": session_id, "reach_cm": reach_cm,
+            "leg_cm": leg_cm_val, "rating": rating,
+        })
+
+    return SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm)
+
+
+def _build_shuttle_run(body: dict):
+    session_id = body.get("session_id")
+    cam_a = body.get("cam_a_url")
+    cam_b = body.get("cam_b_url")
+    touches = body.get("touches") or 4
+    if not cam_a or not cam_b:
+        return JSONResponse({"ok": False, "error": "cam_a_url and cam_b_url are required"}, status_code=400)
+    return ShuttleRunEngine(
+        cam_a, cam_b, touches=touches, session_id=session_id,
+        on_stage=lambda payload: _pending_stage("shuttle_run", payload),
+    )
+
+
+def _build_dash_50m(body: dict):
+    session_id = body.get("session_id")
+    cam_a = body.get("finish_cam_url")
+    cam_b = body.get("overhead_cam_url")
+    lanes = body.get("lanes") or 4
+    lane_width = body.get("lane_width") or 1.22
+    if not cam_a or not cam_b:
+        return JSONResponse({"ok": False, "error": "finish_cam_url and overhead_cam_url are required"}, status_code=400)
+    return Dash50mEngine(
+        cam_a, cam_b, lanes=lanes, lane_width=lane_width, session_id=session_id,
+        on_stage=lambda payload: _pending_stage("dash_50m", payload),
+    )
+
+
+def _build_run_600m(body: dict):
+    session_id = body.get("session_id")
+    cam_a = body.get("camera_url") or "0"
+    lane_colors = body.get("lane_colors") or []
+    if isinstance(lane_colors, str):
+        lane_colors = [c.strip() for c in lane_colors.split(",") if c.strip()]
+    camera_distance_m = body.get("camera_distance_m") or 0.0
+    if not lane_colors:
+        return JSONResponse({"ok": False, "error": "lane_colors is required (comma-separated, e.g. Red,Blue,Green)"}, status_code=400)
+    return Run600mEngine(
+        cam_a, lane_colors=lane_colors, camera_distance_m=camera_distance_m,
+        session_id=session_id,
+        on_stage=lambda payload: _pending_stage("run_600m", payload),
+    )
+
+
+# actions=None in a slot means the engine exposes a generic
+# engine.action(name, value) dispatcher (the dual-feed engines do).
+_ENGINES: dict[str, _EngineSlot] = {
+    "wingspan": _EngineSlot(
+        "wingspan", "Wingspan test", WingspanEngine, _build_wingspan,
+        actions={
+            "calibrate": lambda e, v: e.action_calibrate(),
+            "measure":   lambda e, v: e.action_measure(),
+            "cancel":    lambda e, v: e.action_cancel(),
+            "enter_cm":  lambda e, v: e.action_enter_cm(v),
+            "snapshot":  lambda e, v: e.action_snapshot(),
+            "save":      lambda e, v: e.action_save(),
+        },
+        feeds=("feed",),
+    ),
+    "vertical_jump": _EngineSlot(
+        "vertical_jump", "Vertical jump test", VerticalJumpEngine, _build_vertical_jump,
+        actions={
+            "capture_baseline": lambda e, v: e.action_capture_baseline(),
+            "calibrate":        lambda e, v: e.action_calibrate(v),
+            "start_attempt":    lambda e, v: e.action_start_attempt(),
+            "reset":            lambda e, v: e.action_reset(),
+            "save":             lambda e, v: e.action_save(),
+        },
+        feeds=("feed",),
+    ),
+    "bmi": _EngineSlot(
+        "bmi", "BMI test", BmiEngine, _build_bmi,
+        actions={
+            "scan":      lambda e, v: e.action_scan(),
+            "calibrate": lambda e, v: e.action_calibrate(v),
+            "reset":     lambda e, v: e.action_reset(),
+        },
+        feeds=("feed",),
+    ),
+    "curl_up": _EngineSlot(
+        "curl_up", "Curl-up test", CurlUpEngine, _build_curl_up,
+        actions={
+            "start": lambda e, v: e.action_start(),
+            "reset": lambda e, v: e.action_reset(),
+        },
+        feeds=("feed",),
+    ),
+    "wall_toss": _EngineSlot(
+        "wall_toss", "Wall toss test", WallTossEngine, _build_wall_toss,
+        actions={
+            "start":      lambda e, v: e.action_start(),
+            "reset":      lambda e, v: e.action_reset(),
+            "set_preset": lambda e, v: e.action_set_preset(v),
+        },
+        feeds=("feed",),
+    ),
+    "sit_reach": _EngineSlot(
+        "sit_reach", "Sit & reach test", SitReachEngine, _build_sit_reach,
+        actions={
+            "mark":  lambda e, v: e.action_mark(),
+            "reset": lambda e, v: e.action_reset(),
+        },
+        feeds=("feed",),
+    ),
+    "shuttle_run": _EngineSlot(
+        "shuttle_run", "Shuttle run", ShuttleRunEngine, _build_shuttle_run,
+        actions=None,  # None -> generic engine.action(name, value) dispatch
+        feeds=("feed_a", "feed_b"),
+    ),
+    "dash_50m": _EngineSlot(
+        "dash_50m", "Dash 50m", Dash50mEngine, _build_dash_50m,
+        actions=None,
+        feeds=("feed_a", "feed_b"),
+    ),
+    "run_600m": _EngineSlot(
+        "run_600m", "600m run", Run600mEngine, _build_run_600m,
+        actions=None,
+        feeds=("feed_a",),  # single physical camera — no feed_b route
+    ),
+}
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -510,24 +724,9 @@ def _is_running(test_id: str) -> bool:
 
 def _is_running_locked(test_id: str) -> bool:
     """Requires _state_lock. Only touches lock-free engine attrs (see rule above)."""
-    if test_id == "wingspan" and _wingspan_engine is not None:
-        return _wingspan_engine.is_running()
-    if test_id == "vertical_jump" and _vertical_jump_engine is not None:
-        return _vertical_jump_engine.is_running()
-    if test_id == "bmi" and _bmi_engine is not None:
-        return _bmi_engine.is_running()
-    if test_id == "curl_up" and _curl_up_engine is not None:
-        return _curl_up_engine.is_running()
-    if test_id == "wall_toss" and _wall_toss_engine is not None:
-        return _wall_toss_engine.is_running()
-    if test_id == "sit_reach" and _sit_reach_engine is not None:
-        return _sit_reach_engine.is_running()
-    if test_id == "shuttle_run" and _shuttle_engine is not None:
-        return _shuttle_engine.is_running()
-    if test_id == "dash_50m" and _dash50m_engine is not None:
-        return _dash50m_engine.is_running()
-    if test_id == "run_600m" and _run600m_engine is not None:
-        return _run600m_engine.is_running()
+    slot = _ENGINES.get(test_id)
+    if slot is not None and slot.instance is not None:
+        return slot.instance.is_running()
     proc = _running.get(test_id)
     if proc is None:
         return False
@@ -784,33 +983,28 @@ async def launch(test_id: str, request: Request):
             _launching = None
 
 
+def _launch_engine(slot: _EngineSlot, body: dict):
+    """Common launch path for every in-process engine: build from the body,
+    start (slow — camera open), register the instance, clear stale pending."""
+    engine = slot.builder(body)
+    if isinstance(engine, JSONResponse):  # builder rejected the params
+        return engine
+    try:
+        engine.start()
+    except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    with _state_lock:
+        slot.instance = engine
+        _pending.pop(slot.test_id, None)  # clear any stale unsaved result from a previous run
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 def _dispatch_launch(test_id: str, body: dict):
-    if test_id == "wingspan" and WingspanEngine is not None:
-        return _launch_wingspan(body)
-
-    if test_id == "vertical_jump" and VerticalJumpEngine is not None:
-        return _launch_vertical_jump(body)
-
-    if test_id == "bmi" and BmiEngine is not None:
-        return _launch_bmi(body)
-
-    if test_id == "curl_up" and CurlUpEngine is not None:
-        return _launch_curl_up(body)
-
-    if test_id == "wall_toss" and WallTossEngine is not None:
-        return _launch_wall_toss(body)
-
-    if test_id == "sit_reach" and SitReachEngine is not None:
-        return _launch_sit_reach(body)
-
-    if test_id == "shuttle_run" and ShuttleRunEngine is not None:
-        return _launch_shuttle_run(body)
-
-    if test_id == "dash_50m" and Dash50mEngine is not None:
-        return _launch_dash_50m(body)
-
-    if test_id == "run_600m" and Run600mEngine is not None:
-        return _launch_run_600m(body)
+    slot = _ENGINES.get(test_id)
+    if slot is not None and slot.cls is not None:
+        return _launch_engine(slot, body)
 
     cfg = TESTS.get(test_id)
     if cfg is None:
@@ -876,242 +1070,6 @@ def _dispatch_launch(test_id: str, body: dict):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
-def _launch_wingspan(body: dict):
-    """Starts the wingspan camera/processing loop in-process and streams it
-    to the browser instead of opening a desktop OpenCV window."""
-    global _wingspan_engine
-
-    session_id = body.get("session_id")
-
-    def _stage(cm: float):
-        with _state_lock:
-            _pending["wingspan"] = {"session_id": session_id, "wingspan_cm": cm}
-
-    try:
-        engine = WingspanEngine(session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _wingspan_engine = engine
-        _pending.pop("wingspan", None)  # clear any stale unsaved result from a previous run
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-def _launch_bmi(body: dict):
-    global _bmi_engine
-    session_id = body.get("session_id")
-
-    def _stage(height_cm, calibration_used):
-        with _state_lock:
-            _pending["bmi"] = {
-                "session_id": session_id, "height_cm": height_cm,
-                "weight_kg": None, "calibration_used": calibration_used,
-            }
-
-    try:
-        engine = BmiEngine(session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _bmi_engine = engine
-        _pending.pop("bmi", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_curl_up(body: dict):
-    global _curl_up_engine
-    session_id = body.get("session_id")
-
-    def _stage(reps):
-        with _state_lock:
-            _pending["curl_up"] = {"session_id": session_id, "reps": reps, "duration_sec": 30}
-
-    try:
-        engine = CurlUpEngine(session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _curl_up_engine = engine
-        _pending.pop("curl_up", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_wall_toss(body: dict):
-    global _wall_toss_engine
-    session_id = body.get("session_id")
-
-    def _stage(catches, ball_colour):
-        with _state_lock:
-            _pending["wall_toss"] = {
-                "session_id": session_id, "catches": catches,
-                "duration_sec": 30, "ball_colour": ball_colour,
-            }
-
-    try:
-        engine = WallTossEngine(session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _wall_toss_engine = engine
-        _pending.pop("wall_toss", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_sit_reach(body: dict):
-    global _sit_reach_engine
-    session_id = body.get("session_id")
-    leg_cm = body.get("leg_cm")
-    if leg_cm is None or str(leg_cm).strip() == "":
-        return JSONResponse({"ok": False, "error": "Missing required parameter: Hip-to-ankle length (cm)"}, status_code=400)
-    try:
-        leg_cm = float(leg_cm)
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "Hip-to-ankle length must be a number"}, status_code=400)
-
-    def _stage(reach_cm, leg_cm_val, rating):
-        with _state_lock:
-            _pending["sit_reach"] = {
-                "session_id": session_id, "reach_cm": reach_cm,
-                "leg_cm": leg_cm_val, "rating": rating,
-            }
-
-    try:
-        engine = SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _sit_reach_engine = engine
-        _pending.pop("sit_reach", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-# helper function for vertical jump.
-def _launch_vertical_jump(body: dict):
-    """Runs the vertical jump camera loop in-process and streams it to the
-    browser instead of opening a desktop OpenCV window."""
-    global _vertical_jump_engine
-
-    session_id = body.get("session_id")
-
-    def _stage(jump_cm, average_jump_cm, standing_reach_cm, attempts):
-        with _state_lock:
-            _pending["vertical_jump"] = {
-                "session_id":        session_id,
-                "jump_cm":           jump_cm,
-                "average_jump_cm":   average_jump_cm,
-                "standing_reach_cm": standing_reach_cm,
-                "attempts":          attempts,
-            }
-
-    try:
-        engine = VerticalJumpEngine(session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _vertical_jump_engine = engine
-        _pending.pop("vertical_jump", None)  # clear stale unsaved result from a previous run
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_shuttle_run(body: dict):
-    global _shuttle_engine
-    session_id = body.get("session_id")
-    cam_a = body.get("cam_a_url")
-    cam_b = body.get("cam_b_url")
-    touches = body.get("touches") or 4
-    if not cam_a or not cam_b:
-        return JSONResponse({"ok": False, "error": "cam_a_url and cam_b_url are required"}, status_code=400)
-
-    def _stage(payload: dict):
-        with _state_lock:
-            _pending["shuttle_run"] = payload
-
-    try:
-        engine = ShuttleRunEngine(cam_a, cam_b, touches=touches, session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _shuttle_engine = engine
-        _pending.pop("shuttle_run", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_dash_50m(body: dict):
-    global _dash50m_engine
-    session_id = body.get("session_id")
-    cam_a = body.get("finish_cam_url")
-    cam_b = body.get("overhead_cam_url")
-    lanes = body.get("lanes") or 4
-    lane_width = body.get("lane_width") or 1.22
-    if not cam_a or not cam_b:
-        return JSONResponse({"ok": False, "error": "finish_cam_url and overhead_cam_url are required"}, status_code=400)
-
-    def _stage(payload: dict):
-        with _state_lock:
-            _pending["dash_50m"] = payload
-
-    try:
-        engine = Dash50mEngine(cam_a, cam_b, lanes=lanes, lane_width=lane_width,
-                            session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _dash50m_engine = engine
-        _pending.pop("dash_50m", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
-def _launch_run_600m(body: dict):
-    global _run600m_engine
-    session_id = body.get("session_id")
-    cam_a = body.get("camera_url") or "0"
-    lane_colors = body.get("lane_colors") or []
-    if isinstance(lane_colors, str):
-        lane_colors = [c.strip() for c in lane_colors.split(",") if c.strip()]
-    camera_distance_m = body.get("camera_distance_m") or 0.0
-    if not lane_colors:
-        return JSONResponse({"ok": False, "error": "lane_colors is required (comma-separated, e.g. Red,Blue,Green)"}, status_code=400)
-
-    def _stage(payload: dict):
-        with _state_lock:
-            _pending["run_600m"] = payload
-
-    try:
-        engine = Run600mEngine(cam_a, lane_colors=lane_colors, camera_distance_m=camera_distance_m,
-                            session_id=session_id, on_stage=_stage)
-        engine.start()
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-    with _state_lock:
-        _run600m_engine = engine
-        _pending.pop("run_600m", None)
-    return {"ok": True, "pid": -1, "mode": "live_feed"}
-
-
 @app.get("/api/engine-status")
 def engine_status():
     """Quick browser-visible health check — hit http://localhost:5000/api/engine-status
@@ -1145,18 +1103,9 @@ def stop(test_id: str):
     # (_stage_on_stop / _maybe_stage / maybe_finish) — the HTTP layer just
     # stops whichever engine is registered for this test. engine.stop() runs
     # OUTSIDE _state_lock (see the deadlock rule at _state_lock's definition).
+    slot = _ENGINES.get(test_id)
     with _state_lock:
-        eng = {
-            "wingspan": _wingspan_engine,
-            "vertical_jump": _vertical_jump_engine,
-            "bmi": _bmi_engine,
-            "curl_up": _curl_up_engine,
-            "wall_toss": _wall_toss_engine,
-            "sit_reach": _sit_reach_engine,
-            "shuttle_run": _shuttle_engine,
-            "dash_50m": _dash50m_engine,
-            "run_600m": _run600m_engine,
-        }.get(test_id)
+        eng = slot.instance if slot is not None else None
     if eng is not None:
         eng.stop()
         return {"ok": True}
@@ -1172,462 +1121,118 @@ def stop(test_id: str):
     return {"ok": True}
 
 
-# ── Wingspan live-feed control (browser buttons replace keyboard) ─────────
+# ── Live-feed control: one parameterized route set for every engine ───────
 #
-#  GET  /api/wingspan/feed   — MJPEG stream of the live annotated camera feed
-#  GET  /api/wingspan/state  — polled by screen4 to drive button/label state
-#  POST /api/wingspan/action — {"action": "calibrate"|"measure"|"snapshot"|
-#                                "save"|"cancel"|"enter_cm", "value": <float>}
+#  GET  /api/<test_id>/feed      — MJPEG stream (single-camera engines)
+#  GET  /api/<test_id>/feed_a|b  — MJPEG streams (dual-camera engines)
+#  GET  /api/<test_id>/state     — polled by screen4 to drive the button UI
+#  POST /api/<test_id>/action    — {"action": "...", "value": ...}
+#
+# The paths are identical to the old hand-written per-test routes, so the
+# frontend (screen4.html LIVE_ENGINES) needs no changes. Which feeds exist
+# and which actions are legal come from the _ENGINES registry.
 
-class WingspanAction(BaseModel):
+class EngineAction(BaseModel):
     action: str
-    value: Optional[float] = None
+    value: Any = None
 
 
-@app.get("/api/wingspan/feed")
-def wingspan_feed():
+def _slot_engine(test_id: str):
+    """Resolve (slot, current engine) or (None, 404 response)."""
+    slot = _ENGINES.get(test_id)
+    if slot is None:
+        return None, JSONResponse({"ok": False, "error": f"Unknown test '{test_id}'"}, status_code=404)
     with _state_lock:
-        eng = _wingspan_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Wingspan test isn't running"}, status_code=409)
+        return slot, slot.instance
 
+
+def _not_running(slot: _EngineSlot) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": f"{slot.label} isn't running"}, status_code=409)
+
+
+def _mjpeg_response(eng, get_jpeg):
+    """Stream eng's frames until it stops. Captures `eng` — a relaunch swaps
+    the slot's instance, but an open stream must not silently switch engines."""
     def gen():
         boundary = b"--frame"
-        _FRAME_INTERVAL = 0.05   # 20 fps cap — browser can't usefully render faster
-        _last_sent = None        # deduplicate: skip if engine hasn't produced a new frame
-        _next_send = time.monotonic()
-        while eng is not None and eng.is_running():
+        FRAME_INTERVAL = 0.05   # 20 fps cap — browser can't usefully render faster
+        last_sent = None        # dedupe: _publish allocates fresh bytes per frame
+        next_send = time.monotonic()
+        while eng.is_running():
             now = time.monotonic()
-            if now < _next_send:
-                time.sleep(max(0, _next_send - now))
+            if now < next_send:
+                time.sleep(max(0, next_send - now))
                 continue
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
+            jpg = get_jpeg(eng)
+            if jpg is None or jpg is last_sent:
                 time.sleep(0.005)
                 continue
-            _last_sent = jpg
-            _next_send = now + _FRAME_INTERVAL
+            last_sent = jpg
+            next_send = now + FRAME_INTERVAL
             yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
 
     return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
-@app.get("/api/wingspan/state")
-def wingspan_state():
-    with _state_lock:
-        eng = _wingspan_engine
+_FEED_GETTERS = {
+    "feed":   lambda e: e.get_jpeg(),
+    "feed_a": lambda e: e.get_jpeg_a(),
+    "feed_b": lambda e: e.get_jpeg_b(),
+}
+
+
+def _engine_feed(test_id: str, feed_name: str):
+    slot, eng = _slot_engine(test_id)
+    if slot is None:
+        return eng  # the 404
+    if feed_name not in slot.feeds:
+        return JSONResponse({"ok": False, "error": f"'{test_id}' has no {feed_name} stream"}, status_code=404)
+    if eng is None or not eng.is_running():
+        return _not_running(slot)
+    return _mjpeg_response(eng, _FEED_GETTERS[feed_name])
+
+
+@app.get("/api/{test_id}/feed")
+def engine_feed(test_id: str):
+    return _engine_feed(test_id, "feed")
+
+
+@app.get("/api/{test_id}/feed_a")
+def engine_feed_a(test_id: str):
+    return _engine_feed(test_id, "feed_a")
+
+
+@app.get("/api/{test_id}/feed_b")
+def engine_feed_b(test_id: str):
+    return _engine_feed(test_id, "feed_b")
+
+
+@app.get("/api/{test_id}/state")
+def engine_state(test_id: str):
+    slot, eng = _slot_engine(test_id)
+    if slot is None:
+        return eng  # the 404
     if eng is None:
         return {"ok": True, "running": False}
-    state = eng.get_state()
-    return {"ok": True, "running": eng.is_running(), **state}
+    resp = {"ok": True, "running": eng.is_running()}
+    resp.update(eng.get_state())  # engine-reported running (read under its lock) wins
+    return resp
 
 
-@app.post("/api/wingspan/action")
-def wingspan_action(b: WingspanAction):
-    with _state_lock:
-        eng = _wingspan_engine
+@app.post("/api/{test_id}/action")
+def engine_action(test_id: str, b: EngineAction):
+    slot, eng = _slot_engine(test_id)
+    if slot is None:
+        return eng  # the 404
     if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Wingspan test isn't running"}, status_code=409)
+        return _not_running(slot)
+    if slot.actions is None:  # dual-feed engines: generic dispatcher
+        return eng.action(b.action, b.value)
+    handler = slot.actions.get(b.action)
+    if handler is None:
+        return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
+    return handler(eng, b.value)
 
-    act = b.action
-    if act == "calibrate":
-        return eng.action_calibrate()
-    if act == "measure":
-        return eng.action_measure()
-    if act == "cancel":
-        return eng.action_cancel()
-    if act == "enter_cm":
-        return eng.action_enter_cm(b.value)
-    if act == "snapshot":
-        return eng.action_snapshot()
-    if act == "save":
-        return eng.action_save()
-    return JSONResponse({"ok": False, "error": f"Unknown action '{act}'"}, status_code=400)
-
-
-
-# ── Vertical jump live-feed control (browser buttons replace keyboard) ────
-class VerticalJumpAction(BaseModel):
-    action: str
-    value: Optional[float] = None
-
-
-@app.get("/api/vertical_jump/feed")
-def vertical_jump_feed():
-    with _state_lock:
-        eng = _vertical_jump_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Vertical jump test isn't running"}, status_code=409)
-
-    def gen():
-        boundary = b"--frame"
-        _FRAME_INTERVAL = 0.05
-        _last_sent = None
-        _next_send = time.monotonic()
-        while eng is not None and eng.is_running():
-            now = time.monotonic()
-            if now < _next_send:
-                time.sleep(max(0, _next_send - now))
-                continue
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.005)
-                continue
-            _last_sent = jpg
-            _next_send = now + _FRAME_INTERVAL
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-
-    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/vertical_jump/state")
-def vertical_jump_state():
-    with _state_lock:
-        eng = _vertical_jump_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    state = eng.get_state()
-    return {"ok": True, **state}
-
-
-@app.post("/api/vertical_jump/action")
-def vertical_jump_action(b: VerticalJumpAction):
-    with _state_lock:
-        eng = _vertical_jump_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Vertical jump test isn't running"}, status_code=409)
-
-    act = b.action
-    if act == "capture_baseline":
-        return eng.action_capture_baseline()
-    if act == "calibrate":
-        return eng.action_calibrate(b.value)
-    if act == "start_attempt":
-        return eng.action_start_attempt()
-    if act == "reset":
-        return eng.action_reset()
-    if act == "save":
-        return eng.action_save()
-    return JSONResponse({"ok": False, "error": f"Unknown action '{act}'"}, status_code=400)
-
-
-# ── Shared MJPEG generator for dual-feed engines (two cams -> two routes) ──
-def _dual_feed_gen(get_engine, jpeg_attr: str):
-    def gen():
-        boundary = b"--frame"
-        _FRAME_INTERVAL = 0.05
-        _last_sent = None
-        _next_send = time.monotonic()
-        while True:
-            engine = get_engine()
-            if engine is None or not engine.is_running():
-                break
-            now = time.monotonic()
-            if now < _next_send:
-                time.sleep(max(0, _next_send - now))
-                continue
-            jpg = getattr(engine, jpeg_attr)()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.005)
-                continue
-            _last_sent = jpg
-            _next_send = now + _FRAME_INTERVAL
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-    return gen
-
-
-class DualFeedAction(BaseModel):
-    action: str
-    value: Optional[dict] = None
-
-
-# ── Shuttle run live-feed control ──────────────────────────────────────
-@app.get("/api/shuttle_run/feed_a")
-def shuttle_run_feed_a():
-    with _state_lock:
-        eng = _shuttle_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Shuttle run isn't running"}, status_code=409)
-    return StreamingResponse(_dual_feed_gen(lambda: eng, "get_jpeg_a")(),
-                              media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/shuttle_run/feed_b")
-def shuttle_run_feed_b():
-    with _state_lock:
-        eng = _shuttle_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Shuttle run isn't running"}, status_code=409)
-    return StreamingResponse(_dual_feed_gen(lambda: eng, "get_jpeg_b")(),
-                              media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/shuttle_run/state")
-def shuttle_run_state():
-    with _state_lock:
-        eng = _shuttle_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-
-@app.post("/api/shuttle_run/action")
-def shuttle_run_action(b: DualFeedAction):
-    with _state_lock:
-        eng = _shuttle_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Shuttle run isn't running"}, status_code=409)
-    return eng.action(b.action, b.value)
-
-
-# ── Dash 50m live-feed control ──────────────────────────────────────────
-@app.get("/api/dash_50m/feed_a")
-def dash_50m_feed_a():
-    with _state_lock:
-        eng = _dash50m_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Dash 50m isn't running"}, status_code=409)
-    return StreamingResponse(_dual_feed_gen(lambda: eng, "get_jpeg_a")(),
-                              media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/dash_50m/feed_b")
-def dash_50m_feed_b():
-    with _state_lock:
-        eng = _dash50m_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Dash 50m isn't running"}, status_code=409)
-    return StreamingResponse(_dual_feed_gen(lambda: eng, "get_jpeg_b")(),
-                              media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/dash_50m/state")
-def dash_50m_state():
-    with _state_lock:
-        eng = _dash50m_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-
-@app.post("/api/dash_50m/action")
-def dash_50m_action(b: DualFeedAction):
-    with _state_lock:
-        eng = _dash50m_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Dash 50m isn't running"}, status_code=409)
-    return eng.action(b.action, b.value)
-
-
-# ── 600m run live-feed control (single camera; feed_b mirrors feed_a) ───
-@app.get("/api/run_600m/feed_a")
-def run_600m_feed_a():
-    with _state_lock:
-        eng = _run600m_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "600m run isn't running"}, status_code=409)
-    return StreamingResponse(_dual_feed_gen(lambda: eng, "get_jpeg_a")(),
-                              media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/api/run_600m/state")
-def run_600m_state():
-    with _state_lock:
-        eng = _run600m_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-
-@app.post("/api/run_600m/action")
-def run_600m_action(b: DualFeedAction):
-    with _state_lock:
-        eng = _run600m_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "600m run isn't running"}, status_code=409)
-    return eng.action(b.action, b.value)
-
-
-# ── BMI live-feed control ──────────────────────────────────────────────
-class BmiAction(BaseModel):
-    action: str
-    value: Optional[float] = None
-
-@app.get("/api/bmi/feed")
-def bmi_feed():
-    with _state_lock:
-        eng = _bmi_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "BMI test isn't running"}, status_code=409)
-    def gen():
-        boundary = b"--frame"
-        _last_sent = None
-        while eng is not None and eng.is_running():
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.02)
-                continue
-            _last_sent = jpg
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-            time.sleep(0.05)
-    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.get("/api/bmi/state")
-def bmi_state():
-    with _state_lock:
-        eng = _bmi_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-@app.post("/api/bmi/action")
-def bmi_action(b: BmiAction):
-    with _state_lock:
-        eng = _bmi_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "BMI test isn't running"}, status_code=409)
-    if b.action == "scan":
-        return eng.action_scan()
-    if b.action == "calibrate":
-        return eng.action_calibrate(b.value)
-    if b.action == "reset":
-        return eng.action_reset()
-    return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
-
-
-# ── Curl-up live-feed control ──────────────────────────────────────────
-class CurlUpAction(BaseModel):
-    action: str
-
-@app.get("/api/curl_up/feed")
-def curl_up_feed():
-    with _state_lock:
-        eng = _curl_up_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Curl-up test isn't running"}, status_code=409)
-    def gen():
-        boundary = b"--frame"
-        _last_sent = None
-        while eng is not None and eng.is_running():
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.02)
-                continue
-            _last_sent = jpg
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-            time.sleep(0.05)
-    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.get("/api/curl_up/state")
-def curl_up_state():
-    with _state_lock:
-        eng = _curl_up_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-@app.post("/api/curl_up/action")
-def curl_up_action(b: CurlUpAction):
-    with _state_lock:
-        eng = _curl_up_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Curl-up test isn't running"}, status_code=409)
-    if b.action == "start":
-        return eng.action_start()
-    if b.action == "reset":
-        return eng.action_reset()
-    return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
-
-
-# ── Wall-toss live-feed control ────────────────────────────────────────
-class WallTossAction(BaseModel):
-    action: str
-    value: Optional[float] = None
-
-@app.get("/api/wall_toss/feed")
-def wall_toss_feed():
-    with _state_lock:
-        eng = _wall_toss_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Wall toss test isn't running"}, status_code=409)
-    def gen():
-        boundary = b"--frame"
-        _last_sent = None
-        while eng is not None and eng.is_running():
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.02)
-                continue
-            _last_sent = jpg
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-            time.sleep(0.05)
-    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.get("/api/wall_toss/state")
-def wall_toss_state():
-    with _state_lock:
-        eng = _wall_toss_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-@app.post("/api/wall_toss/action")
-def wall_toss_action(b: WallTossAction):
-    with _state_lock:
-        eng = _wall_toss_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Wall toss test isn't running"}, status_code=409)
-    if b.action == "start":
-        return eng.action_start()
-    if b.action == "reset":
-        return eng.action_reset()
-    if b.action == "set_preset":
-        return eng.action_set_preset(b.value)
-    return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
-
-
-# ── Sit & reach live-feed control ──────────────────────────────────────
-class SitReachAction(BaseModel):
-    action: str
-
-@app.get("/api/sit_reach/feed")
-def sit_reach_feed():
-    with _state_lock:
-        eng = _sit_reach_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Sit & reach test isn't running"}, status_code=409)
-    def gen():
-        boundary = b"--frame"
-        _last_sent = None
-        while eng is not None and eng.is_running():
-            jpg = eng.get_jpeg()
-            if jpg is None or jpg is _last_sent:
-                time.sleep(0.02)
-                continue
-            _last_sent = jpg
-            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-            time.sleep(0.05)
-    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-@app.get("/api/sit_reach/state")
-def sit_reach_state():
-    with _state_lock:
-        eng = _sit_reach_engine
-    if eng is None:
-        return {"ok": True, "running": False}
-    return {"ok": True, **eng.get_state()}
-
-@app.post("/api/sit_reach/action")
-def sit_reach_action(b: SitReachAction):
-    with _state_lock:
-        eng = _sit_reach_engine
-    if eng is None or not eng.is_running():
-        return JSONResponse({"ok": False, "error": "Sit & reach test isn't running"}, status_code=409)
-    if b.action == "mark":
-        return eng.action_mark()
-    if b.action == "reset":
-        return eng.action_reset()
-    return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
 
 # ── Database — session management ──────────────────────────────────────────
 
