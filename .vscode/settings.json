@@ -17,10 +17,11 @@
   // real linting back in the templates.
   "html.validate.scripts": false,
 
-  // Same root cause, and the same reason pyrightconfig.json exists: the engine
-  // modules live in tests/ and are imported by bare name after a runtime
-  // sys.path.insert, which no static analyser can see.
-  "python.analysis.extraPaths": ["tests"],
+  // NOTE: python.analysis.extraPaths does NOT belong here. The engine modules
+  // in tests/ do need to be on the analysis path — imported by bare name after
+  // a runtime sys.path.insert — but pyrightconfig.json already declares that,
+  // and when that file exists Pylance ignores this setting and warns about it.
+  // One source of truth: pyrightconfig.json.
 
   "files.exclude": {
     "**/__pycache__": true,
