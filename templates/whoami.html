@@ -68,6 +68,17 @@
           </p>
         </div>
 
+        <label class="flex gap-2.5 items-start cursor-pointer">
+          <input type="checkbox" name="already_mirrored" value="1" class="mt-0.5"
+                 {% if not mirror %}checked{% endif %} />
+          <span class="text-xs text-gray-500">
+            <span class="font-bold text-gray-900 text-sm block">My camera already mirrors</span>
+            Tick this if stepping left moves the picture right. iPhone
+            Continuity Camera and some phone camera apps flip the image
+            themselves, and the app flipping it again cancels that out.
+          </span>
+        </label>
+
         <button type="submit"
                 class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm">
           Start testing

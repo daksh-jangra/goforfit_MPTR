@@ -98,12 +98,14 @@ class BaseWebEngine(StallWatchdogMixin):
     FRAME_H = 540
     STOP_JOIN_TIMEOUT = 2
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0):
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
         self.session_id = session_id
         self.on_stage = on_stage  # callback(*args) — stages a result for screen3 review
         # Which camera this engine drives. Comes from the coach's own setting,
         # so two coaches with two phones can run tests simultaneously.
         self.camera_source = camera_source
+        # False when the camera already mirrors (see camera.mirror)
+        self.mirror_preview = mirror
 
         # RLock: run loops call _safe_stage() while already holding the lock,
         # and _safe_stage locks its _error write.
@@ -267,8 +269,8 @@ class BmiEngine(BaseWebEngine):
     result the moment a 5-second scan finishes (no separate SAVE button —
     matches the original script's own auto-save-on-scan behavior)."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0):
-        super().__init__(session_id, on_stage, camera_source)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
         self.landmarker = None
         self.scale_factor = bmi_mod.load_calibration()
         self.height_buffer = []
@@ -364,7 +366,7 @@ class BmiEngine(BaseWebEngine):
                     continue
 
                 fh, fw = frame.shape[:2]
-                frame = cv2.flip(frame, 1)
+                frame = camera.mirror(frame, self.mirror_preview)
                 mp_image = bmi_mod.mp.Image(
                     image_format=bmi_mod.mp.ImageFormat.SRGB,
                     data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
@@ -449,8 +451,8 @@ class CurlUpEngine(BaseWebEngine):
     30s timer, hip-angle state machine, and draw_ui() HUD — is reused
     unchanged from parcurlup.py."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0):
-        super().__init__(session_id, on_stage, camera_source)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
         self.landmarker = None
         self.count = 0
         self.phase = "up"
@@ -535,7 +537,7 @@ class CurlUpEngine(BaseWebEngine):
                 # flipped space — every self-facing test previews selfie-style
                 # (subject's right on screen right), matching bmi/wingspan/etc.
                 # Mirror-safe here: the count uses L/R landmark midpoints + angles.
-                frame = cv2.flip(frame, 1)
+                frame = camera.mirror(frame, self.mirror_preview)
                 h, w = frame.shape[:2]
                 frame_idx += 1
                 ts = int(frame_idx * 1000 / fps)
@@ -618,8 +620,8 @@ class WallTossEngine(BaseWebEngine):
     position over the desktop window) is replaced by choosing one of the
     5 built-in colour presets from a button row."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0):
-        super().__init__(session_id, on_stage, camera_source)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
         self.counter = None
         self.last_save = None
 
@@ -683,7 +685,7 @@ class WallTossEngine(BaseWebEngine):
                 if not ret:
                     time.sleep(0.005)
                     continue
-                frame = cv2.flip(frame, 1)
+                frame = camera.mirror(frame, self.mirror_preview)
                 c = self.counter
 
                 bc, br = c._detect_ball(frame)
@@ -733,8 +735,8 @@ class SitReachEngine(BaseWebEngine):
     button mirrors the original's dual-purpose SPACE key: first press
     sets the start position, second press locks the final result."""
 
-    def __init__(self, session_id=None, on_stage=None, leg_cm=None, camera_source=0):
-        super().__init__(session_id, on_stage, camera_source)
+    def __init__(self, session_id=None, on_stage=None, leg_cm=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
         self.leg_cm = leg_cm
         self.landmarker = None
         self.lx_sm = snr_mod.RollingMean(6)
@@ -857,7 +859,7 @@ class SitReachEngine(BaseWebEngine):
                 # self-facing tests). Mirror-safe: both fingertips are tracked
                 # symmetrically and the reach vector is locked in this same
                 # flipped coordinate space at measurement start.
-                frame = cv2.flip(frame, 1)
+                frame = camera.mirror(frame, self.mirror_preview)
                 fh, fw = frame.shape[:2]
                 mp_image = snr_mod.mp.Image(
                     image_format=snr_mod.mp.ImageFormat.SRGB,

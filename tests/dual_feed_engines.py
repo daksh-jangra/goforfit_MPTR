@@ -102,7 +102,8 @@ class DualFeedEngine(StallWatchdogMixin):
     FRAME_H = 540
     STOP_JOIN_TIMEOUT = 2
 
-    def __init__(self, cam_a_url, cam_b_url, session_id=None, on_stage=None, **kwargs):
+    def __init__(self, cam_a_url, cam_b_url, session_id=None, on_stage=None, mirror=True, **kwargs):
+        self.mirror_preview = mirror
         self.cam_a_url = cam_a_url
         self.cam_b_url = cam_b_url
         self.session_id = session_id
@@ -278,10 +279,9 @@ class DualFeedEngine(StallWatchdogMixin):
                 if not ok_a or not ok_b:
                     time.sleep(0.02)
                     continue
-                if self.MIRROR:
-                    # Before _process_pair so detection/overlays/clicks agree.
-                    frame_a = cv2.flip(frame_a, 1)
-                    frame_b = cv2.flip(frame_b, 1)
+                # Before _process_pair so detection/overlays/clicks agree.
+                frame_a = camera.mirror(frame_a, self.mirror_preview)
+                frame_b = camera.mirror(frame_b, self.mirror_preview)
                 drawn_a, drawn_b = self._process_pair(frame_a, frame_b)
                 self._publish(drawn_a, drawn_b)
         except Exception as exc:

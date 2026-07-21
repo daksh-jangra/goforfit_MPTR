@@ -178,10 +178,11 @@ class VerticalJumpEngine(StallWatchdogMixin):
     """Runs the vertical-jump camera loop on a background thread and exposes
     MJPEG frames + JSON state to the browser, instead of an OpenCV window."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=CAMERA_SOURCE):
+    def __init__(self, session_id=None, on_stage=None, camera_source=CAMERA_SOURCE, mirror=True):
         self.session_id = session_id
         self.on_stage = on_stage
         self.camera_source = camera_source
+        self.mirror_preview = mirror
         self._lock = threading.RLock()
         self._running = False
         self._thread = None
@@ -409,7 +410,7 @@ class VerticalJumpEngine(StallWatchdogMixin):
                 time.sleep(0.02)
                 continue
 
-            frame = cv.flip(frame, 1)
+            frame = camera.mirror(frame, self.mirror_preview)
             rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
             height, width = frame.shape[:2]
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)

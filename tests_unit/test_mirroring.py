@@ -163,3 +163,28 @@ def test_dual_feed_engine_mirrors_before_processing(monkeypatch):
         "left-side square stayed on the left. Set MIRROR/flip before "
         "_process_pair so detection and clicks share the displayed space."
     )
+
+
+# ── the opt-out, for cameras that already mirror ─────────────────────────
+
+def test_mirror_false_publishes_the_frame_unflipped(monkeypatch):
+    """Some sources mirror themselves — iPhone Continuity Camera, several
+    phone IP-cam apps. Flipping those again cancels it out and the coach
+    steps left while the picture goes right. Nothing can detect that from
+    the pixels, so it's a per-camera setting; this pins that setting off
+    genuinely means no flip."""
+    import web_engines
+
+    engine = web_engines.BmiEngine(mirror=False)
+    assert _published_square_side(engine) == "left", (
+        "mirror=False still flipped the frame — the opt-out does nothing, so a "
+        "self-mirroring camera stays backwards."
+    )
+
+
+def test_mirror_defaults_to_on(monkeypatch):
+    """A plain webcam must keep mirroring without anyone configuring it."""
+    import web_engines
+
+    assert web_engines.BmiEngine().mirror_preview is True
+    assert web_engines.WingspanEngine().mirror_preview is True

@@ -94,10 +94,11 @@ def _draw_align_warning(frame):
 class WingspanEngine(StallWatchdogMixin):
     """One live wingspan session. Created on 'Start Test', destroyed on 'Stop'."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0):
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
         self.session_id = session_id
         self.on_stage = on_stage  # callback(wingspan_cm) — stages result for screen3 review
         self.camera_source = camera_source
+        self.mirror_preview = mirror
 
         self._lock = threading.Lock()
         self._jpeg = None
@@ -368,7 +369,7 @@ class WingspanEngine(StallWatchdogMixin):
                     time.sleep(0.005)
                     continue
 
-                frame = cv2.flip(frame, 1)
+                frame = camera.mirror(frame, self.mirror_preview)
                 fw, fh = frame.shape[1], frame.shape[0]
                 frame_ts_ms = int((time.monotonic() - _start_wall) * 1000)
 

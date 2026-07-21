@@ -196,6 +196,7 @@ def _build_wingspan(body: dict):
     return WingspanEngine(
         session_id=session_id,
         camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True),
         on_stage=lambda cm: _pending_stage(coach, "wingspan", {"session_id": session_id, "wingspan_cm": cm}),
     )
 
@@ -214,7 +215,8 @@ def _build_vertical_jump(body: dict):
         })
 
     return VerticalJumpEngine(session_id=session_id, on_stage=_stage,
-                      camera_source=body.get('_camera', 0))
+                      camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True))
 
 
 def _build_bmi(body: dict):
@@ -228,7 +230,8 @@ def _build_bmi(body: dict):
         })
 
     return BmiEngine(session_id=session_id, on_stage=_stage,
-                      camera_source=body.get('_camera', 0))
+                      camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True))
 
 
 def _build_curl_up(body: dict):
@@ -237,6 +240,7 @@ def _build_curl_up(body: dict):
     return CurlUpEngine(
         session_id=session_id,
         camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True),
         on_stage=lambda reps: _pending_stage(coach, 
             "curl_up", {"session_id": session_id, "reps": reps, "duration_sec": 30}),
     )
@@ -253,7 +257,8 @@ def _build_wall_toss(body: dict):
         })
 
     return WallTossEngine(session_id=session_id, on_stage=_stage,
-                      camera_source=body.get('_camera', 0))
+                      camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True))
 
 
 def _build_sit_reach(body: dict):
@@ -274,7 +279,8 @@ def _build_sit_reach(body: dict):
         })
 
     return SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm,
-                          camera_source=body.get('_camera', 0))
+                          camera_source=body.get('_camera', 0),
+        mirror=body.get('_mirror', True))
 
 
 def _build_shuttle_run(body: dict):
@@ -987,7 +993,8 @@ def whoami_form(request: Request, next: str = "/"):
     return templates.TemplateResponse(
         request, "whoami.html",
         {"next": auth_mod._safe_next(next), "error": None,
-         "coaches": db.list_coaches(), "camera": auth_mod.camera_of(request)},
+         "coaches": db.list_coaches(), "camera": auth_mod.camera_of(request),
+         "mirror": auth_mod.mirror_of(request)},
     )
 
 
@@ -997,18 +1004,22 @@ async def whoami_submit(request: Request):
     target = auth_mod._safe_next(form.get("next"))
     coach = auth_mod.clean_coach_name(form.get("coach"))
     camera = (form.get("camera") or "").strip() or auth_mod.DEFAULT_CAMERA
+    # Checkbox absent => unchecked => this camera does NOT pre-mirror.
+    mirror = not form.get("already_mirrored")
 
     if not coach:
         return templates.TemplateResponse(
             request, "whoami.html",
             {"next": target, "error": "Enter a name so your results can be told apart.",
-             "coaches": db.list_coaches(), "camera": camera},
+             "coaches": db.list_coaches(), "camera": camera,
+             "mirror": mirror},
             status_code=400,
         )
 
     response = RedirectResponse(target, status_code=303)
     auth_mod.set_coach_cookie(response, coach)
     auth_mod.set_camera_cookie(response, camera)
+    auth_mod.set_mirror_cookie(response, mirror)
     return response
 
 
@@ -1157,6 +1168,7 @@ async def launch(test_id: str, request: Request):
     coach = _coach(request)
     body["_coach"] = coach
     body["_camera"] = auth_mod.camera_of(request)
+    body["_mirror"] = auth_mod.mirror_of(request)
 
     # Two guards, and they are different questions now.
     #

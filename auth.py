@@ -197,6 +197,7 @@ def coach_of(request):
             or clean_coach_name(request.headers.get(COACH_HEADER)))
 
 
+MIRROR_COOKIE = "gf_mirror"
 CAMERA_COOKIE = "gf_camera"
 DEFAULT_CAMERA = "0"
 
@@ -208,6 +209,21 @@ def camera_of(request):
     regenerates the access code."""
     raw = (request.cookies.get(CAMERA_COOKIE) or "").strip()
     return raw or DEFAULT_CAMERA
+
+
+def mirror_of(request):
+    """Should the engines selfie-flip this camera's frames? Default yes — a
+    plain webcam hands over an un-mirrored image. Set to "off" for a source
+    that mirrors itself (iPhone Continuity Camera, many phone IP-cam apps),
+    where flipping again cancels it out."""
+    return (request.cookies.get(MIRROR_COOKIE) or "on").strip().lower() != "off"
+
+
+def set_mirror_cookie(response, enabled):
+    response.set_cookie(
+        MIRROR_COOKIE, "on" if enabled else "off",
+        httponly=True, samesite="lax", path="/", max_age=60 * 60 * 12,
+    )
 
 
 def set_camera_cookie(response, camera):

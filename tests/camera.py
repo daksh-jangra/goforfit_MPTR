@@ -41,6 +41,23 @@ def source_key(source):
     return str(resolved).rstrip("/").lower() if isinstance(resolved, str) else f"index:{resolved}"
 
 
+def mirror(frame, enabled=True):
+    """Selfie-flip a frame, unless the camera already did it.
+
+    Every engine mirrors its preview so a subject facing the camera sees
+    their real right hand on the right. That assumes the camera hands over a
+    plain, un-mirrored image — true of a USB webcam, NOT true of some phone
+    sources. iPhone Continuity Camera and several IP-camera apps mirror the
+    stream themselves, and our flip then cancels theirs: the coach steps
+    left and the picture moves right, which is exactly the complaint
+    mirroring exists to prevent.
+
+    Nothing can detect this from the pixels, so it is a per-camera setting
+    the coach makes once at sign-in.
+    """
+    return cv2.flip(frame, 1) if enabled else frame
+
+
 def open_capture(source, width=None, height=None, fps=None, buffersize=1):
     """Open a capture, or raise with the source named.
 
