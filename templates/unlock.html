@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unlock GoForFit</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-6 space-y-5">
+      <div class="space-y-1">
+        <h1 class="text-xl font-bold text-gray-900">
+          <span class="text-blue-600">fitness</span><span class="text-green-500">365</span>
+        </h1>
+        <p class="text-sm text-gray-500">
+          This server holds student records, so it asks for the access code
+          printed in the console when it started.
+        </p>
+      </div>
+
+      {% if error %}
+      <p class="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+        {{ error }}
+      </p>
+      {% endif %}
+
+      <form method="post" action="/unlock" class="space-y-4">
+        <input type="hidden" name="next" value="{{ next }}" />
+        <div class="space-y-1.5">
+          <label for="token" class="block text-sm font-bold text-gray-900">Access code</label>
+          <input
+            id="token"
+            name="token"
+            type="password"
+            autocomplete="off"
+            autofocus
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-700"
+          />
+        </div>
+        <button
+          type="submit"
+          class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm"
+        >
+          Unlock
+        </button>
+      </form>
+
+      <p class="text-xs text-gray-400">
+        Stays unlocked on this device for 12 hours.
+      </p>
+    </div>
+  </body>
+</html>

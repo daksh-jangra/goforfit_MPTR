@@ -16,7 +16,8 @@ Usage:
     python app.py
     Then open  http://localhost:5001  in your browser.
     (Port 5001 because macOS AirPlay owns 5000; localhost-only by default —
-    set GOFORFIT_HOST=0.0.0.0 to reach the app from a phone.)
+    set GOFORFIT_HOST=0.0.0.0 to reach the app from a phone. Every route
+    needs the access code printed at startup; see auth.py and the README.)
 
 Interactive API docs (new, courtesy of FastAPI): http://localhost:5001/docs
 """
@@ -32,6 +33,7 @@ os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"  # skip Windows Media Foundatio
 import subprocess
 import sys
 import csv
+import secrets
 import io
 import threading
 import time
@@ -45,11 +47,21 @@ import jinja2
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel
 
 from db import db  # unchanged database module
+import auth as auth_mod
 
 app = FastAPI(title="GoForFit NEP FMS")
+
+# ── Access control ────────────────────────────────────────────────────────
+# Resolved at import, NOT in the __main__ block below: the app is normally
+# started with `uvicorn app:app`, which never runs __main__ — putting the
+# gate there would have left every production launch wide open.
+ACCESS_TOKEN, ACCESS_TOKEN_GENERATED = auth_mod.resolve_token()
+app.add_middleware(auth_mod.TokenAuthMiddleware, token=ACCESS_TOKEN)
+auth_mod.print_startup_banner(ACCESS_TOKEN, ACCESS_TOKEN_GENERATED)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent
@@ -857,6 +869,35 @@ class Run600mSave(BaseModel):
 
 # ── Page routes ───────────────────────────────────────────────────────────
 
+@app.get("/unlock", name="unlock")
+def unlock_form(request: Request, next: str = "/"):
+    if ACCESS_TOKEN is None:
+        return RedirectResponse(auth_mod._safe_next(next), status_code=303)
+    return templates.TemplateResponse(
+        request, "unlock.html", {"next": auth_mod._safe_next(next), "error": None},
+    )
+
+
+@app.post("/unlock")
+async def unlock_submit(request: Request):
+    form = await request.form()
+    supplied = (form.get("token") or "").strip()
+    target = auth_mod._safe_next(form.get("next"))
+    if ACCESS_TOKEN is None:
+        return RedirectResponse(target, status_code=303)
+    if not secrets.compare_digest(supplied, ACCESS_TOKEN):
+        # 401, not a redirect: a wrong code must not look like success, and
+        # the status makes a failed unlock visible in the server log.
+        return templates.TemplateResponse(
+            request, "unlock.html",
+            {"next": target, "error": "That code isn't right — check the server console."},
+            status_code=401,
+        )
+    response = RedirectResponse(target, status_code=303)
+    auth_mod.set_token_cookie(response, ACCESS_TOKEN)
+    return response
+
+
 @app.get("/", name="index")
 def index(request: Request):
     return templates.TemplateResponse(request, "index.html", {"tests": list(TESTS.values())})
@@ -1535,9 +1576,10 @@ def export_csv(test_id: str):
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
-# Defaults are deliberately safe: localhost only (the API has no auth and
-# serves student names/ages/measurements), no auto-reload (a reload restarts
-# the process mid-test, killing the camera thread and losing staged results).
+# Defaults are deliberately safe: localhost only (defence in depth — every
+# route also requires the shared access code, see auth.py), no auto-reload (a
+# reload restarts the process mid-test, killing the camera thread and losing
+# staged results).
 # Port 5001 because macOS AirPlay squats on 5000.
 #
 # To use the app from a phone on the same network (the normal coach setup),

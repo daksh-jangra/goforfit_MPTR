@@ -99,17 +99,38 @@ The server defaults to **localhost only, port 5001, no auto-reload**:
 - **Port 5001, not 5000** — on macOS, AirPlay Receiver (ControlCenter)
   listens on port 5000, so binding there fails or silently answers with the
   wrong service.
-- **Localhost only** — the API has no authentication and serves student
-  names, ages, and measurements. To use the app from a phone on the same
-  network (the normal coach setup), opt in explicitly:
+- **Localhost by default** — to use the app from a phone on the same network
+  (the normal coach setup), opt in explicitly:
 
   ```bash
   GOFORFIT_HOST=0.0.0.0 python app.py
   ```
 
+- **Access code** — this server serves student names, ages, schools and
+  measurements, and can delete sessions, so every route requires a shared
+  token. The server prints one at startup:
+
+  ```
+  ──────────────────────────────────────────────────────────────
+    GoForFit access code:  PBtAQMNz7MK8
+    (generated for this run — set GOFORFIT_TOKEN to pin your own)
+  ──────────────────────────────────────────────────────────────
+  ```
+
+  Open the app, type the code once, and that device stays unlocked for 12
+  hours. Set `GOFORFIT_TOKEN=…` to choose your own so it survives restarts —
+  otherwise a new one is generated each launch and every device must re-enter
+  it. Scripts can send `X-GoForFit-Token`, and a QR code can carry `?token=…`
+  (swapped for the cookie and stripped from the URL on arrival).
+
+  `GOFORFIT_AUTH=off` disables the gate entirely. Only do that on localhost —
+  with `GOFORFIT_HOST=0.0.0.0` it means anyone on the school network can read
+  and delete student records.
+
 - Overrides: `GOFORFIT_HOST`, `GOFORFIT_PORT`, `GOFORFIT_RELOAD=1`
   (auto-reload restarts the server on any file change — never use it during a
-  live test, the restart kills the camera engine and loses staged results).
+  live test, the restart kills the camera engine and loses staged results),
+  `GOFORFIT_TOKEN`, `GOFORFIT_AUTH`.
 
 ## Running the tests
 
