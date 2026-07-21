@@ -29,7 +29,7 @@
 """
 
 import cv2
-import mediapipe as mp
+import mp_tasks  # Tasks-API detector/drawing helpers (see mp_tasks.py)
 import numpy as np
 from collections import deque
 import time
@@ -124,17 +124,14 @@ class WallTossCounter:
               "left_holding",  "left_tossed")
 
     def __init__(self):
-        # ── MediaPipe Hands ───────────────────────────────────────────────
-        self._mp_h  = mp.solutions.hands
-        self._mp_dr = mp.solutions.drawing_utils
-        self._mp_ds = mp.solutions.drawing_styles
-        self._detector = self._mp_h.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=1,
-            min_detection_confidence=0.70,
-            min_tracking_confidence=0.60,
+        # ── MediaPipe Hands (Tasks API) ───────────────────────────────────
+        # solutions.Hands was removed in mediapipe 0.10.30. HandLandmarker in
+        # VIDEO mode is the direct equivalent — same cross-frame tracking,
+        # but it needs a monotonic timestamp per frame.
+        self._detector = mp_tasks.hand_landmarker(
+            num_hands=2, detection_conf=0.70, tracking_conf=0.60,
         )
+        self._clock = mp_tasks.VideoClock()
 
         # ── Ball state ────────────────────────────────────────────────────
         _, lo, hi = BALL_PRESETS[1]          # default = orange
@@ -240,19 +237,27 @@ class WallTossCounter:
     #  Hand detection helpers
     # ─────────────────────────────────────────────────────────────────────
 
-    def _process_hands(self, rgb: np.ndarray, shape: tuple):
-        """Run MediaPipe, populate self.hands, return mp result."""
-        res = self._detector.process(rgb)
+    def _process_hands(self, frame: np.ndarray, shape: tuple):
+        """Run MediaPipe, populate self.hands, return the Tasks result.
+
+        Takes the BGR frame now: the Tasks API wants an mp.Image, and doing
+        the colour conversion in one place beats passing a second array
+        around just for the detector.
+        """
+        res = self._detector.detect_for_video(
+            mp_tasks.to_mp_image(frame), self._clock.tick())
         self.hands = {}
 
-        if res.multi_hand_landmarks and res.multi_handedness:
+        # Tasks flattens what solutions nested: hand_landmarks[i] is a plain
+        # list of landmarks (no .landmark attribute), and handedness[i] is a
+        # list of categories whose first entry carries .category_name where
+        # solutions had .classification[0].label.
+        if res.hand_landmarks and res.handedness:
             h, w = shape[:2]
-            for lms, side in zip(res.multi_hand_landmarks,
-                                  res.multi_handedness):
-                label = side.classification[0].label   # 'Left' or 'Right'
+            for lms, side in zip(res.hand_landmarks, res.handedness):
+                label = side[0].category_name          # 'Left' or 'Right'
                 # Palm centre = midpoint of WRIST (0) and MIDDLE MCP (9)
-                wr = lms.landmark[0]
-                mc = lms.landmark[9]
+                wr, mc = lms[0], lms[9]
                 cx = int((wr.x + mc.x) / 2 * w)
                 cy = int((wr.y + mc.y) / 2 * h)
                 self.hands[label] = {"center": (cx, cy), "landmarks": lms}
@@ -370,15 +375,9 @@ class WallTossCounter:
     def _draw(self, frame: np.ndarray, mp_res):
         h, w = frame.shape[:2]
 
-        # 1. MediaPipe hand skeleton
-        if mp_res.multi_hand_landmarks:
-            for lms in mp_res.multi_hand_landmarks:
-                self._mp_dr.draw_landmarks(
-                    frame, lms,
-                    self._mp_h.HAND_CONNECTIONS,
-                    self._mp_ds.get_default_hand_landmarks_style(),
-                    self._mp_ds.get_default_hand_connections_style(),
-                )
+        # 1. MediaPipe hand skeleton (drawing_utils/drawing_styles are gone
+        #    with solutions — mp_tasks draws the same thing with cv2)
+        mp_tasks.draw_hand_skeleton(frame, mp_res.hand_landmarks)
 
         # 2. Ball trajectory trail (fades towards older positions)
         pts = [p for p in self.ball_path if p is not None]
@@ -563,9 +562,7 @@ class WallTossCounter:
                     self.ball_center = None
 
             # ── Hand detection ─────────────────────────────────────────────
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            mp_res = self._process_hands(rgb, frame.shape)
+            mp_res = self._process_hands(frame, frame.shape)
 
             # ── State machine ──────────────────────────────────────────────
             self._update_state()

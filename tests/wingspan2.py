@@ -34,10 +34,7 @@ from mediapipe.tasks.python.vision import (
     HandLandmarksConnections,
     PoseLandmarksConnections,
 )
-from mediapipe import solutions as mp_solutions
-from mediapipe.framework.formats import landmark_pb2
-mp_draw = mp_solutions.drawing_utils
-DrawingSpec = mp_draw.DrawingSpec
+import mp_tasks  # cv2-based skeleton drawing — see below
 
 # ══════════════════════════════════════════════════════════
 # Config
@@ -627,38 +624,18 @@ def build_pose_detector(model_path):
     return PoseLandmarker.create_from_options(opts)
 
 
-HAND_SPEC = DrawingSpec(color=BLUE,  thickness=2, circle_radius=3)
-CONN_SPEC = DrawingSpec(color=WHITE, thickness=1)
-POSE_SPEC = DrawingSpec(color=(180,80,80), thickness=1, circle_radius=2)
-POSE_CONN = DrawingSpec(color=(80,80,180), thickness=1)
-
-
-def _to_landmark_list_proto(landmarks):
-    proto = landmark_pb2.NormalizedLandmarkList()
-    proto.landmark.extend([
-        landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z)
-        for lm in landmarks
-    ])
-    return proto
-
-def _to_connection_tuples(connections):
-    return [(c.start, c.end) for c in connections]
+# Detection here was always Tasks API; only the DRAWING went through
+# solutions.drawing_utils, which took a protobuf landmark list and was
+# removed in mediapipe 0.10.30 along with the rest of solutions. mp_tasks
+# draws the same skeletons with plain cv2 calls, so the conversion to
+# NormalizedLandmarkList protos that used to sit here is gone entirely.
 
 def draw_hand_skeleton(frame, landmarks_list):
-    for lms in landmarks_list:
-        mp_draw.draw_landmarks(frame, _to_landmark_list_proto(lms),
-            _to_connection_tuples(HandLandmarksConnections.HAND_CONNECTIONS),
-            landmark_drawing_spec=HAND_SPEC,
-            connection_drawing_spec=CONN_SPEC)
+    mp_tasks.draw_hand_skeleton(frame, landmarks_list)
 
 
 def draw_pose_skeleton(frame, p_result):
-    if p_result.pose_landmarks:
-        for lms in p_result.pose_landmarks:
-            mp_draw.draw_landmarks(frame, _to_landmark_list_proto(lms),
-                _to_connection_tuples(PoseLandmarksConnections.POSE_LANDMARKS),
-                landmark_drawing_spec=POSE_SPEC,
-                connection_drawing_spec=POSE_CONN)
+    mp_tasks.draw_pose_skeleton(frame, p_result)
 
 # ══════════════════════════════════════════════════════════
 # Main

@@ -61,22 +61,24 @@ rebuilt to run without any OpenCV window or keyboard at all:
 
 ## Requirements
 
-- **Python 3.10 – 3.12.** Python 3.13 will NOT work: our `mediapipe<0.10.30`
-  pin (see requirements.txt for why) has no wheels built for 3.13, so
-  `pip install` fails with "No matching distribution found for mediapipe".
-  On a Mac with only Python 3.13: `brew install python@3.12`.
+- **Python 3.10+.** The old 3.12 ceiling is gone: it existed only because the
+  `mediapipe<0.10.30` pin had no 3.13 wheels, and every engine is now on the
+  Tasks API so that pin has been dropped. Verified against mediapipe 0.10.35;
+  3.13 itself has not been run end-to-end yet.
 - A webcam (phone IP-cams work for the dual-camera tests via their URL params).
 
 ## Setup
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 For a byte-for-byte reproduction of the known-working environment (pinned
-transitive dependencies included), use the lockfile instead:
+transitive dependencies included), use the lockfile instead — note it still
+pins `mediapipe==0.10.21` and therefore still needs Python ≤ 3.12; regenerate
+it from a fresh install if you want the lockfile on the new floor too:
 
 ```bash
 pip install -r requirements.lock
@@ -197,24 +199,25 @@ flagging to the integration owner.
 
 **`AttributeError: module 'mediapipe' has no attribute 'solutions'`**
 
-Google removed the legacy `mediapipe.solutions` API (used by `Hands`,
-`drawing_utils`, etc.) starting in mediapipe **0.10.30**
+Should no longer happen — every engine is on the Tasks API. If you see it,
+something is importing `mediapipe.solutions`, which Google removed in
+mediapipe **0.10.30**
 ([tracking issue](https://github.com/google-ai-edge/mediapipe/issues/6192)).
-`tests/wtt.py` (wall_toss), `tests/parcurlup.py` (curl_up), and
-`tests/shuttleruntest.py` (shuttle_run) all still use this legacy API, so a
-`pip install` that resolves to mediapipe ≥0.10.30 breaks those three tests.
 
-Fixed by pinning `mediapipe>=0.10.9,<0.10.30` in `requirements.txt`. If you
-already have a newer mediapipe installed, re-run:
+`tests/mp_tasks.py` holds the replacements: `hand_landmarker()` /
+`pose_landmarker()` for `solutions.Hands` / `solutions.Pose`, and
+`draw_hand_skeleton()` / `draw_pose_skeleton()` for `drawing_utils`. New code
+should go through it rather than reaching into mediapipe directly.
 
-```bash
-pip install -r requirements.txt --upgrade
-```
+Two gotchas when porting anything else:
 
-Longer-term, these three scripts should be migrated to the MediaPipe Tasks
-API (`HandLandmarker` / `PoseLandmarker`) the way `wingspan2.py` and the
-`600m_new` scripts already were (see the `.task` model files already in
-`tests/`) — that removes the version ceiling entirely.
+- Tasks detectors in VIDEO mode need a **monotonically increasing timestamp**
+  per detector and reject one that doesn't advance — use `mp_tasks.VideoClock`,
+  one per detector (shuttle_run runs eight, one per lane per camera).
+- Results are shaped differently: `result.pose_landmarks` is a list *per
+  detected pose* (so `[0]` for the first) rather than a single object with a
+  `.landmark` attribute, and handedness is `result.handedness[i][0].category_name`
+  where solutions had `.classification[0].label`.
 
 **`AttributeError: module 'mediapipe.tasks.python.vision' has no attribute 'PoseLandmark'`**
 

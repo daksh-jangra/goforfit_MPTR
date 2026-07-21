@@ -73,7 +73,8 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-import mediapipe as mp
+
+import mp_tasks  # Tasks-API detector/drawing helpers (see mp_tasks.py)
 
 try:
     import sounddevice as sd
@@ -463,11 +464,18 @@ class LaneTracker:
         self.touch_line_y = touch_line_y
         self.manager = manager
 
-        self.pose = mp.solutions.pose.Pose(
-            model_complexity=POSE_MODEL_COMPLEXITY,
-            min_detection_confidence=MIN_DETECTION_CONFIDENCE,
-            min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+        # Tasks API in VIDEO mode — the replacement for solutions.Pose(),
+        # which was removed in mediapipe 0.10.30. Each lane gets its own
+        # detector AND its own clock: VIDEO mode rejects a timestamp that
+        # doesn't advance, and 4 lanes x 2 cameras share nothing.
+        self.pose = mp_tasks.pose_landmarker(
+            num_poses=1,
+            detection_conf=MIN_DETECTION_CONFIDENCE,
+            tracking_conf=MIN_TRACKING_CONFIDENCE,
+            model=("pose_landmarker_full.task" if POSE_MODEL_COMPLEXITY >= 2
+                   else "pose_landmarker_lite.task"),
         )
+        self._clock = mp_tasks.VideoClock()
         self._prev_side: Optional[str] = None  # "near"/"far" relative to line
         self._last_touch_time = 0.0
 
@@ -477,14 +485,14 @@ class LaneTracker:
         crop = frame[:, self.x0:self.x1]
         if crop.size == 0:
             return None
-        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        result = self.pose.process(rgb)
+        result = self.pose.detect_for_video(mp_tasks.to_mp_image(crop), self._clock.tick())
         if not result.pose_landmarks:
             return None
 
-        lm = result.pose_landmarks.landmark
-        L_ANKLE = mp.solutions.pose.PoseLandmark.LEFT_ANKLE
-        R_ANKLE = mp.solutions.pose.PoseLandmark.RIGHT_ANKLE
+        # Tasks returns one landmark list PER detected pose; num_poses=1 so
+        # there is at most one, where solutions returned a single object.
+        lm = result.pose_landmarks[0]
+        L_ANKLE, R_ANKLE = mp_tasks.LEFT_ANKLE, mp_tasks.RIGHT_ANKLE
         crop_h, crop_w = crop.shape[:2]
 
         candidates = []

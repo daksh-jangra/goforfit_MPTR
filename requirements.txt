@@ -3,14 +3,11 @@ uvicorn[standard]>=0.29.0
 jinja2>=3.1.0
 python-multipart>=0.0.9
 opencv-python>=4.8.0
-# NOTE: Google removed the legacy `mediapipe.solutions` API (Hands/Pose/
-# drawing_utils) starting in mediapipe 0.10.30. wall_toss (tests/wtt.py),
-# curl_up (tests/parcurlup.py) and shuttle_run (tests/shuttleruntest.py)
-# all still use that legacy API, so mediapipe MUST stay below 0.10.30 or
-# those three tests will crash with:
-#   AttributeError: module 'mediapipe' has no attribute 'solutions'
-# See https://github.com/google-ai-edge/mediapipe/issues/6192
-mediapipe>=0.10.9,<0.10.30
+# Every engine is on the Tasks API (see tests/mp_tasks.py), so the old
+# `<0.10.30` pin — which existed because Google removed the legacy
+# `mediapipe.solutions` API in that release — is gone, and with it the
+# Python <= 3.12 ceiling it forced.
+mediapipe>=0.10.30
 numpy>=1.24.0
 pandas>=2.0.0
 pyaudio>=0.2.13
