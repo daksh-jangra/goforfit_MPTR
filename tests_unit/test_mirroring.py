@@ -86,6 +86,43 @@ def test_self_facing_engine_publishes_mirrored_preview(engine_name, kwargs):
     )
 
 
+@pytest.mark.parametrize("module_name,engine_name", [
+    ("wingspan_web_engine", "WingspanEngine"),
+    ("vertical_jump_web_engine", "VerticalJumpEngine"),
+])
+def test_standalone_engine_publishes_mirrored_preview(monkeypatch, module_name, engine_name):
+    """Wingspan and vertical_jump were the two engines this file never
+    covered — they predate BaseWebEngine and open their capture inline, so
+    the _open_camera override the other tests use doesn't reach them. That
+    is precisely why they could have drifted un-mirrored without failing
+    anything, so they get patched at the cv2 level instead.
+    """
+    import cv2
+    import importlib
+
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(cv2, "VideoCapture", SynthCap)
+
+    engine = getattr(module, engine_name)()
+    engine.start()
+    try:
+        assert wait_until(lambda: engine.get_frame()[0] is not None, timeout=10.0), \
+            f"{engine_name} never published a frame"
+        time.sleep(0.5)
+        jpg, _ = engine.get_frame()
+    finally:
+        engine.stop()
+
+    img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_GRAYSCALE)
+    h, w = img.shape
+    band = img[h // 2 - 40:h // 2 + 40]
+    left, right = band[:, : w // 3].mean(), band[:, -w // 3:].mean()
+    assert right > left, (
+        f"{engine_name} published an un-mirrored frame — the left-side square "
+        "stayed on the left."
+    )
+
+
 def test_dual_feed_engine_mirrors_before_processing(monkeypatch):
     """The field tests share one flip in DualFeedEngine._run_loop. Assert the
     frames handed to _process_pair are already mirrored — that ordering is
