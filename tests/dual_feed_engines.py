@@ -85,7 +85,11 @@ class DualFeedEngine(StallWatchdogMixin):
     # CAVEAT: positional lane numbering (shuttle_run's sorted boundary clicks,
     # dash_50m's overhead column split) is screen-relative — lane 1 is the
     # leftmost lane AS DISPLAYED, which mirroring moves to the other side of
-    # the track. Confirm lane order on the live feed before a timed run.
+    # the track. Both engines now draw their L-numbers on the feed and expose
+    # a flip action, so the coach reads the labels rather than guessing;
+    # shuttle_run additionally reverses End B by default, since two cameras
+    # facing each other ALWAYS disagree about left. Confirm on the live feed
+    # before a timed run.
     MIRROR = True
     JPEG_QUALITY = 75
     FRAME_W = 960
@@ -355,6 +359,15 @@ class ShuttleRunEngine(DualFeedEngine):
         self.trackers = {"a": [], "b": []}    # list[LaneTracker] once calibrated
         self.started = False
 
+        # The two cameras face each other across the track, so End B sees the
+        # lanes in the opposite left-right order to End A. Both ends feed the
+        # SAME StudentManager, keyed by lane number — so without this, End B's
+        # "lane 1" is End A's lane 4 and every runner's touch count is a blend
+        # of two different people. Default True because facing cameras are the
+        # documented setup; the coach can flip it from screen4 if the cameras
+        # are rigged side-by-side instead.
+        self.reverse_lanes_b = True
+
     def _load_models(self):
         self.whistle.start()
 
@@ -379,10 +392,25 @@ class ShuttleRunEngine(DualFeedEngine):
         h, w = frame_shape[:2]
         self.calib[side] = self._srt.Calibration(lane_xs, touch_line_y, w, h)
 
+        self._build_trackers(side, touch_line_y)
+
+    def _lane_number_for_column(self, side, column_idx0):
+        """Which lane number the idx-th column (left to right, as displayed)
+        belongs to. Reversing the NUMBERING is the correct fix here, not
+        mirroring the boundary x-coords: the columns are where the lanes
+        actually are on this camera's frame, only the labels are backwards."""
+        if side == "b" and self.reverse_lanes_b:
+            return self.NUM_LANES - column_idx0
+        return column_idx0 + 1
+
+    def _build_trackers(self, side, touch_line_y):
+        for old in self.trackers[side]:
+            old.close()  # each tracker owns a MediaPipe Pose instance
+        end_label = "A" if side == "a" else "B"
         trackers = []
-        for lane in range(1, self.NUM_LANES + 1):
-            x0, x1 = self.calib[side].lane_bounds(lane - 1)
-            end_label = "A" if side == "a" else "B"
+        for column_idx0 in range(self.NUM_LANES):
+            x0, x1 = self.calib[side].lane_bounds(column_idx0)
+            lane = self._lane_number_for_column(side, column_idx0)
             trackers.append(self._srt.LaneTracker(lane, end_label, x0, x1, touch_line_y, self.manager))
         self.trackers[side] = trackers
 
@@ -414,6 +442,15 @@ class ShuttleRunEngine(DualFeedEngine):
                       (0, 165, 255), 2)
             for x in self.calib[side].lane_boundaries_x:
                 cv2.line(frame, (x, 0), (x, frame.shape[0]), (255, 255, 0), 1)
+            # Lane numbers ON the feed — this is what makes the numbering
+            # checkable at a glance in the field: the same physical lane must
+            # carry the same L-number in both windows before a timed run.
+            snap = self.manager.snapshot()
+            for tracker in self.trackers[side]:
+                count, finished = snap.get(tracker.lane_number, (0, False))
+                cv2.putText(frame, f"L{tracker.lane_number}: {count}" + (" DONE" if finished else ""),
+                            (tracker.x0 + 5, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (0, 200, 0) if finished else (255, 255, 255), 2)
             if self.started:
                 for tracker in self.trackers[side]:
                     tracker.process(frame)
@@ -431,6 +468,7 @@ class ShuttleRunEngine(DualFeedEngine):
             "touches_required": self.touches_required,
             "calibrated_a": self.calib["a"] is not None,
             "calibrated_b": self.calib["b"] is not None,
+            "reverse_lanes_b": self.reverse_lanes_b,
             "lanes": {lane: {"touches": tc, "finished": fin} for lane, (tc, fin) in snap.items()},
         }
 
@@ -447,6 +485,14 @@ class ShuttleRunEngine(DualFeedEngine):
             self._calib_points[side] = []
             self.calib[side] = None
             return {"ok": True}
+        if name == "flip_lane_order_b":
+            # For a side-by-side camera rig, where End B is NOT reversed.
+            # Safe mid-session: only the labels change, and rebuilding End B's
+            # trackers re-reads the same columns under new lane numbers.
+            self.reverse_lanes_b = (not self.reverse_lanes_b) if value is None else bool(value)
+            if self.calib["b"] is not None:
+                self._build_trackers("b", self.calib["b"].touch_line_y)
+            return {"ok": True, "reverse_lanes_b": self.reverse_lanes_b}
         if name == "manual_start":
             self._on_whistle()
             return {"ok": True}
@@ -493,6 +539,13 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         self.lane_times = {i: None for i in range(1, self.num_lanes + 1)}
         self.start_t = None
         self.whistle_armed = True
+        # Lane identity here comes from ONE overhead camera, so there's no
+        # second view to disagree with — but the numbering is still purely
+        # screen-relative, and the mirrored feed put lane 1 on the opposite
+        # side of the track. Nothing can infer the right answer; the coach
+        # reads the L-numbers off the overhead feed and flips if they're
+        # backwards.
+        self.reverse_lanes = False
         self._finish_strip = None       # (x1, x2) set via calib_click, like calibrate_finish_strip()
         self._calib_points = []
         self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=30, detectShadows=False)
@@ -509,6 +562,12 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         self.start_t = time.time()
         self.whistle_armed = False
 
+    def _lane_for_column(self, column_idx0):
+        """Lane number for the idx-th overhead column, left to right as displayed."""
+        if self.reverse_lanes:
+            return self.num_lanes - column_idx0
+        return column_idx0 + 1
+
     def _process_pair(self, frame_a, frame_b):
         # frame_a = finish camera: motion crossing a calibrated vertical
         # strip = a finish event. frame_b = overhead camera: divide frame
@@ -524,16 +583,25 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         x1, x2 = self._finish_strip
         cv2.rectangle(frame_a, (x1, 0), (x2, frame_a.shape[0]), (0, 165, 255), 2)
 
+        # Label the overhead columns so lane identity is verifiable before a
+        # timed run instead of after the times come out attached to the wrong
+        # runners.
+        col_w = frame_b.shape[1] / self.num_lanes
+        for idx0 in range(self.num_lanes):
+            x = int(idx0 * col_w)
+            cv2.line(frame_b, (x, 0), (x, frame_b.shape[0]), (255, 255, 0), 1)
+            cv2.putText(frame_b, f"L{self._lane_for_column(idx0)}", (x + 5, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
         if self.start_t is not None:
             mask = self._bg_subtractor.apply(frame_a)
             strip_mask = mask[:, x1:x2]
             motion_px = int(np.count_nonzero(strip_mask))
             if motion_px > 400:  # tune to track lighting — a runner's body crossing the strip
                 # Identify which lane via the overhead camera's horizontal split
-                lane_w_px = frame_b.shape[1] / self.num_lanes
                 fg_b = self._bg_subtractor.apply(frame_b)
                 cols = fg_b.reshape(fg_b.shape[0], self.num_lanes, -1).sum(axis=(0, 2))
-                lane = int(np.argmax(cols)) + 1
+                lane = self._lane_for_column(int(np.argmax(cols)))
                 if self.lane_times.get(lane) is None:
                     self.lane_times[lane] = time.time() - self.start_t
 
@@ -545,6 +613,7 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
                      else ("waiting_whistle" if self.whistle_armed else "running"),
             "num_lanes": self.num_lanes,
             "lane_times": dict(self.lane_times),
+            "reverse_lanes": self.reverse_lanes,
         }
 
     def action(self, name, value=None):
@@ -561,6 +630,11 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
             self._calib_points = []
             self._finish_strip = None
             return {"ok": True}
+        if name == "flip_lane_order":
+            # Relabels the overhead columns when L1 reads as the wrong side of
+            # the track. Only affects times recorded from here on.
+            self.reverse_lanes = (not self.reverse_lanes) if value is None else bool(value)
+            return {"ok": True, "reverse_lanes": self.reverse_lanes}
         if name == "manual_start":
             self._on_whistle()
             return {"ok": True}

@@ -256,9 +256,18 @@ class Calibration:
         self.touch_line_y = touch_line_y
         self.frame_w = frame_w
         self.frame_h = frame_h
+        # True on the camera that sees the lanes right-to-left (End B, facing
+        # End A across the track). Both ends feed one StudentManager keyed by
+        # lane number, so without this End B's lane 1 is End A's lane 4.
+        self.reverse_lane_numbering = False
 
     def lane_bounds(self, lane_idx_0based: int) -> Tuple[int, int]:
         return self.lane_boundaries_x[lane_idx_0based], self.lane_boundaries_x[lane_idx_0based + 1]
+
+    def lane_number_for_column(self, column_idx_0based: int) -> int:
+        """Lane number for the idx-th column, left to right as displayed."""
+        n = len(self.lane_boundaries_x) - 1
+        return n - column_idx_0based if self.reverse_lane_numbering else column_idx_0based + 1
 
 
 import urllib.request
@@ -532,7 +541,8 @@ class CameraWorker(threading.Thread):
         for lane_idx0 in range(NUM_LANES):
             x0, x1 = calib.lane_bounds(lane_idx0)
             self.lane_trackers.append(
-                LaneTracker(lane_idx0 + 1, end_label, x0, x1, calib.touch_line_y, manager)
+                LaneTracker(calib.lane_number_for_column(lane_idx0), end_label,
+                            x0, x1, calib.touch_line_y, manager)
             )
 
     def run(self):
@@ -553,7 +563,7 @@ class CameraWorker(threading.Thread):
 
             snap = self.manager.snapshot()
             for lane_idx0 in range(NUM_LANES):
-                lane_num = lane_idx0 + 1
+                lane_num = self.calib.lane_number_for_column(lane_idx0)
                 x0, x1 = self.calib.lane_bounds(lane_idx0)
                 count, finished = snap[lane_num]
                 label = f"L{lane_num}: {count}"
@@ -726,11 +736,13 @@ def main():
         mirror_check = "n"
         print("[CONFIG] No terminal attached — defaulting End B mirror to 'n'. "
               "Pass --mirror-b y next time if End B's view is flipped left-right.")
-    if mirror_check == "y":
-        calib_b.lane_boundaries_x = list(reversed(
-            [calib_b.frame_w - x for x in calib_b.lane_boundaries_x]
-        ))
-        calib_b.lane_boundaries_x.sort()
+    # Reverse the lane NUMBERING, not the boundary coordinates. The previous
+    # version mirrored the x-values (frame_w - x, re-sorted), which is a no-op
+    # for a centred lane layout — [100,200,300,400,500] in a 600px frame maps
+    # to itself — and for an off-centre one it slides the crop windows onto
+    # positions where no lane is. The columns are already where the lanes are;
+    # only the labels are backwards.
+    calib_b.reverse_lane_numbering = (mirror_check == "y")
 
     cap_a.release()
     cap_b.release()

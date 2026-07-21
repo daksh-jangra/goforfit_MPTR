@@ -314,6 +314,7 @@
                         { id: 'manual_start', label: 'MANUAL START', action: 'manual_start', color: 'bg-sky-600' },
                         { id: 'calib_reset_a', label: 'RECALIB A',   action: 'calib_reset', value: {cam:'a'}, color: 'bg-orange-600' },
                         { id: 'calib_reset_b', label: 'RECALIB B',   action: 'calib_reset', value: {cam:'b'}, color: 'bg-orange-600' },
+                        { id: 'flip_lanes',   label: 'FLIP B LANES', action: 'flip_lane_order_b', color: 'bg-indigo-600' },
                         { id: 'reset',        label: 'RESET',       action: 'reset',       color: 'bg-rose-600' },
                     ],
                     showCalibOverlay(state) { return false; },
@@ -333,6 +334,12 @@
                             Object.entries(state.lanes || {}).forEach(([lane, l]) =>
                                 lines.push(`Lane ${lane}: ${l.touches} touches${l.finished ? ' — done' : ''}`));
                         }
+                        // Both feeds draw their own L-numbers — the coach checks
+                        // that one physical lane carries one number at both ends
+                        // before the whistle, and taps FLIP B LANES if not.
+                        lines.push(state.reverse_lanes_b
+                            ? 'End B lanes reversed (cameras facing each other)'
+                            : 'End B lanes straight (side-by-side rig)');
                         return lines;
                     },
                     // Multi-lane test: sync every lane that has finished so far,
@@ -351,6 +358,7 @@
                     buttons: [
                         { id: 'manual_start', label: 'MANUAL START', action: 'manual_start', color: 'bg-sky-600' },
                         { id: 'calib_reset',  label: 'RECALIBRATE',  action: 'calib_reset',  color: 'bg-orange-600' },
+                        { id: 'flip_lanes',   label: 'FLIP LANES',   action: 'flip_lane_order', color: 'bg-indigo-600' },
                         { id: 'reset',        label: 'RESET',        action: 'reset',        color: 'bg-rose-600' },
                     ],
                     showCalibOverlay(state) { return false; },
@@ -367,6 +375,10 @@
                             Object.entries(state.lane_times || {}).forEach(([lane, t]) =>
                                 lines.push(`Lane ${lane}: ${t !== null ? t.toFixed(2) + 's' : '—'}`));
                         }
+                        // Overhead feed is labelled L1..Ln left-to-right as
+                        // displayed; nothing can infer the real track order.
+                        lines.push(state.reverse_lanes ? 'Lanes numbered right-to-left'
+                                                       : 'Lanes numbered left-to-right');
                         return lines;
                     },
                     // Same multi-lane pattern as shuttle_run — sync every lane
