@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ test.title }} Configuration</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#f8fafc] text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm">
+        <div class="flex items-center space-x-2"><span class="text-xl font-bold text-blue-600">fitness<span class="text-green-500">365</span></span></div>
+        <a href="/results" class="text-sm font-semibold text-indigo-700 hover:text-orange-500 transition border border-indigo-200 rounded px-3 py-1 hover:border-orange-400">📊 Results</a>
+        <div class="flex items-center space-x-2 text-sm text-gray-600"><span>Hareram Singh</span></div>
+    </header>
+
+    <main class="flex-grow p-6 max-w-7xl mx-auto w-full space-y-6">
+        <div class="flex items-center space-x-3">
+            <a href="{{ url_for('screen2', category=test.category) }}" class="w-8 h-8 rounded-full border border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-50 transition">
+                <i class="fa-solid fa-arrow-left text-sm"></i>
+            </a>
+            <h1 class="text-lg font-bold text-indigo-950 tracking-wide">{{ test.title }}</h1>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-1.5">
+                <label class="block text-sm font-bold text-gray-900">Select Class</label>
+                <select id="class-select" onchange="updateStudents()" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
+                    <option value="">-- Select Class --</option>
+                    <option value="Class 1-D">Class 1-D</option>
+                    <option value="Class 4-A">Class 4-A</option>
+                </select>
+            </div>
+            <div class="space-y-1.5">
+                <label class="block text-sm font-bold text-gray-900">Select Student</label>
+                <select id="student-select" onchange="loadStudentMeta()" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
+                    <option value="">-- Select Student --</option>
+                </select>
+            </div>
+        </div>
+
+        <button class="border border-indigo-950 text-indigo-950 px-4 py-1.5 rounded text-sm font-medium hover:bg-gray-50 flex items-center space-x-2">
+            <i class="fa-solid fa-qrcode"></i> <span>Scan</span>
+        </button>
+
+        <div class="bg-amber-50 border border-amber-100 rounded p-4 text-xs space-y-1 text-gray-800 font-medium">
+            <div>Student Name: <span id="m-name">-</span> | Registration Number: <span id="m-reg">-</span></div>
+            <div>Class: <span id="m-class">-</span> | Roll No: <span id="m-roll">-</span></div>
+        </div>
+
+        <div class="bg-white border border-gray-200 rounded p-4 text-sm text-gray-700">
+            <div class="font-bold text-indigo-950 mb-1">{{ test.subtitle }}</div>
+            <p class="leading-6">{{ test.description }}</p>
+            <div class="mt-3 text-xs text-gray-500">{{ test.tip }}</div>
+        </div>
+
+        {% if test.params %}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {% for param in test.params %}
+            <div class="space-y-1.5">
+                <label for="{{ param.name }}" class="block text-sm font-bold text-gray-900">{{ param.label }}</label>
+                <div class="flex gap-2">
+                    <input id="{{ param.name }}" type="{{ param.type }}" min="{{ param.min }}" max="{{ param.max }}" placeholder="{{ param.placeholder }}" class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
+                    {% if param.camera %}
+                    <button type="button" id="test-btn-{{ param.name }}" onclick="testCamera('{{ param.name }}')"
+                            class="shrink-0 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 text-xs font-semibold px-3 rounded">
+                        Test
+                    </button>
+                    {% endif %}
+                </div>
+                {% if param.camera %}
+                <p id="test-status-{{ param.name }}" class="text-xs hidden"></p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if test.timed %}
+        <div class="space-y-4">
+            <h3 class="text-center font-bold text-indigo-950 text-base tracking-wide">{{ test.title }} Score</h3>
+            <div class="grid grid-cols-3 gap-2 max-w-2xl mx-auto text-center">
+                <div class="bg-gray-100 border border-gray-200 rounded p-3"><span class="block text-xs text-gray-400">min</span><input type="text" id="min" value="00" class="w-full bg-transparent text-center text-2xl font-semibold"></div>
+                <div class="bg-gray-100 border border-gray-200 rounded p-3"><span class="block text-xs text-gray-400">sec</span><input type="text" id="sec" value="00" class="w-full bg-transparent text-center text-2xl font-semibold"></div>
+                <div class="bg-gray-100 border border-gray-200 rounded p-3"><span class="block text-xs text-gray-400">msec</span><input type="text" id="msec" value="00" class="w-full bg-transparent text-center text-2xl font-semibold"></div>
+            </div>
+
+            <div class="space-y-2.5 pt-2">
+                <button id="timer-btn" onclick="toggleTimer()" class="w-full bg-emerald-600 text-white py-2.5 rounded text-sm font-medium">Start Timer</button>
+                <button onclick="goToAI()" class="w-full bg-amber-500 text-white py-2.5 rounded text-sm font-medium">Switch to AI</button>
+            </div>
+        </div>
+
+        <div id="pending-panel" class="hidden bg-indigo-50 border border-indigo-200 rounded p-4 text-sm space-y-3">
+            <div class="font-bold text-indigo-950">AI Result — Review &amp; Save</div>
+            <div id="pending-summary" class="text-gray-800"></div>
+
+            <!-- Manual override -->
+            <div class="bg-white border border-amber-300 rounded p-3 space-y-1.5">
+                <div class="flex items-center gap-2 text-xs font-semibold text-amber-700">
+                    <i class="fa-solid fa-pencil"></i>
+                    Override value if AI reading is incorrect (or enter manually)
+                </div>
+                <div class="flex gap-2">
+                    <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
+                           placeholder="Enter correct value (cm)"
+                           class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm text-gray-800 focus:outline-none focus:border-amber-500">
+                    <button onclick="applyOverride()"
+                            class="bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold px-4 py-1.5 rounded whitespace-nowrap">
+                        Apply
+                    </button>
+                </div>
+                <p id="override-msg" class="text-xs text-amber-700 hidden"></p>
+            </div>
+
+            <button id="save-btn" onclick="saveResult()" class="w-full bg-indigo-700 text-white py-2.5 rounded text-sm font-medium hover:bg-indigo-800">Save to Database</button>
+            <p id="save-message" class="text-center text-xs font-semibold hidden"></p>
+        </div>
+        {% else %}
+        <div class="space-y-3">
+            <h3 class="text-center font-bold text-indigo-950 text-base tracking-wide">{{ test.title }} Score</h3>
+            <div id="pending-summary" class="text-center text-xs text-gray-500">No AI reading staged. Enter a value manually below, or use Switch to AI.</div>
+
+            <div class="max-w-md mx-auto w-full">
+                <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
+                       placeholder="Enter value{{ ' (' + test.unit + ')' if test.unit else '' }}"
+                       class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-white focus:outline-none focus:border-indigo-500">
+                <p id="override-msg" class="text-xs text-amber-700 mt-1.5 text-center hidden"></p>
+            </div>
+
+            <div class="space-y-2.5 pt-2 max-w-md mx-auto">
+                <button onclick="goToAI()" class="w-full bg-amber-500 text-white py-2.5 rounded text-sm font-medium">Switch to AI</button>
+                <button id="save-btn" onclick="saveResult()" class="w-full bg-indigo-700 text-white py-2.5 rounded text-sm font-medium hover:bg-indigo-800">Save to Database</button>
+            </div>
+            <p id="save-message" class="text-center text-xs font-semibold hidden"></p>
+        </div>
+        <div id="pending-panel" class="hidden"></div>
+        {% endif %}
+
+        <div id="saved-results" class="hidden bg-white border border-gray-200 rounded p-4 text-sm">
+            <div class="font-bold text-indigo-950 mb-2">Saved Results — {{ test.title }}</div>
+            <div id="saved-results-empty" class="text-xs text-gray-500 hidden">No saved results yet for this student.</div>
+            <table id="saved-results-table" class="w-full text-xs text-left hidden">
+                <thead>
+                    <tr class="text-gray-500 uppercase border-b border-gray-200">
+                        <th class="py-1.5 pr-3">Saved At</th>
+                        <th class="py-1.5 pr-3">Result</th>
+                    </tr>
+                </thead>
+                <tbody id="saved-results-body"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <script>
+        const testId = {{ test.id|tojson }};
+        const TEST_TIMED = {{ 'true' if test.timed else 'false' }};
+        const mockDb = {
+            "Class 1-D": [{ id: "9105", name: "Ayaan Yadav", roll: "5", reg: "REG-2026-001" }],
+            "Class 4-A": [{ id: "4402", name: "Meera Sharma", roll: "12", reg: "REG-2026-112" }]
+        };
+        let tInterval = null, startTime = null;
+
+        async function testCamera(paramName) {
+            const input  = document.getElementById(paramName);
+            const btn    = document.getElementById('test-btn-' + paramName);
+            const status = document.getElementById('test-status-' + paramName);
+            const url    = input.value.trim();
+
+            if (!url) {
+                status.innerText = 'Enter a URL first.';
+                status.className = 'text-xs text-amber-700';
+                status.classList.remove('hidden');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = '…';
+            status.innerText = 'Connecting…';
+            status.className = 'text-xs text-gray-500';
+            status.classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/test-camera', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    status.innerText = `✅ Connected (${data.width}×${data.height})`;
+                    status.className = 'text-xs text-emerald-600 font-semibold';
+                } else {
+                    status.innerText = `❌ ${data.error || 'Could not connect'}`;
+                    status.className = 'text-xs text-rose-600 font-semibold';
+                }
+            } catch (e) {
+                status.innerText = '❌ Request failed — is the server running?';
+                status.className = 'text-xs text-rose-600 font-semibold';
+            }
+
+            btn.disabled = false;
+            btn.innerText = 'Test';
+        }
+
+        function updateStudents() {
+            const cls = document.getElementById('class-select').value;
+            const res = document.getElementById('student-select');
+            res.innerHTML = '<option value="">-- Select Student --</option>';
+            if(cls && mockDb[cls]) mockDb[cls].forEach(s => res.add(new Option(s.name, s.id)));
+        }
+
+        function loadStudentMeta() {
+            const cls = document.getElementById('class-select').value;
+            const id = document.getElementById('student-select').value;
+            const student = mockDb[cls]?.find(s => s.id === id);
+            document.getElementById('m-name').innerText = student ? student.name : '-';
+            document.getElementById('m-reg').innerText = student ? student.reg : '-';
+            document.getElementById('m-class').innerText = student ? cls : '-';
+            document.getElementById('m-roll').innerText = student ? student.roll : '-';
+            loadSavedResults();
+        }
+
+        function toggleTimer() {
+            const btn = document.getElementById('timer-btn');
+            if(tInterval) {
+                clearInterval(tInterval); tInterval = null;
+                btn.innerText = "Start Timer"; btn.className = "w-full bg-emerald-600 text-white py-2.5 rounded text-sm font-medium";
+            } else {
+                startTime = Date.now();
+                btn.innerText = "Stop Timer"; btn.className = "w-full bg-rose-600 text-white py-2.5 rounded text-sm font-medium";
+                tInterval = setInterval(() => {
+                    let diff = Date.now() - startTime;
+                    document.getElementById('min').value = Math.floor(diff/60000).toString().padStart(2,'0');
+                    document.getElementById('sec').value = Math.floor((diff%60000)/1000).toString().padStart(2,'0');
+                    document.getElementById('msec').value = Math.floor((diff%1000)/10).toString().padStart(2,'0');
+                }, 40);
+            }
+        }
+
+        // Maps each test to the primary numeric field shown in the review panel.
+        const RESULT_FIELD_MAP = {
+            shuttle_run: 'time_sec',
+            dash_50m:    'time_sec',
+            curl_up:     'reps',
+            wall_toss:   'catches',
+            sit_reach:   'reach_cm',
+            bmi:         'height_cm',
+            wingspan:    'wingspan_cm',
+            vertical_jump: 'jump_cm',
+            run_600m:    'time_sec',
+        };
+        const RESULT_UNIT_MAP = {
+            shuttle_run: 's',
+            dash_50m:    's',
+            curl_up:     'reps',
+            wall_toss:   'catches',
+            sit_reach:   'cm',
+            bmi:         'cm',
+            wingspan:    'cm',
+            vertical_jump: 'cm',
+            run_600m:    's',
+        };
+
+        let pendingResult = null;
+
+        // ---- Laravel popup sync (Bhawani) ----------------------------------
+        // This app is opened as a popup window from the Laravel dashboard at
+        // nep.goforfit.in. Once a result is confirmed saved to our own DB,
+        // we also hand the score back to that parent window via postMessage
+        // so Laravel can sync it immediately, then close this popup.
+        const LARAVEL_PARENT_ORIGIN = "https://nep.goforfit.in";
+        // Maps our internal testId -> the exerciseType string + score field
+        // name Laravel expects. Only "wingspan" has been confirmed against
+        // Bhawani's sample code — confirm the rest with him before relying
+        // on them for other tests.
+        const EXERCISE_SYNC_MAP = {
+            bmi:         { exerciseType: 'BMI',        scoreKey: 'bmiScore' },
+            wingspan:    { exerciseType: 'Wingspan',   scoreKey: 'wingspanScore' },   // confirmed
+            curl_up:     { exerciseType: 'CurlUp',     scoreKey: 'curlUpScore' },
+            wall_toss:   { exerciseType: 'WallToss',   scoreKey: 'wallTossScore' },
+            shuttle_run: { exerciseType: 'ShuttleRun', scoreKey: 'shuttleRunScore' },
+            dash_50m:    { exerciseType: 'Dash50m',    scoreKey: 'dash50mScore' },
+            sit_reach:   { exerciseType: 'SitReach',   scoreKey: 'sitReachScore' },
+            vertical_jump: { exerciseType: 'VerticalJump', scoreKey: 'verticalJumpScore' },
+            run_600m:    { exerciseType: 'Run600m',    scoreKey: 'run600mScore' },
+        };
+
+        function syncResultToLaravel(scoreValue) {
+            if (!window.opener) return; // opened directly (e.g. dev/testing) — nothing to sync to
+            if (scoreValue === undefined || scoreValue === null || isNaN(scoreValue)) return;
+            const map = EXERCISE_SYNC_MAP[testId] || { exerciseType: testId, scoreKey: 'score' };
+            window.opener.postMessage({
+                type: "AI_SYNC_DATA",
+                exerciseType: map.exerciseType,
+                [map.scoreKey]: scoreValue
+            }, LARAVEL_PARENT_ORIGIN);
+            showSaveMessage('Result saved — syncing with Laravel...', true);
+            setTimeout(() => window.close(), 800); // brief pause so the message above is visible
+        }
+
+        async function loadPendingResult() {
+            const panel = document.getElementById('pending-panel');
+            try {
+                const res = await fetch(`/api/pending/${testId}`);
+                const data = await res.json();
+                if (!data.ok || !data.pending) {
+                    // No server-staged result — but still show the panel so the
+                    // user can enter a value manually via the override input.
+                    if (TEST_TIMED && !pendingResult) {
+                        // Show panel with empty summary so override is accessible
+                        panel.classList.remove('hidden');
+                        document.getElementById('pending-summary').innerHTML =
+                            '<span class="text-gray-400 text-xs">No AI reading staged. Enter value manually below.</span>';
+                    }
+                    return;
+                }
+                pendingResult = data.pending;
+                renderPendingResult();
+            } catch (e) {
+                console.warn('Could not load pending result:', e);
+            }
+        }
+
+        function renderPendingResult() {
+            const panel = document.getElementById('pending-panel');
+            if (!pendingResult) { if (TEST_TIMED) panel.classList.add('hidden'); return; }
+
+            const field = RESULT_FIELD_MAP[testId];
+            const unit = RESULT_UNIT_MAP[testId] || '';
+
+            if (!TEST_TIMED) {
+                // Single-input layout: drop the AI value straight into the
+                // editable box so the user can review or correct it inline.
+                const val = pendingResult[field];
+                if (val !== undefined && val !== null) {
+                    document.getElementById('override-input').value = val;
+                }
+                document.getElementById('pending-summary').innerHTML =
+                    val !== undefined && val !== null
+                        ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}</span> — edit above if it looks wrong.`
+                        : '<span class="text-gray-400">No AI reading staged. Enter a value manually below, or use Switch to AI.</span>';
+                return;
+            }
+
+            const summary = document.getElementById('pending-summary');
+            let html = '';
+
+            if (Array.isArray(pendingResult.laps)) {
+                html = pendingResult.laps.map(l =>
+                    `<div>Lane ${l.lane}: <span class="font-bold text-indigo-950">${l.time_sec} s</span></div>`
+                ).join('');
+            } else {
+                const val = pendingResult[field];
+                html = `<div>Result: <span class="font-bold text-indigo-950">${val !== undefined ? val : '-'} ${unit}</span></div>`;
+                if (pendingResult.rating) {
+                    html += `<div class="text-xs text-gray-500 mt-1">Rating: ${pendingResult.rating}</div>`;
+                }
+            }
+            summary.innerHTML = html;
+            panel.classList.remove('hidden');
+        }
+
+        function applyOverride() {
+            const input = document.getElementById('override-input');
+            const msg   = document.getElementById('override-msg');
+            const v = parseFloat(input.value);
+            if (!v || v <= 0) {
+                msg.innerText = 'Please enter a valid positive number.';
+                msg.classList.remove('hidden');
+                return;
+            }
+            const field = RESULT_FIELD_MAP[testId] || 'wingspan_cm';
+            // Create a new pendingResult if there isn't one (pure manual entry)
+            if (!pendingResult) {
+                const sid = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
+                pendingResult = { session_id: sid };
+            }
+            pendingResult[field] = v;
+            input.value = '';
+            msg.innerText = 'Value set to ' + v + ' cm. Click Save to Database to confirm.';
+            msg.classList.remove('hidden');
+            renderPendingResult();
+        }
+
+        async function saveResult() {
+            if (!TEST_TIMED) {
+                // Single-input layout: the box itself is the value to save —
+                // no separate "Apply" step needed.
+                const input = document.getElementById('override-input');
+                const v = parseFloat(input.value);
+                if (!v || v <= 0) {
+                    showSaveMessage('Enter a value before saving.', false);
+                    return;
+                }
+                if (!pendingResult) {
+                    const sid = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
+                    pendingResult = { session_id: sid };
+                }
+                const field = RESULT_FIELD_MAP[testId] || 'wingspan_cm';
+                pendingResult[field] = v;
+            }
+
+            if (!pendingResult) {
+                showSaveMessage('Nothing to save — enter a value using the override box above.', false);
+                return;
+            }
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+
+            // Resolve session_id: prefer what's in pendingResult, fall back to URL param
+            const resolvedSid = pendingResult.session_id
+                || (urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null);
+            if (!resolvedSid) {
+                showSaveMessage('No student session. Go back and select a student first.', false);
+                btn.disabled = false;
+                btn.innerText = 'Save to Database';
+                return;
+            }
+            const payload = Object.assign({}, pendingResult, { session_id: resolvedSid });
+
+            try {
+                let ok = true;
+                if (Array.isArray(payload.laps)) {
+                    for (const lap of payload.laps) {
+                        const res = await fetch('/api/save/' + testId, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(Object.assign({ session_id: resolvedSid }, lap))
+                        });
+                        const data = await res.json();
+                        if (!data.ok) ok = false;
+                    }
+                } else {
+                    const res = await fetch('/api/save/' + testId, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    ok = data.ok;
+                }
+
+                if (ok) {
+                    await fetch(`/api/pending/${testId}/clear`, { method: 'POST' });
+                    showSaveMessage('Result saved.', true);
+                    pendingResult = null;
+                    if (TEST_TIMED) {
+                        document.getElementById('pending-panel').classList.add('hidden');
+                    } else {
+                        document.getElementById('override-input').value = '';
+                        document.getElementById('pending-summary').innerHTML =
+                            '<span class="text-gray-400">No AI reading staged. Enter a value manually below, or use Switch to AI.</span>';
+                    }
+                    loadSavedResults();
+
+                    // Hand the confirmed score back to the Laravel parent window (if any) and close.
+                    const syncValue = Array.isArray(payload.laps)
+                        ? payload.laps.reduce((sum, l) => sum + l.time_sec, 0) / payload.laps.length
+                        : payload[RESULT_FIELD_MAP[testId]];
+                    syncResultToLaravel(syncValue);
+                } else {
+                    showSaveMessage('Could not save result.', false);
+                }
+            } catch (e) {
+                showSaveMessage('Could not save result.', false);
+            }
+            btn.disabled = false;
+            btn.innerText = '💾 Save Result';
+        }
+
+        function showSaveMessage(text, ok) {
+            const el = document.getElementById('save-message');
+            el.innerText = text;
+            el.className = `text-center text-xs font-semibold ${ok ? 'text-emerald-600' : 'text-rose-600'}`;
+        }
+
+        async function loadSavedResults() {
+            const panel = document.getElementById('saved-results');
+            const empty = document.getElementById('saved-results-empty');
+            const table = document.getElementById('saved-results-table');
+            const tbody = document.getElementById('saved-results-body');
+
+            try {
+                const res = await fetch(`/api/results/${testId}`);
+                const data = await res.json();
+                if (!data.ok) return;
+
+                const field = RESULT_FIELD_MAP[testId] || 'time_sec';
+                const rows = data.results || [];
+
+                panel.classList.remove('hidden');
+                tbody.innerHTML = '';
+
+                if (rows.length === 0) {
+                    empty.classList.remove('hidden');
+                    table.classList.add('hidden');
+                    return;
+                }
+
+                empty.classList.add('hidden');
+                table.classList.remove('hidden');
+                rows.slice().reverse().forEach(r => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'border-b border-gray-100';
+                    const ts = r.recorded_at || r.created_at || r.timestamp || '-';
+                    const val = (r[field] !== undefined && r[field] !== null) ? r[field] : '-';
+                    tr.innerHTML = `<td class="py-1.5 pr-3 text-gray-500">${ts}</td><td class="py-1.5 pr-3 font-semibold text-indigo-950">${val}</td>`;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                console.warn('Could not load saved results:', e);
+            }
+        }
+        async function goToAI() {
+            const id = document.getElementById('student-select').value;
+            const cls = document.getElementById('class-select').value;
+            if(!id) return alert('Select a student first.');
+            const student = mockDb[cls].find(s => s.id === id);
+
+            {% for param in test.params %}
+            const {{ param.name }} = document.getElementById('{{ param.name }}').value.trim();
+            if (!{{ param.name }}) return alert('Enter {{ param.label }}.');
+            {% endfor %}
+
+            // Auto-create a session for this student
+            const btn = document.querySelector('button[onclick="goToAI()"]');
+            btn.disabled = true;
+            btn.innerText = 'Starting…';
+            let sessionId = null;
+            try {
+                const res = await fetch('/api/session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        student_name: student.name,
+                        grade: cls,
+                        notes: `Roll: ${student.roll} | Reg: ${student.reg}`
+                    })
+                });
+                const data = await res.json();
+                if (data.ok) sessionId = data.session_id;
+            } catch(e) {
+                console.warn('Could not create session:', e);
+            }
+            btn.disabled = false;
+            btn.innerText = 'Switch to AI';
+
+            const params = new URLSearchParams({
+                test: testId,
+                id: student.id,
+                name: student.name,
+                roll: student.roll,
+                class_info: cls,
+                trainerId: '995',
+                traiName: 'Hareram Singh',
+                exerdseName: {{ test.title|tojson }}
+            });
+            if (sessionId) params.set('session_id', sessionId);
+            {% for param in test.params %}
+            params.set('{{ param.name }}', {{ param.name }});
+            {% endfor %}
+            window.location.href = `/screen4?${params.toString()}`;
+        }
+
+        const urlP = new URLSearchParams(window.location.search);
+        if (TEST_TIMED && urlP.has('returnMin')) {
+            document.getElementById('min').value = urlP.get('returnMin');
+            document.getElementById('sec').value = urlP.get('returnSec');
+            document.getElementById('msec').value = urlP.get('returnMsec');
+        }
+        // Load immediately, then retry after 1 s so we catch results that
+        // the server stages right as the engine stops (tiny race window).
+        loadPendingResult();
+        setTimeout(loadPendingResult, 1000);
+        loadSavedResults();
+    </script>
+</body>
+</html>

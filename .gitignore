@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# Editor/backup litter
+*.bak
+
+# Local data — the SQLite DB holds real student names/measurements
+goforfit.db
+
+# Generated outputs
+*_export.csv
+tests/wingspan_log.csv
+
+# MediaPipe models (~23 MB) — auto-downloaded on first run by
+# _ensure_pose_model() / wingspan2.py's model bootstrap
+tests/*.task
