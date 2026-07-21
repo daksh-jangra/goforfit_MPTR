@@ -626,7 +626,7 @@ class WallTossEngine(BaseWebEngine):
         self.last_save = None
 
     def _load_models(self):
-        self.counter = wtt_mod.WallTossCounter()
+        self.counter = wtt_mod.WallTossCounter(mirror=self.mirror_preview)
 
     def _release_models(self):
         if self.counter is not None:

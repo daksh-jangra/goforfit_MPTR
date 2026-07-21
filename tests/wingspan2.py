@@ -155,7 +155,7 @@ def _angle_ok(a):
     return a is not None and ANGLE_MIN <= a <= ANGLE_MAX
 
 
-def draw_arm_angles(frame, p_result, fw, fh):
+def draw_arm_angles(frame, p_result, fw, fh, mirrored=True):
     """
     Compute and render the angle each arm makes with the torso.
 
@@ -198,9 +198,12 @@ def draw_arm_angles(frame, p_result, fw, fh):
 
         # ── 1. On-body arc + label at each shoulder ──────────────────────
         radius = 40
+        # Badge letters follow the SUBJECT's anatomy, not the landmark index:
+        # on a mirrored frame index 11 is their right shoulder.
+        l_badge, r_badge = ("R", "L") if mirrored else ("L", "R")
         sides = [
-            ("L", l_shoulder, l_hip, l_wrist, l_ang, BLUE),
-            ("R", r_shoulder, r_hip, r_wrist, r_ang, ORANGE),
+            (l_badge, l_shoulder, l_hip, l_wrist, l_ang, BLUE),
+            (r_badge, r_shoulder, r_hip, r_wrist, r_ang, ORANGE),
         ]
         for side_label, shoulder, hip, wrist, angle, col in sides:
             if angle is None or shoulder is None:
@@ -258,14 +261,17 @@ def draw_arm_angles(frame, p_result, fw, fh):
 
     # left arm row
     l_col = GREEN if _angle_ok(l_ang) else (RED if l_ang is not None else (120,120,120))
-    l_str = f"Left :  {l_ang:.0f}\u00b0" if l_ang is not None else "Left :  --"
+    # Mirrored frame => MediaPipe's "left" landmarks are the subject's RIGHT
+    # arm, so the captions swap. See camera.anatomical_side.
+    l_lbl, r_lbl = ("Right", "Left ") if mirrored else ("Left ", "Right")
+    l_str = f"{l_lbl}:  {l_ang:.0f}\u00b0" if l_ang is not None else f"{l_lbl}:  --"
     cv2.putText(frame, l_str,
                 (px0 + 8, py0 + 54),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.80, l_col, 2, cv2.LINE_AA)
 
     # right arm row
     r_col = GREEN if _angle_ok(r_ang) else (RED if r_ang is not None else (120,120,120))
-    r_str = f"Right:  {r_ang:.0f}\u00b0" if r_ang is not None else "Right:  --"
+    r_str = f"{r_lbl}:  {r_ang:.0f}\u00b0" if r_ang is not None else f"{r_lbl}:  --"
     cv2.putText(frame, r_str,
                 (px0 + 8, py0 + 92),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.80, r_col, 2, cv2.LINE_AA)

@@ -422,7 +422,8 @@ class WingspanEngine(StallWatchdogMixin):
 
                 # ── all heavy work (drawing, encoding) outside the lock ──
                 if mode == "MEASURE":
-                    l_ang, r_ang = ws.draw_arm_angles(frame, p_result, fw, fh)
+                    l_ang, r_ang = ws.draw_arm_angles(frame, p_result, fw, fh,
+                                                      mirrored=self.mirror_preview)
                     arms_ok = ws._angle_ok(l_ang) and ws._angle_ok(r_ang)
                     result_cm = ws.pixels_to_cm(span_px, calibration) if (span_px and calibration and arms_ok) else None
 

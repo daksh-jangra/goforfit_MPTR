@@ -30,6 +30,7 @@
 
 import cv2
 import mp_tasks  # Tasks-API detector/drawing helpers (see mp_tasks.py)
+import camera   # anatomical_side / mirror helpers
 import numpy as np
 from collections import deque
 import time
@@ -123,7 +124,11 @@ class WallTossCounter:
               "right_holding", "right_tossed",
               "left_holding",  "left_tossed")
 
-    def __init__(self):
+    def __init__(self, mirror=True):
+        # True when the frame is selfie-flipped before inference, which
+        # inverts MediaPipe's handedness — see camera.anatomical_side.
+        self.mirror_preview = mirror
+
         # ── MediaPipe Hands (Tasks API) ───────────────────────────────────
         # solutions.Hands was removed in mediapipe 0.10.30. HandLandmarker in
         # VIDEO mode is the direct equivalent — same cross-frame tracking,
@@ -255,7 +260,10 @@ class WallTossCounter:
         if res.hand_landmarks and res.handedness:
             h, w = shape[:2]
             for lms, side in zip(res.hand_landmarks, res.handedness):
-                label = side[0].category_name          # 'Left' or 'Right'
+                # The frame was mirrored before inference, so MediaPipe's
+                # label is the opposite hand from the student's own.
+                label = camera.anatomical_side(
+                    side[0].category_name, self.mirror_preview)
                 # Palm centre = midpoint of WRIST (0) and MIDDLE MCP (9)
                 wr, mc = lms[0], lms[9]
                 cx = int((wr.x + mc.x) / 2 * w)

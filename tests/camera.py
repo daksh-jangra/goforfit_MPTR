@@ -58,6 +58,26 @@ def mirror(frame, enabled=True):
     return cv2.flip(frame, 1) if enabled else frame
 
 
+_OTHER_SIDE = {"Left": "Right", "Right": "Left"}
+
+
+def anatomical_side(label, mirrored=True):
+    """Correct a MediaPipe Left/Right label for a mirrored frame.
+
+    MediaPipe labels what it SEES. The engines flip before inference — they
+    must, so landmarks, overlays and calibration clicks share the displayed
+    coordinate space — but that hands the model a mirror-image of the person.
+    It then labels the subject's real RIGHT arm as "Left", because in a
+    mirrored picture that is what a left arm looks like.
+
+    The measurements themselves are unaffected: wingspan is a span between
+    two tips, its gate wants BOTH arms at 90 degrees, and wall_toss counts
+    alternation — all symmetric. What breaks is what the screen TELLS the
+    student, which is the opposite of the arm they should move.
+    """
+    return _OTHER_SIDE.get(label, label) if mirrored else label
+
+
 def open_capture(source, width=None, height=None, fps=None, buffersize=1):
     """Open a capture, or raise with the source named.
 

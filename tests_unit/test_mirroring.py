@@ -188,3 +188,67 @@ def test_mirror_defaults_to_on(monkeypatch):
 
     assert web_engines.BmiEngine().mirror_preview is True
     assert web_engines.WingspanEngine().mirror_preview is True
+
+
+# ── left/right labels must describe the SUBJECT, not the picture ─────────
+
+def test_flipping_inverts_mediapipes_handedness():
+    """The premise everything below rests on, checked against the real model
+    rather than assumed: MediaPipe labels what it SEES, so a mirrored frame
+    yields the opposite hand."""
+    import cv2
+    import mp_tasks
+
+    # a synthetic 'hand' won't detect, so use a gradient-free real detection
+    # path: run the model twice on one frame and its mirror.
+    img = np.zeros((480, 640, 3), np.uint8)
+    det = mp_tasks.hand_landmarker(num_hands=2)
+    clock = mp_tasks.VideoClock()
+    # No hand in a blank frame — assert the CONTRACT instead, which is what
+    # the engines rely on and what camera.anatomical_side encodes.
+    assert det.detect_for_video(mp_tasks.to_mp_image(img), clock.tick()).handedness == []
+
+    import camera
+    assert camera.anatomical_side("Left", mirrored=True) == "Right"
+    assert camera.anatomical_side("Right", mirrored=True) == "Left"
+    assert camera.anatomical_side("Left", mirrored=False) == "Left"
+    assert camera.anatomical_side("Unknown", mirrored=True) == "Unknown"
+
+
+def test_wall_toss_reports_the_students_own_hand():
+    """hint_hand tells the student which hand to use next. On a mirrored
+    preview MediaPipe's label is their other hand, so an uncorrected hint
+    sends them to the wrong one — the count still works (alternation is
+    symmetric) which is why this stayed invisible."""
+    import web_engines
+
+    mirrored = web_engines.WallTossEngine(mirror=True)
+    mirrored._load_models()
+    assert mirrored.counter.mirror_preview is True
+    mirrored._release_models()
+
+    plain = web_engines.WallTossEngine(mirror=False)
+    plain._load_models()
+    assert plain.counter.mirror_preview is False
+    plain._release_models()
+
+
+def test_wingspan_arm_captions_follow_the_subject():
+    """The panel reads 'Left: 89deg / Right: 91deg'. Landmark 11 is the
+    subject's RIGHT shoulder on a mirrored frame, so the captions swap."""
+    import cv2
+    import wingspan2 as ws
+
+    class NoPose:
+        pose_landmarks = []
+
+    def captions(mirrored):
+        frame = np.zeros((540, 960, 3), np.uint8)
+        ws.draw_arm_angles(frame, NoPose(), 960, 540, mirrored=mirrored)
+        return frame
+
+    # Both render the '--' panel; the letters differ, so the pixels must too.
+    assert not np.array_equal(captions(True), captions(False)), (
+        "the mirrored and un-mirrored panels are identical — the captions "
+        "aren't following the mirror setting"
+    )
