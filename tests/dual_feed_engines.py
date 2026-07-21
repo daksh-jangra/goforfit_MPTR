@@ -82,7 +82,8 @@ class DualFeedEngine:
         self.on_stage = on_stage
         self.params = kwargs  # touches / lanes / lane_width / etc, per subclass
 
-        self._lock = threading.Lock()
+        # RLock so _safe_stage may lock its _error write regardless of caller context.
+        self._lock = threading.RLock()
         self._jpeg_a = None
         self._jpeg_b = None
         self._running = False
@@ -131,7 +132,18 @@ class DualFeedEngine:
         for cap in caps:
             _release_capture(cap)
 
+    def maybe_finish(self):
+        """Stage whatever result is available so far. Subclasses override;
+        called automatically by stop() so the HTTP layer doesn't have to."""
+        pass
+
     def stop(self):
+        # Stage whatever's finished before shutdown — never let it block the stop.
+        try:
+            self.maybe_finish()
+        except Exception:
+            pass
+
         # cap_a/cap_b must stay set until the loop thread is really gone —
         # _run_loop reads self.cap_a.read()/self.cap_b.read() every iteration.
         self._running = False
@@ -171,9 +183,9 @@ class DualFeedEngine:
     def get_state(self):
         with self._lock:
             state = self._state_locked()
-        state["running"] = self._running
-        if self._error:
-            state["error"] = self._error
+            state["running"] = self._running
+            if self._error:
+                state["error"] = self._error
         return state
 
     # ── hooks subclasses override ────────────────────────────────────
@@ -209,7 +221,8 @@ class DualFeedEngine:
             try:
                 self.on_stage(*args)
             except Exception as exc:
-                self._error = f"Stage failed: {exc}"
+                with self._lock:
+                    self._error = f"Stage failed: {exc}"
 
     def _run_loop(self):
         try:

@@ -468,20 +468,6 @@ class GoForFitDB:
             cur = con.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             return cur.rowcount > 0
 
-    def export_csv(self, table: str, out_path: str = None) -> str:
-        """Export a table to CSV. Returns the file path written."""
-        import csv
-        rows = self.get_all(table)
-        if not rows:
-            return None
-        out_path = out_path or str(Path(__file__).parent / f"{table}_export.csv")
-        with open(out_path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=rows[0].keys())
-            w.writeheader()
-            w.writerows(rows)
-        return out_path
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level singleton (import and use directly)
 # ─────────────────────────────────────────────────────────────────────────────

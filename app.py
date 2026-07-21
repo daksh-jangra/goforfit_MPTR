@@ -872,6 +872,7 @@ def _dispatch_launch(test_id: str, body: dict):
             _pending.pop(test_id, None)  # clear any stale unsaved result from a previous run
         return {"ok": True, "pid": proc.pid}
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
@@ -890,6 +891,7 @@ def _launch_wingspan(body: dict):
         engine = WingspanEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -912,6 +914,7 @@ def _launch_bmi(body: dict):
         engine = BmiEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -932,6 +935,7 @@ def _launch_curl_up(body: dict):
         engine = CurlUpEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -955,6 +959,7 @@ def _launch_wall_toss(body: dict):
         engine = WallTossEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -985,6 +990,7 @@ def _launch_sit_reach(body: dict):
         engine = SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -1014,6 +1020,7 @@ def _launch_vertical_jump(body: dict):
         engine = VerticalJumpEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -1024,9 +1031,6 @@ def _launch_vertical_jump(body: dict):
 
 def _launch_shuttle_run(body: dict):
     global _shuttle_engine
-    if _shuttle_engine is not None and _shuttle_engine.is_running():
-        _shuttle_engine.stop()
-
     session_id = body.get("session_id")
     cam_a = body.get("cam_a_url")
     cam_b = body.get("cam_b_url")
@@ -1042,6 +1046,7 @@ def _launch_shuttle_run(body: dict):
         engine = ShuttleRunEngine(cam_a, cam_b, touches=touches, session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -1052,9 +1057,6 @@ def _launch_shuttle_run(body: dict):
 
 def _launch_dash_50m(body: dict):
     global _dash50m_engine
-    if _dash50m_engine is not None and _dash50m_engine.is_running():
-        _dash50m_engine.stop()
-
     session_id = body.get("session_id")
     cam_a = body.get("finish_cam_url")
     cam_b = body.get("overhead_cam_url")
@@ -1072,6 +1074,7 @@ def _launch_dash_50m(body: dict):
                             session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -1082,9 +1085,6 @@ def _launch_dash_50m(body: dict):
 
 def _launch_run_600m(body: dict):
     global _run600m_engine
-    if _run600m_engine is not None and _run600m_engine.is_running():
-        _run600m_engine.stop()
-
     session_id = body.get("session_id")
     cam_a = body.get("camera_url") or "0"
     lane_colors = body.get("lane_colors") or []
@@ -1103,6 +1103,7 @@ def _launch_run_600m(body: dict):
                             session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
+        _traceback.print_exc()  # str(exc) alone hides the real failure site
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
@@ -1140,79 +1141,25 @@ def status_all():
 
 @app.post("/api/stop/{test_id}")
 def stop(test_id: str):
-    # Lock discipline: engine refs and _pending check-then-act run under
-    # _state_lock; engine.get_state()/stop() run OUTSIDE it (they take the
-    # engine's own lock, which worker threads hold while staging — see the
-    # deadlock rule at _state_lock's definition).
-    if test_id == "wingspan":
-        with _state_lock:
-            eng = _wingspan_engine
-        if eng is not None:
-            # Auto-stage the best available reading before stopping,
-            # so screen3 always has something to review even if SAVE READING was never tapped.
-            state = eng.get_state()
-            best_cm = None
-            if state.get("snap_phase") == "DONE" and state.get("snap_final_cm"):
-                best_cm = state["snap_final_cm"]
-            elif state.get("result_cm") is not None:
-                best_cm = state["result_cm"]
-            with _state_lock:
-                if best_cm and not _pending.get("wingspan"):
-                    _pending["wingspan"] = {"session_id": eng.session_id, "wingspan_cm": best_cm}
-            eng.stop()
-            return {"ok": True}
-    if test_id == "vertical_jump":
-        with _state_lock:
-            eng = _vertical_jump_engine
-        if eng is not None:
-            eng.stop()  # engine auto-stages best-available result internally
-            return {"ok": True}
-    if test_id == "bmi":
-        with _state_lock:
-            eng = _bmi_engine
-        if eng is not None:
-            eng.stop()
-            return {"ok": True}
-    if test_id == "curl_up":
-        with _state_lock:
-            eng = _curl_up_engine
-            if eng is not None and not _pending.get("curl_up") and eng.count > 0:
-                _pending["curl_up"] = {
-                    "session_id": eng.session_id,
-                    "reps": eng.count, "duration_sec": 30,
-                }
-        if eng is not None:
-            eng.stop()
-            return {"ok": True}
-    if test_id == "wall_toss":
-        with _state_lock:
-            eng = _wall_toss_engine
-            if eng is not None and not _pending.get("wall_toss") and eng.counter.toss_count > 0:
-                _pending["wall_toss"] = {
-                    "session_id": eng.session_id,
-                    "catches": eng.counter.toss_count, "duration_sec": 30,
-                    "ball_colour": eng.counter._preset_name,
-                }
-        if eng is not None:
-            eng.stop()
-            return {"ok": True}
-    if test_id == "sit_reach":
-        with _state_lock:
-            eng = _sit_reach_engine
-        if eng is not None:
-            eng.stop()
-            return {"ok": True}
-    if test_id in ("shuttle_run", "dash_50m", "run_600m"):
-        with _state_lock:
-            eng = {
-                "shuttle_run": _shuttle_engine,
-                "dash_50m": _dash50m_engine,
-                "run_600m": _run600m_engine,
-            }[test_id]
-        if eng is not None:
-            eng.maybe_finish()  # stage whatever's finished so far
-            eng.stop()
-            return {"ok": True}
+    # Engines stage their own partial/best-available result during stop()
+    # (_stage_on_stop / _maybe_stage / maybe_finish) — the HTTP layer just
+    # stops whichever engine is registered for this test. engine.stop() runs
+    # OUTSIDE _state_lock (see the deadlock rule at _state_lock's definition).
+    with _state_lock:
+        eng = {
+            "wingspan": _wingspan_engine,
+            "vertical_jump": _vertical_jump_engine,
+            "bmi": _bmi_engine,
+            "curl_up": _curl_up_engine,
+            "wall_toss": _wall_toss_engine,
+            "sit_reach": _sit_reach_engine,
+            "shuttle_run": _shuttle_engine,
+            "dash_50m": _dash50m_engine,
+            "run_600m": _run600m_engine,
+        }.get(test_id)
+    if eng is not None:
+        eng.stop()
+        return {"ok": True}
 
     with _state_lock:
         proc = _running.pop(test_id, None)

@@ -232,16 +232,39 @@ class VerticalJumpEngine:
     def stop(self):
         with self._lock:
             self._running = False
-        if self._thread:
-            self._thread.join(timeout=3)
-            self._thread = None
-        if self._cap:
-            self._cap.release()
-            self._cap = None
-        if self._model:
-            self._model.close()
-            self._model = None
+        thread, self._thread = self._thread, None
+
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3)
+            if thread.is_alive():
+                # _loop is still inside cap.read()/inference. Releasing the
+                # capture now is a use-after-free in native OpenCV, which kills
+                # the whole process with no Python traceback. Hand cleanup to a
+                # reaper that waits for the loop to actually exit (same rule as
+                # BaseWebEngine.stop()). Stage first — it only reads our own
+                # attempt data under the lock.
+                self._maybe_stage()
+                threading.Thread(target=self._reap, args=(thread,), daemon=True).start()
+                return
+
+        self._reap(thread)
         self._maybe_stage()
+
+    def _reap(self, thread):
+        if thread is not None:
+            thread.join()
+        cap, self._cap = self._cap, None
+        model, self._model = self._model, None
+        if cap:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        if model:
+            try:
+                model.close()
+            except Exception:
+                pass
 
     def is_running(self):
         return self._running

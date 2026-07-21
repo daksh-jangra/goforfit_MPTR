@@ -101,6 +101,7 @@ class WingspanEngine:
         self._running = False
         self._thread = None
         self._error = None
+        self._staged = False  # True once a reading reached on_stage; see _stage_on_stop()
 
         self.cap = None
         self.hand_det = None
@@ -121,44 +122,93 @@ class WingspanEngine:
         if self._running:
             return
 
-        models = ws.ensure_models(_TESTS_DIR)
-        self.hand_det = ws.build_hand_detector(models["hand_landmarker.task"])
-        self.pose_det = ws.build_pose_detector(models["pose_landmarker_lite.task"])
+        # Anything that fails after a detector/camera is acquired must release
+        # it before propagating — a leaked capture keeps the device busy for
+        # the life of the process (same rule as BaseWebEngine.start()).
+        try:
+            models = ws.ensure_models(_TESTS_DIR)
+            self.hand_det = ws.build_hand_detector(models["hand_landmarker.task"])
+            self.pose_det = ws.build_pose_detector(models["pose_landmarker_lite.task"])
 
-        self.cap = cv2.VideoCapture(0, cv2.CAP_ANY)
-        if not self.cap.isOpened():
-            # fallback: try default index without backend hint
-            self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            raise RuntimeError("Cannot open camera (index 0)")
-        # 640×480 gives ~4× fewer pixels than 1280×720 → dramatically faster MediaPipe
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        # Ask the driver for 30fps and minimal internal buffer (reduces latency)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.cap = cv2.VideoCapture(0, cv2.CAP_ANY)
+            if not self.cap.isOpened():
+                # fallback: try default index without backend hint
+                self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                raise RuntimeError("Cannot open camera (index 0)")
+            # 640×480 gives ~4× fewer pixels than 1280×720 → dramatically faster MediaPipe
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            # Ask the driver for 30fps and minimal internal buffer (reduces latency)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        self._running = True
-        self._error = None
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+            self._running = True
+            self._error = None
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+        except Exception:
+            self._running = False
+            self._thread = None
+            self._release_resources()
+            raise
 
-    def stop(self):
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-        self._thread = None
-        if self.cap is not None:
+    def _release_resources(self):
+        cap, self.cap = self.cap, None
+        dets, self.hand_det, self.pose_det = (self.hand_det, self.pose_det), None, None
+        if cap is not None:
             try:
-                self.cap.release()
+                cap.release()
             except Exception:
                 pass
-        for det in (self.hand_det, self.pose_det):
+        for det in dets:
             try:
                 if det is not None:
                     det.close()
             except Exception:
                 pass
+
+    def stop(self):
+        self._stage_on_stop()
+        self._running = False
+        thread, self._thread = self._thread, None
+
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2)
+            if thread.is_alive():
+                # _loop is still inside cap.read()/inference. Releasing the
+                # capture now is a use-after-free in native OpenCV, which kills
+                # the whole process with no Python traceback. Hand cleanup to a
+                # reaper that waits for the loop to actually exit (same rule as
+                # BaseWebEngine.stop()).
+                threading.Thread(target=self._reap, args=(thread,), daemon=True).start()
+                return
+
+        self._reap(thread)
+
+    def _reap(self, thread):
+        if thread is not None:
+            thread.join()
+        self._release_resources()
+
+    def _stage_on_stop(self):
+        """Auto-stage the best available reading so screen3 always has
+        something to review even if SAVE READING was never tapped."""
+        with self._lock:
+            if self._staged or self.on_stage is None:
+                return
+            best = None
+            if self.snap is not None and self.snap.get("phase") == "DONE" and self.snap.get("final_cm"):
+                best = self.snap["final_cm"]
+            elif self.result_cm is not None:
+                best = self.result_cm
+            if not best:
+                return
+            try:
+                self.on_stage(round(best, 1))
+                self._staged = True
+            except Exception as e:
+                self._error = f"Stage failed: {e}"
 
     def is_running(self):
         return self._running
@@ -291,6 +341,7 @@ class WingspanEngine:
             if self.on_stage:
                 try:
                     self.on_stage(saved_cm)
+                    self._staged = True
                 except Exception as e:
                     self._error = f"Stage failed: {e}"
 

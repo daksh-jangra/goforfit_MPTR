@@ -99,11 +99,14 @@ class BaseWebEngine:
         self.session_id = session_id
         self.on_stage = on_stage  # callback(*args) — stages a result for screen3 review
 
-        self._lock = threading.Lock()
+        # RLock: run loops call _safe_stage() while already holding the lock,
+        # and _safe_stage locks its _error write.
+        self._lock = threading.RLock()
         self._jpeg = None
         self._running = False
         self._thread = None
         self._error = None
+        self._staged = False  # True once a result reached on_stage; see _stage_on_stop()
         self.cap = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -131,6 +134,15 @@ class BaseWebEngine:
             raise
 
     def stop(self):
+        # Give the engine a chance to stage a partial/best-available result
+        # before shutdown, if nothing reached on_stage yet — so screen3 always
+        # has something to review. Never let staging block the stop.
+        if not self._staged:
+            try:
+                self._stage_on_stop()
+            except Exception:
+                pass
+
         # self.cap must stay set until the loop thread is really gone —
         # _run_loop reads self.cap.read() every iteration.
         self._running = False
@@ -167,9 +179,9 @@ class BaseWebEngine:
     def get_state(self):
         with self._lock:
             state = self._state_locked()
-        state["running"] = self._running
-        if self._error:
-            state["error"] = self._error
+            state["running"] = self._running
+            if self._error:
+                state["error"] = self._error
         return state
 
     # ── helpers used by subclasses ───────────────────────────────────────
@@ -195,10 +207,19 @@ class BaseWebEngine:
         if self.on_stage:
             try:
                 self.on_stage(*args)
+                self._staged = True
             except Exception as e:
-                self._error = f"Stage failed: {e}"
+                with self._lock:
+                    self._error = f"Stage failed: {e}"
 
     # ── hooks every subclass must/may override ──────────────────────────
+    def _stage_on_stop(self):
+        """Called by stop() when no result has been staged yet. Subclasses
+        may stage a partial/best-available result via _safe_stage(). Reads
+        only the engine's own attributes — runs on the caller's thread while
+        the loop thread may still be live."""
+        pass
+
     def _load_models(self):
         """Open MediaPipe detectors / build any per-test helper objects."""
         pass
@@ -483,6 +504,12 @@ class CurlUpEngine(BaseWebEngine):
             self.last_save = None
             return {"ok": True}
 
+    def _stage_on_stop(self):
+        # Stopped before the 30s timer staged a result — stage the partial rep
+        # count so screen3 has something to review.
+        if self.count > 0:
+            self._safe_stage(self.count)
+
     def _run_loop(self):
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
         frame_idx = 0
@@ -625,6 +652,13 @@ class WallTossEngine(BaseWebEngine):
                 return {"ok": False, "error": "Invalid colour preset"}
             self.counter.set_preset(preset_num)
             return {"ok": True, "ball_colour": self.counter._preset_name}
+
+    def _stage_on_stop(self):
+        # Stopped before the 30s timer staged a result — stage the partial
+        # catch count so screen3 has something to review.
+        c = self.counter
+        if c is not None and c.toss_count > 0:
+            self._safe_stage(c.toss_count, c._preset_name)
 
     def _run_loop(self):
         try:
