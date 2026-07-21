@@ -21,6 +21,8 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+from stall_watchdog import StallWatchdogMixin
+
 CAMERA_SOURCE = 0
 ATTEMPTS_REQUIRED = 5
 BASELINE_FRAMES = 30
@@ -171,7 +173,7 @@ def save_calibration(pixel_to_cm):
 
 # ── Engine ────────────────────────────────────────────────────────────────
 
-class VerticalJumpEngine:
+class VerticalJumpEngine(StallWatchdogMixin):
     """Runs the vertical-jump camera loop on a background thread and exposes
     MJPEG frames + JSON state to the browser, instead of an OpenCV window."""
 
@@ -227,6 +229,7 @@ class VerticalJumpEngine:
 
             self._running = True
             self._staged = False
+            self._watchdog_reset()
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
 
@@ -301,6 +304,9 @@ class VerticalJumpEngine:
                 "average_jump_cm":    round(avg, 1) if avg is not None else None,
                 "complete":           len(self.attempt_results_cm) >= ATTEMPTS_REQUIRED,
                 "message":            self.message,
+                # This engine has no _error of its own; a wedged capture is
+                # the only failure it can report to screen4.
+                "error":              self._stall_error(),
             }
 
     # ── actions (called from the FastAPI request thread) ────────────────
@@ -413,6 +419,7 @@ class VerticalJumpEngine:
                 if ok:
                     self._jpeg = buf.tobytes()
                     self._frame_seq += 1
+                    self._watchdog_mark()
 
     def _process_frame(self, frame, width, height, results):
         """Must be called with self._lock held."""

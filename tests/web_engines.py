@@ -54,6 +54,8 @@ _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 
+from stall_watchdog import StallWatchdogMixin  # noqa: E402  (needs _TESTS_DIR on sys.path)
+
 
 def _ensure_pose_model(path, url=None):
     """Downloads a MediaPipe PoseLandmarker .task file if it isn't already
@@ -83,11 +85,11 @@ def _release_capture(cap):
         pass
 
 
-class BaseWebEngine:
+class BaseWebEngine(StallWatchdogMixin):
     """One live browser-controlled test session. Created on 'Start Test',
     destroyed on 'Stop'. Subclasses implement the hooks marked below;
     everything else (camera lifecycle, background thread, MJPEG frame
-    buffer, thread-safe state) is shared.
+    buffer, thread-safe state, stall detection) is shared.
     """
 
     JPEG_QUALITY = 75
@@ -124,6 +126,7 @@ class BaseWebEngine:
             self._load_models()
             self._running = True
             self._error = None
+            self._watchdog_reset()
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
         except Exception:
@@ -181,8 +184,11 @@ class BaseWebEngine:
         with self._lock:
             state = self._state_locked()
             state["running"] = self._running
-            if self._error:
-                state["error"] = self._error
+            # A stall never overwrites a real failure — _error is the more
+            # specific reason when both are true.
+            stall = self._error or self._stall_error()
+            if stall:
+                state["error"] = stall
         return state
 
     # ── helpers used by subclasses ───────────────────────────────────────
@@ -203,6 +209,7 @@ class BaseWebEngine:
             with self._lock:
                 self._jpeg = buf.tobytes()
                 self._frame_seq += 1
+                self._watchdog_mark()
 
     def get_frame(self):
         """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""

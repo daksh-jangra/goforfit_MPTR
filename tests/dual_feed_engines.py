@@ -44,6 +44,8 @@ _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 
+from stall_watchdog import StallWatchdogMixin  # noqa: E402  (needs _TESTS_DIR on sys.path)
+
 
 def _open_cam(url_or_index):
     """Accepts '0', '1', an http(s) MJPEG/IP-cam URL, or an int index."""
@@ -69,7 +71,7 @@ def _release_capture(cap):
         pass
 
 
-class DualFeedEngine:
+class DualFeedEngine(StallWatchdogMixin):
     # Mirrored selfie-style, like every other engine — a subject facing the
     # camera sees their real right hand on the right of the screen. The flip
     # happens in _run_loop BEFORE _process_pair, so detection, overlays and
@@ -135,6 +137,7 @@ class DualFeedEngine:
             self._load_models()
             self._running = True
             self._error = None
+            self._watchdog_reset()
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
         except Exception:
@@ -201,8 +204,11 @@ class DualFeedEngine:
         with self._lock:
             state = self._state_locked()
             state["running"] = self._running
-            if self._error:
-                state["error"] = self._error
+            # A stall never overwrites a real failure — _error is the more
+            # specific reason when both are true.
+            stall = self._error or self._stall_error()
+            if stall:
+                state["error"] = stall
         return state
 
     # ── hooks subclasses override ────────────────────────────────────
@@ -234,6 +240,8 @@ class DualFeedEngine:
             if ok_b:
                 self._jpeg_b = buf_b.tobytes()
                 self._seq_b += 1
+            if ok_a or ok_b:
+                self._watchdog_mark()
 
     def get_frame_a(self):
         """(jpeg_bytes|None, seq) — seq changes iff a new frame was published."""

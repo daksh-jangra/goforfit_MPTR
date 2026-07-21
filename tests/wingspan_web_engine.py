@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 
 import wingspan2 as ws  # reuse geometry / drawing / detector-building code
+from stall_watchdog import StallWatchdogMixin
 
 # ── make calibration + log files resolve to the tests/ folder regardless
 #    of the current working directory the FastAPI app was started from ──
@@ -89,7 +90,7 @@ def _draw_align_warning(frame):
     cv2.putText(frame, warn, (wx, wy), cv2.FONT_HERSHEY_SIMPLEX, 0.68, ws.RED, 2, cv2.LINE_AA)
 
 
-class WingspanEngine:
+class WingspanEngine(StallWatchdogMixin):
     """One live wingspan session. Created on 'Start Test', destroyed on 'Stop'."""
 
     def __init__(self, session_id=None, on_stage=None):
@@ -146,6 +147,7 @@ class WingspanEngine:
 
             self._running = True
             self._error = None
+            self._watchdog_reset()
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
         except Exception:
@@ -245,7 +247,9 @@ class WingspanEngine:
                 "arms_ok": self._arms_ok,
                 "history": [round(v, 1) for v in self.history[-6:]],
                 "last_save": self.last_save,
-                "error": self._error,
+                # A stall never overwrites a real failure — _error is the
+                # more specific reason when both are true.
+                "error": self._error or self._stall_error(),
             }
 
     # ── actions — these replace the old key presses ───────────────────
@@ -394,6 +398,7 @@ class WingspanEngine:
                         with self._lock:
                             self._jpeg = buf.tobytes()
                             self._frame_seq += 1
+                            self._watchdog_mark()
                     continue
 
                 if h_result.hand_landmarks:
@@ -479,6 +484,7 @@ class WingspanEngine:
                     with self._lock:
                         self._jpeg = jpeg_bytes
                         self._frame_seq += 1
+                        self._watchdog_mark()
 
         except Exception as e:
             with self._lock:

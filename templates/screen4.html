@@ -467,7 +467,19 @@
                 }
                 row.classList.remove('hidden');
                 box.classList.remove('hidden');
-                box.innerText = engineCfg.renderStatus(state).join('  •  ');
+                // A still-running engine can report an error too — the stall
+                // watchdog fires while running:true, which is exactly the
+                // "black void, no explanation" case. Show the reason instead
+                // of the normal status line, and make it read as a problem.
+                if (state.error) {
+                    box.innerText = state.error;
+                    box.classList.remove('text-cyan-300');
+                    box.classList.add('text-amber-300');
+                } else {
+                    box.classList.remove('text-amber-300');
+                    box.classList.add('text-cyan-300');
+                    box.innerText = engineCfg.renderStatus(state).join('  •  ');
+                }
                 document.getElementById('ai-calib-overlay')?.classList.toggle('hidden', !engineCfg.showCalibOverlay(state));
                 setButtonsEnabled(state);
             }
