@@ -45,16 +45,22 @@ if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 
 from stall_watchdog import StallWatchdogMixin  # noqa: E402  (needs _TESTS_DIR on sys.path)
+import camera  # noqa: E402  — shared camera-source resolution
 
 
 def _open_cam(url_or_index):
-    """Accepts '0', '1', an http(s) MJPEG/IP-cam URL, or an int index."""
-    src = url_or_index
-    if isinstance(src, str) and src.strip().isdigit():
-        src = int(src.strip())
-    cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+    """Accepts '0', '1', an http(s) MJPEG/IP-cam URL, or an int index.
+
+    Delegates to camera.py so every engine resolves a source identically —
+    the guard that stops two coaches opening the same device compares these
+    sources, and it can only do that if "0" and 0 mean one thing everywhere.
+    Returns an unopened capture rather than raising, because callers here
+    check isOpened() to report which of the two cameras failed.
+    """
+    resolved = camera.resolve_source(url_or_index)
+    cap = cv2.VideoCapture(resolved, cv2.CAP_ANY)
     if not cap.isOpened():
-        cap = cv2.VideoCapture(src)
+        cap = cv2.VideoCapture(resolved)
     return cap
 
 

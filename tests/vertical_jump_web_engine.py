@@ -22,6 +22,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from stall_watchdog import StallWatchdogMixin
+import camera
 
 CAMERA_SOURCE = 0
 ATTEMPTS_REQUIRED = 5
@@ -177,9 +178,10 @@ class VerticalJumpEngine(StallWatchdogMixin):
     """Runs the vertical-jump camera loop on a background thread and exposes
     MJPEG frames + JSON state to the browser, instead of an OpenCV window."""
 
-    def __init__(self, session_id=None, on_stage=None):
+    def __init__(self, session_id=None, on_stage=None, camera_source=CAMERA_SOURCE):
         self.session_id = session_id
         self.on_stage = on_stage
+        self.camera_source = camera_source
         self._lock = threading.RLock()
         self._running = False
         self._thread = None
@@ -217,15 +219,15 @@ class VerticalJumpEngine(StallWatchdogMixin):
             )
             self._model = vision.PoseLandmarker.create_from_options(options)
 
-            self._cap = cv.VideoCapture(CAMERA_SOURCE)
-            self._cap.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
-            self._cap.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
-            if not self._cap.isOpened():
-                self._cap.release()
-                self._cap = None
+            try:
+                self._cap = camera.open_capture(
+                    self.camera_source, width=1280, height=720)
+            except Exception:
+                # The model is already built at this point; release it before
+                # propagating or it leaks for the life of the process.
                 self._model.close()
                 self._model = None
-                raise RuntimeError("Unable to open camera source.")
+                raise
 
             self._running = True
             self._staged = False

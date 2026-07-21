@@ -41,8 +41,20 @@ COOKIE_NAME = "gf_token"
 HEADER_NAME = "X-GoForFit-Token"
 QUERY_NAME = "token"
 
+# Who is operating this browser. Deliberately NOT a security boundary — the
+# access code above is. This only says which coach's work a request belongs
+# to, so that two coaches sharing a server don't collide. Anyone holding the
+# access code can sign in as any name; that was the explicit trade for not
+# making coaches manage a second secret.
+COACH_COOKIE = "gf_coach"
+COACH_HEADER = "X-GoForFit-Coach"
+
 # Reachable without a token, or nobody could ever get one.
 PUBLIC_PATHS = {"/unlock", "/favicon.ico"}
+
+# Reachable with a token but before choosing a coach — otherwise the sign-in
+# screen would redirect to itself.
+NO_COACH_NEEDED = PUBLIC_PATHS | {"/whoami"}
 
 
 def resolve_token():
@@ -128,6 +140,19 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             set_token_cookie(response, self.token)
             return response
 
+        # Past the gate. Resolve WHO this is — every request that touches an
+        # engine or a result needs it, so it is attached once here rather
+        # than re-read in thirty endpoints.
+        request.state.coach = coach_of(request)
+        if not request.state.coach and request.url.path not in NO_COACH_NEEDED:
+            if request.url.path.startswith("/api/"):
+                return JSONResponse(
+                    {"ok": False, "error": "No coach selected — open the app and sign in."},
+                    status_code=409,
+                )
+            target = urlencode({"next": self._clean_target(request)})
+            return RedirectResponse(f"/whoami?{target}", status_code=303)
+
         return await call_next(request)
 
 
@@ -147,6 +172,58 @@ def print_startup_banner(token, generated):
     else:
         print("  GoForFit access code:  set from GOFORFIT_TOKEN")
     print(f"{line}\n")
+
+
+COACH_MAX_LEN = 40
+
+
+def clean_coach_name(raw):
+    """Normalise a submitted coach name, or None if it isn't usable.
+
+    The name is a dictionary key for engine ownership and a value written to
+    the sessions table, so it gets bounded and stripped of control characters
+    rather than trusted as typed.
+    """
+    if not isinstance(raw, str):
+        return None
+    name = " ".join(raw.split())  # collapse whitespace, drop tabs/newlines
+    name = "".join(ch for ch in name if ch.isprintable())
+    return name[:COACH_MAX_LEN] or None
+
+
+def coach_of(request):
+    """Signed-in coach for this request, or None."""
+    return (clean_coach_name(request.cookies.get(COACH_COOKIE))
+            or clean_coach_name(request.headers.get(COACH_HEADER)))
+
+
+CAMERA_COOKIE = "gf_camera"
+DEFAULT_CAMERA = "0"
+
+
+def camera_of(request):
+    """Which camera this browser drives. Kept in a cookie rather than server
+    state because it describes where the coach is physically standing, and
+    because it then survives a server restart — the same restart that
+    regenerates the access code."""
+    raw = (request.cookies.get(CAMERA_COOKIE) or "").strip()
+    return raw or DEFAULT_CAMERA
+
+
+def set_camera_cookie(response, camera):
+    response.set_cookie(
+        CAMERA_COOKIE, camera or DEFAULT_CAMERA,
+        httponly=True, samesite="lax", path="/", max_age=60 * 60 * 12,
+    )
+
+
+def set_coach_cookie(response, coach):
+    """Not HttpOnly-critical the way the token is — it carries no authority —
+    but kept HttpOnly anyway so page scripts can't quietly rewrite whose work
+    a request counts as."""
+    response.set_cookie(
+        COACH_COOKIE, coach, httponly=True, samesite="lax", path="/", max_age=60 * 60 * 12,
+    )
 
 
 def set_token_cookie(response, token):

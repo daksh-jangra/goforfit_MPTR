@@ -1,0 +1,72 @@
+"""Turning a camera *source* into an open capture, in one place.
+
+Every engine used to decide this for itself: the dual-feed ones parsed a
+URL-or-index (they had to, the coach types one into the form), while the six
+single-camera engines hardwired VideoCapture(0). That hardcode is the reason
+two coaches could never run tests at the same time — not the laptop having
+one webcam, but the code being unable to point anywhere else.
+
+A source is whatever the coach configured at sign-in:
+
+    "0", 0        the laptop's built-in camera
+    "1"           a second attached camera
+    "http://…"    a phone running an IP-camera app, which is what makes two
+                  coaches on one server actually possible
+"""
+
+import cv2
+
+
+def resolve_source(source):
+    """Normalise to what cv2.VideoCapture wants: int index or str URL.
+
+    Digit strings become ints — "0" from a form field and 0 from a default
+    have to mean the same camera, or the guard that stops two coaches
+    opening one device would compare them as different.
+    """
+    if source is None:
+        return 0
+    if isinstance(source, int):
+        return source
+    text = str(source).strip()
+    if not text:
+        return 0
+    return int(text) if text.isdigit() else text
+
+
+def source_key(source):
+    """Stable identity for a source, for 'is another coach already using this
+    camera?' checks. Two spellings of the same device must collide."""
+    resolved = resolve_source(source)
+    return str(resolved).rstrip("/").lower() if isinstance(resolved, str) else f"index:{resolved}"
+
+
+def open_capture(source, width=None, height=None, fps=None, buffersize=1):
+    """Open a capture, or raise with the source named.
+
+    The old message was a bare "Cannot open camera (index 0)" even when the
+    coach had pointed the app at a phone URL, which sent people looking at
+    the wrong device entirely.
+    """
+    resolved = resolve_source(source)
+
+    cap = cv2.VideoCapture(resolved, cv2.CAP_ANY)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(resolved)  # retry without the backend hint
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(
+            f"Cannot open camera {resolved!r} — check it is connected, not in "
+            "use by another app or another coach, and that the URL loads in a browser."
+        )
+
+    if width:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if fps:
+        cap.set(cv2.CAP_PROP_FPS, fps)
+    if buffersize:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, buffersize)
+    return cap

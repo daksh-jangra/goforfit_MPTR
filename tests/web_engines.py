@@ -55,6 +55,7 @@ if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
 
 from stall_watchdog import StallWatchdogMixin  # noqa: E402  (needs _TESTS_DIR on sys.path)
+import camera  # noqa: E402  — shared camera-source resolution
 
 
 def _ensure_pose_model(path, url=None):
@@ -97,9 +98,12 @@ class BaseWebEngine(StallWatchdogMixin):
     FRAME_H = 540
     STOP_JOIN_TIMEOUT = 2
 
-    def __init__(self, session_id=None, on_stage=None):
+    def __init__(self, session_id=None, on_stage=None, camera_source=0):
         self.session_id = session_id
         self.on_stage = on_stage  # callback(*args) — stages a result for screen3 review
+        # Which camera this engine drives. Comes from the coach's own setting,
+        # so two coaches with two phones can run tests simultaneously.
+        self.camera_source = camera_source
 
         # RLock: run loops call _safe_stage() while already holding the lock,
         # and _safe_stage locks its _error write.
@@ -193,15 +197,8 @@ class BaseWebEngine(StallWatchdogMixin):
 
     # ── helpers used by subclasses ───────────────────────────────────────
     def _open_camera(self):
-        self.cap = cv2.VideoCapture(0, cv2.CAP_ANY)
-        if not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            raise RuntimeError("Cannot open camera (index 0)")
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.FRAME_W)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.FRAME_H)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap = camera.open_capture(
+            self.camera_source, width=self.FRAME_W, height=self.FRAME_H, fps=30)
 
     def _publish(self, frame):
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.JPEG_QUALITY])
@@ -270,8 +267,8 @@ class BmiEngine(BaseWebEngine):
     result the moment a 5-second scan finishes (no separate SAVE button —
     matches the original script's own auto-save-on-scan behavior)."""
 
-    def __init__(self, session_id=None, on_stage=None):
-        super().__init__(session_id, on_stage)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0):
+        super().__init__(session_id, on_stage, camera_source)
         self.landmarker = None
         self.scale_factor = bmi_mod.load_calibration()
         self.height_buffer = []
@@ -452,8 +449,8 @@ class CurlUpEngine(BaseWebEngine):
     30s timer, hip-angle state machine, and draw_ui() HUD — is reused
     unchanged from parcurlup.py."""
 
-    def __init__(self, session_id=None, on_stage=None):
-        super().__init__(session_id, on_stage)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0):
+        super().__init__(session_id, on_stage, camera_source)
         self.landmarker = None
         self.count = 0
         self.phase = "up"
@@ -621,8 +618,8 @@ class WallTossEngine(BaseWebEngine):
     position over the desktop window) is replaced by choosing one of the
     5 built-in colour presets from a button row."""
 
-    def __init__(self, session_id=None, on_stage=None):
-        super().__init__(session_id, on_stage)
+    def __init__(self, session_id=None, on_stage=None, camera_source=0):
+        super().__init__(session_id, on_stage, camera_source)
         self.counter = None
         self.last_save = None
 
@@ -736,8 +733,8 @@ class SitReachEngine(BaseWebEngine):
     button mirrors the original's dual-purpose SPACE key: first press
     sets the start position, second press locks the final result."""
 
-    def __init__(self, session_id=None, on_stage=None, leg_cm=None):
-        super().__init__(session_id, on_stage)
+    def __init__(self, session_id=None, on_stage=None, leg_cm=None, camera_source=0):
+        super().__init__(session_id, on_stage, camera_source)
         self.leg_cm = leg_cm
         self.landmarker = None
         self.lx_sm = snr_mod.RollingMean(6)

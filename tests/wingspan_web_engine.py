@@ -27,6 +27,7 @@ import numpy as np
 
 import wingspan2 as ws  # reuse geometry / drawing / detector-building code
 from stall_watchdog import StallWatchdogMixin
+import camera
 
 # ── make calibration + log files resolve to the tests/ folder regardless
 #    of the current working directory the FastAPI app was started from ──
@@ -93,9 +94,10 @@ def _draw_align_warning(frame):
 class WingspanEngine(StallWatchdogMixin):
     """One live wingspan session. Created on 'Start Test', destroyed on 'Stop'."""
 
-    def __init__(self, session_id=None, on_stage=None):
+    def __init__(self, session_id=None, on_stage=None, camera_source=0):
         self.session_id = session_id
         self.on_stage = on_stage  # callback(wingspan_cm) — stages result for screen3 review
+        self.camera_source = camera_source
 
         self._lock = threading.Lock()
         self._jpeg = None
@@ -132,18 +134,9 @@ class WingspanEngine(StallWatchdogMixin):
             self.hand_det = ws.build_hand_detector(models["hand_landmarker.task"])
             self.pose_det = ws.build_pose_detector(models["pose_landmarker_lite.task"])
 
-            self.cap = cv2.VideoCapture(0, cv2.CAP_ANY)
-            if not self.cap.isOpened():
-                # fallback: try default index without backend hint
-                self.cap = cv2.VideoCapture(0)
-            if not self.cap.isOpened():
-                raise RuntimeError("Cannot open camera (index 0)")
             # 640×480 gives ~4× fewer pixels than 1280×720 → dramatically faster MediaPipe
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            # Ask the driver for 30fps and minimal internal buffer (reduces latency)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.cap = camera.open_capture(
+                self.camera_source, width=640, height=480, fps=30)
 
             self._running = True
             self._error = None

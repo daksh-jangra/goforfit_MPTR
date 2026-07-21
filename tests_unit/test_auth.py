@@ -22,6 +22,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 TOKEN = "s3cret-code"
+COACH = "Priya"
+AUTH = {"X-GoForFit-Token": TOKEN, "X-GoForFit-Coach": COACH}
 
 
 def _load_app(monkeypatch, token=TOKEN, auth=None):
@@ -95,11 +97,12 @@ def test_every_route_is_gated(client):
 # ── ways in ──────────────────────────────────────────────────────────────
 
 def test_header_token_is_accepted(client):
-    assert client.get("/api/sessions", headers={"X-GoForFit-Token": TOKEN}).status_code == 200
+    assert client.get("/api/sessions", headers=AUTH).status_code == 200
 
 
 def test_cookie_token_is_accepted(client):
     client.cookies.set("gf_token", TOKEN)
+    client.cookies.set("gf_coach", COACH)
     assert client.get("/api/sessions").status_code == 200
 
 
@@ -171,7 +174,7 @@ def test_the_token_never_reaches_the_unlock_page(client):
 def test_a_valid_header_wins_over_a_stale_cookie(client):
     """Checking only the first credential PRESENT would fail this."""
     client.cookies.set("gf_token", "stale")
-    r = client.get("/api/sessions", headers={"X-GoForFit-Token": TOKEN})
+    r = client.get("/api/sessions", headers=AUTH)
     assert r.status_code == 200
 
 
@@ -196,5 +199,58 @@ def test_token_is_generated_when_unconfigured(monkeypatch):
     assert app_mod.ACCESS_TOKEN and app_mod.ACCESS_TOKEN_GENERATED
     with TestClient(app_mod.app, follow_redirects=False) as c:
         assert c.get("/api/sessions").status_code == 401
-        assert c.get("/api/sessions",
-                     headers={"X-GoForFit-Token": app_mod.ACCESS_TOKEN}).status_code == 200
+        assert c.get("/api/sessions", headers={"X-GoForFit-Token": app_mod.ACCESS_TOKEN,
+                                               "X-GoForFit-Coach": COACH}).status_code == 200
+
+
+# ── coach identity ───────────────────────────────────────────────────────
+
+def test_api_with_a_token_but_no_coach_is_409(client):
+    """A valid code proves you're allowed in; it doesn't say who you are, and
+    every result has to be attributable to somebody."""
+    r = client.get("/api/sessions", headers={"X-GoForFit-Token": TOKEN})
+    assert r.status_code == 409
+    assert "coach" in r.json()["error"].lower()
+
+
+def test_page_with_a_token_but_no_coach_redirects_to_whoami(client):
+    client.cookies.set("gf_token", TOKEN)
+    r = client.get("/screen2?category=All")
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/whoami?")
+    assert "category" in r.headers["location"]
+
+
+def test_whoami_is_reachable_before_signing_in(client):
+    client.cookies.set("gf_token", TOKEN)
+    assert client.get("/whoami").status_code == 200
+
+
+def test_whoami_sets_the_coach_and_camera(client):
+    client.cookies.set("gf_token", TOKEN)
+    r = client.post("/whoami", data={"coach": "  Raj  Kumar ", "camera": "0", "next": "/results"})
+    assert r.status_code == 303
+    assert r.headers["location"] == "/results"
+
+    # A name with a space gets quoted in the Set-Cookie header, so assert the
+    # round trip rather than the raw value: the next request must be treated
+    # as signed in, not bounced back to /whoami.
+    follow = client.get("/screen2")
+    assert follow.status_code == 200, "coach cookie did not survive the round trip"
+
+
+def test_whoami_rejects_an_empty_name(client):
+    client.cookies.set("gf_token", TOKEN)
+    r = client.post("/whoami", data={"coach": "   ", "next": "/"})
+    assert r.status_code == 400
+    assert "gf_coach" not in r.cookies
+
+
+def test_coach_name_is_bounded_and_stripped():
+    """It becomes a dict key and a database value, so it isn't trusted raw."""
+    import auth
+
+    assert auth.clean_coach_name("a" * 200) == "a" * auth.COACH_MAX_LEN
+    assert auth.clean_coach_name("Priya\tSharma\n") == "Priya Sharma"
+    assert auth.clean_coach_name("   ") is None
+    assert auth.clean_coach_name(None) is None

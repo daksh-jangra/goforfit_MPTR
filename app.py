@@ -80,6 +80,8 @@ sys.path.insert(0, str(TESTS_DIR))
 # printing it to a server console nobody is watching.
 import traceback as _traceback
 
+import camera as _camera_mod  # camera-source resolution, shared with the engines
+
 WEB_ENGINES_IMPORT_ERROR: Optional[str] = None
 DUAL_FEED_IMPORT_ERROR: Optional[str] = None
 
@@ -131,7 +133,18 @@ _state_lock = threading.RLock()
 
 # Test id currently mid-launch (guard set → engine slot assigned). Camera
 # open takes seconds; this keeps a second launch out of that window.
-_launching: Optional[str] = None
+# coach -> test_id they are mid-launch on. Per coach, not global: two coaches
+# with two cameras must be able to be opening them at the same moment.
+_launching: dict = {}
+
+# (coach, test_id) -> engine. Was a single slot per test, which is what let
+# one coach's STOP kill another's running test.
+_RUNS: dict = {}
+
+# camera key -> (coach, test_id). The one thing that genuinely cannot be
+# shared: two engines opening the same device get a confusing failure or, on
+# some platforms, one silently starves the other of frames.
+_CAMERA_CLAIMS: dict = {}
 
 
 # ── Engine registry ────────────────────────────────────────────────────────
@@ -151,27 +164,42 @@ class _EngineSlot:
         self.instance = None      # current engine — read/write under _state_lock
 
 
-def _pending_stage(test_id: str, payload: dict) -> None:
-    """on_stage sink for engine worker threads — stages a result for screen3."""
+def _coach(request: Request) -> Optional[str]:
+    """Signed-in coach for this request. The middleware resolved it already;
+    the getattr fallback keeps direct-call unit tests working."""
+    return getattr(request.state, "coach", None) or auth_mod.coach_of(request)
+
+
+def _pending_stage(coach: str, test_id: str, payload: dict) -> None:
+    """on_stage sink for engine worker threads — stages a result for screen3.
+
+    Keyed by (coach, test) rather than test alone. With one key per test, two
+    coaches running the same test shared a slot: whoever finished first had
+    their reading picked up by the other coach's screen3 and saved against
+    the WRONG STUDENT, silently and with a plausible-looking number.
+    """
     with _state_lock:
-        _pending[test_id] = payload
+        _pending[(coach, test_id)] = payload
 
 
 # ── Per-test builders: parse the launch body, wire the on_stage payload ────
 
 def _build_wingspan(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     return WingspanEngine(
         session_id=session_id,
-        on_stage=lambda cm: _pending_stage("wingspan", {"session_id": session_id, "wingspan_cm": cm}),
+        camera_source=body.get('_camera', 0),
+        on_stage=lambda cm: _pending_stage(coach, "wingspan", {"session_id": session_id, "wingspan_cm": cm}),
     )
 
 
 def _build_vertical_jump(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
 
     def _stage(jump_cm, average_jump_cm, standing_reach_cm, attempts):
-        _pending_stage("vertical_jump", {
+        _pending_stage(coach, "vertical_jump", {
             "session_id":        session_id,
             "jump_cm":           jump_cm,
             "average_jump_cm":   average_jump_cm,
@@ -179,44 +207,52 @@ def _build_vertical_jump(body: dict):
             "attempts":          attempts,
         })
 
-    return VerticalJumpEngine(session_id=session_id, on_stage=_stage)
+    return VerticalJumpEngine(session_id=session_id, on_stage=_stage,
+                      camera_source=body.get('_camera', 0))
 
 
 def _build_bmi(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
 
     def _stage(height_cm, calibration_used):
-        _pending_stage("bmi", {
+        _pending_stage(coach, "bmi", {
             "session_id": session_id, "height_cm": height_cm,
             "weight_kg": None, "calibration_used": calibration_used,
         })
 
-    return BmiEngine(session_id=session_id, on_stage=_stage)
+    return BmiEngine(session_id=session_id, on_stage=_stage,
+                      camera_source=body.get('_camera', 0))
 
 
 def _build_curl_up(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     return CurlUpEngine(
         session_id=session_id,
-        on_stage=lambda reps: _pending_stage(
+        camera_source=body.get('_camera', 0),
+        on_stage=lambda reps: _pending_stage(coach, 
             "curl_up", {"session_id": session_id, "reps": reps, "duration_sec": 30}),
     )
 
 
 def _build_wall_toss(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
 
     def _stage(catches, ball_colour):
-        _pending_stage("wall_toss", {
+        _pending_stage(coach, "wall_toss", {
             "session_id": session_id, "catches": catches,
             "duration_sec": 30, "ball_colour": ball_colour,
         })
 
-    return WallTossEngine(session_id=session_id, on_stage=_stage)
+    return WallTossEngine(session_id=session_id, on_stage=_stage,
+                      camera_source=body.get('_camera', 0))
 
 
 def _build_sit_reach(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     leg_cm = body.get("leg_cm")
     if leg_cm is None or str(leg_cm).strip() == "":
         return JSONResponse({"ok": False, "error": "Missing required parameter: Hip-to-ankle length (cm)"}, status_code=400)
@@ -226,16 +262,18 @@ def _build_sit_reach(body: dict):
         return JSONResponse({"ok": False, "error": "Hip-to-ankle length must be a number"}, status_code=400)
 
     def _stage(reach_cm, leg_cm_val, rating):
-        _pending_stage("sit_reach", {
+        _pending_stage(coach, "sit_reach", {
             "session_id": session_id, "reach_cm": reach_cm,
             "leg_cm": leg_cm_val, "rating": rating,
         })
 
-    return SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm)
+    return SitReachEngine(session_id=session_id, on_stage=_stage, leg_cm=leg_cm,
+                          camera_source=body.get('_camera', 0))
 
 
 def _build_shuttle_run(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     cam_a = body.get("cam_a_url")
     cam_b = body.get("cam_b_url")
     touches = body.get("touches") or 4
@@ -243,12 +281,13 @@ def _build_shuttle_run(body: dict):
         return JSONResponse({"ok": False, "error": "cam_a_url and cam_b_url are required"}, status_code=400)
     return ShuttleRunEngine(
         cam_a, cam_b, touches=touches, session_id=session_id,
-        on_stage=lambda payload: _pending_stage("shuttle_run", payload),
+        on_stage=lambda payload: _pending_stage(coach, "shuttle_run", payload),
     )
 
 
 def _build_dash_50m(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     cam_a = body.get("finish_cam_url")
     cam_b = body.get("overhead_cam_url")
     lanes = body.get("lanes") or 4
@@ -257,12 +296,13 @@ def _build_dash_50m(body: dict):
         return JSONResponse({"ok": False, "error": "finish_cam_url and overhead_cam_url are required"}, status_code=400)
     return Dash50mEngine(
         cam_a, cam_b, lanes=lanes, lane_width=lane_width, session_id=session_id,
-        on_stage=lambda payload: _pending_stage("dash_50m", payload),
+        on_stage=lambda payload: _pending_stage(coach, "dash_50m", payload),
     )
 
 
 def _build_run_600m(body: dict):
     session_id = body.get("session_id")
+    coach = body.get("_coach")
     cam_a = body.get("camera_url") or "0"
     lane_colors = body.get("lane_colors") or []
     if isinstance(lane_colors, str):
@@ -273,7 +313,7 @@ def _build_run_600m(body: dict):
     return Run600mEngine(
         cam_a, lane_colors=lane_colors, camera_distance_m=camera_distance_m,
         session_id=session_id,
-        on_stage=lambda payload: _pending_stage("run_600m", payload),
+        on_stage=lambda payload: _pending_stage(coach, "run_600m", payload),
     )
 
 
@@ -747,34 +787,63 @@ LARAVEL_SYNC = {
     "run_600m":      {"exerciseType": "Run600m",      "scoreKey": "run600mScore"},
 }
 
-def _is_running(test_id: str) -> bool:
+def _is_running(coach: str, test_id: str) -> bool:
     with _state_lock:
-        return _is_running_locked(test_id)
+        return _is_running_locked(coach, test_id)
 
 
-def _is_running_locked(test_id: str) -> bool:
+def _engine_locked(coach: str, test_id: str):
+    """This coach's engine for this test, or None. Requires _state_lock."""
+    return _RUNS.get((coach, test_id))
+
+
+def _is_running_locked(coach: str, test_id: str) -> bool:
     """Requires _state_lock. Only touches lock-free engine attrs (see rule above)."""
-    slot = _ENGINES.get(test_id)
-    return slot is not None and slot.instance is not None and slot.instance.is_running()
+    eng = _RUNS.get((coach, test_id))
+    return eng is not None and eng.is_running()
 
 
-def _active_test_id_locked() -> Optional[str]:
-    """The test currently holding (or mid-way to acquiring) the camera, or
-    None. Every test contends for the same physical camera(s), so at most one
-    may run at a time. Requires _state_lock."""
-    if _launching is not None:
-        return _launching
+def _active_test_id_locked(coach: str) -> Optional[str]:
+    """The test THIS COACH is running (or mid-launch on), or None.
+
+    Still one test at a time per coach — a coach has one pair of hands and
+    one camera — but no longer one test at a time per SERVER, which is what
+    made a second coach impossible. Requires _state_lock.
+    """
+    if coach in _launching:
+        return _launching[coach]
     for candidate in TESTS:
-        if _is_running_locked(candidate):
+        if _is_running_locked(coach, candidate):
             return candidate
     return None
+
+
+def _camera_conflict_locked(coach: str, sources) -> Optional[tuple]:
+    """(other_coach, their_test) if someone else already holds one of these
+    cameras, else None. Requires _state_lock."""
+    for src in sources:
+        holder = _CAMERA_CLAIMS.get(_camera_mod.source_key(src))
+        if holder is not None and holder[0] != coach:
+            return holder
+    return None
+
+
+def _claim_cameras_locked(coach: str, test_id: str, sources) -> None:
+    for src in sources:
+        _CAMERA_CLAIMS[_camera_mod.source_key(src)] = (coach, test_id)
+
+
+def _release_cameras_locked(coach: str, test_id: str) -> None:
+    for key, holder in list(_CAMERA_CLAIMS.items()):
+        if holder == (coach, test_id):
+            del _CAMERA_CLAIMS[key]
 
 # ── Pending (staged-but-not-saved) AI results ──────────────────────────────
 # AI test scripts no longer write straight to the DB. They POST their raw
 # result here instead, where it sits until a human reviews it on screen3 and
-# explicitly clicks "Save". Keyed by test_id, since each test's screen4/screen3
-# is single-session-at-a-time in this app's UI.
-_pending: dict[str, dict] = {}
+# explicitly clicks "Save". Keyed by (coach, test_id) — see _pending_stage for
+# why the coach half is not optional.
+_pending: dict = {}
 
 
 # ── Pydantic models for the /api/save/* and /api/session bodies ─────────────
@@ -882,6 +951,36 @@ async def unlock_submit(request: Request):
         )
     response = RedirectResponse(target, status_code=303)
     auth_mod.set_token_cookie(response, ACCESS_TOKEN)
+    return response
+
+
+@app.get("/whoami", name="whoami")
+def whoami_form(request: Request, next: str = "/"):
+    return templates.TemplateResponse(
+        request, "whoami.html",
+        {"next": auth_mod._safe_next(next), "error": None,
+         "coaches": db.list_coaches(), "camera": auth_mod.camera_of(request)},
+    )
+
+
+@app.post("/whoami")
+async def whoami_submit(request: Request):
+    form = await request.form()
+    target = auth_mod._safe_next(form.get("next"))
+    coach = auth_mod.clean_coach_name(form.get("coach"))
+    camera = (form.get("camera") or "").strip() or auth_mod.DEFAULT_CAMERA
+
+    if not coach:
+        return templates.TemplateResponse(
+            request, "whoami.html",
+            {"next": target, "error": "Enter a name so your results can be told apart.",
+             "coaches": db.list_coaches(), "camera": camera},
+            status_code=400,
+        )
+
+    response = RedirectResponse(target, status_code=303)
+    auth_mod.set_coach_cookie(response, coach)
+    auth_mod.set_camera_cookie(response, camera)
     return response
 
 
@@ -1007,23 +1106,45 @@ def test_camera(b: CameraTestBody):
     return result
 
 
+def _launch_sources(test_id: str, body: dict) -> list:
+    """Which camera(s) this launch will open. The dual-camera tests take two
+    explicit URLs from the setup form; everything else drives the one camera
+    the coach configured at sign-in."""
+    if test_id == "shuttle_run":
+        return [body.get("cam_a_url"), body.get("cam_b_url")]
+    if test_id == "dash_50m":
+        return [body.get("finish_cam_url"), body.get("overhead_cam_url")]
+    if test_id == "run_600m":
+        return [body.get("camera_url") or "0"]
+    return [body.get("_camera", 0)]
+
+
 @app.post("/api/launch/{test_id}")
 async def launch(test_id: str, request: Request):
-    global _launching
     body = await _json_body(request)  # read BEFORE touching shared state — no awaits after this
 
-    # One camera, one test at a time. Without this guard a second launch — a
-    # different test, or a double-tapped START — builds a second engine that
-    # either can't open the busy camera (a confusing 500 while the first test
-    # is still running) or, on platforms that permit the second open, orphans
-    # the first engine with its thread and camera held until the process dies.
-    # Recovery is a STOP away: screen4's STOP/SAVE button is always enabled.
-    # (Unknown test ids skip the guard and fall through to the 404 below.)
-    # The guard check and the `_launching` claim are one atomic step; the slow
-    # part (opening the camera) then runs outside the lock, with `_launching`
-    # keeping every other launch out until the engine global is assigned.
+    # Who is launching, and on which camera. Both come from the signed-in
+    # identity rather than the request body — a coach must not be able to
+    # launch as someone else, deliberately or by a stale page.
+    coach = _coach(request)
+    body["_coach"] = coach
+    body["_camera"] = auth_mod.camera_of(request)
+
+    # Two guards, and they are different questions now.
+    #
+    #   1. Is THIS COACH already running something? One coach has one pair of
+    #      hands; a second launch is a double-tapped START or a forgotten test.
+    #   2. Is the camera they want already held by SOMEONE ELSE? This is the
+    #      only genuinely unshareable resource. Two engines on one device get
+    #      a confusing open failure, or one silently starves the other.
+    #
+    # The old code asked a third question — "is anything at all running on
+    # this server?" — which is what made a second coach impossible.
+    # The check and the `_launching` claim are one atomic step; the slow part
+    # (opening the camera) then runs outside the lock.
+    sources = _launch_sources(test_id, body)
     with _state_lock:
-        active = _active_test_id_locked() if test_id in TESTS else None
+        active = _active_test_id_locked(coach) if test_id in TESTS else None
         if active is not None:
             detail = (
                 "It is already running — press STOP / SAVE before starting it again."
@@ -1035,17 +1156,42 @@ async def launch(test_id: str, request: Request):
                 status_code=409,
             )
         if test_id in TESTS:
-            _launching = test_id
+            holder = _camera_conflict_locked(coach, sources)
+            if holder is not None:
+                other_coach, other_test = holder
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"{other_coach} is using that camera for "
+                            f"'{TESTS[other_test]['title']}'. Point your camera "
+                            "somewhere else on the sign-in screen, or wait for them to finish."
+                        ),
+                        "held_by": other_coach,
+                    },
+                    status_code=409,
+                )
+            _launching[coach] = test_id
+            _claim_cameras_locked(coach, test_id, sources)
     try:
-        return _dispatch_launch(test_id, body)
+        result = _dispatch_launch(test_id, body)
+        if isinstance(result, JSONResponse):  # launch failed — don't hold the camera
+            with _state_lock:
+                _release_cameras_locked(coach, test_id)
+        return result
+    except Exception:
+        with _state_lock:
+            _release_cameras_locked(coach, test_id)
+        raise
     finally:
         with _state_lock:
-            _launching = None
+            _launching.pop(coach, None)
 
 
 def _launch_engine(slot: _EngineSlot, body: dict):
     """Common launch path for every in-process engine: build from the body,
     start (slow — camera open), register the instance, clear stale pending."""
+    coach = body.get("_coach")
     engine = slot.builder(body)
     if isinstance(engine, JSONResponse):  # builder rejected the params
         return engine
@@ -1056,8 +1202,10 @@ def _launch_engine(slot: _EngineSlot, body: dict):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     with _state_lock:
-        slot.instance = engine
-        _pending.pop(slot.test_id, None)  # clear any stale unsaved result from a previous run
+        _RUNS[(coach, slot.test_id)] = engine
+        # Clear only THIS coach's stale result — another coach's staged
+        # reading for the same test is theirs and must survive.
+        _pending.pop((coach, slot.test_id), None)
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
@@ -1119,26 +1267,29 @@ def engine_status():
 
 
 @app.get("/api/status/{test_id}")
-def status(test_id: str):
+def status(test_id: str, request: Request):
     if test_id not in TESTS:
         return JSONResponse({"ok": False, "error": "Unknown test"}, status_code=404)
-    return {"ok": True, "running": _is_running(test_id)}
+    return {"ok": True, "running": _is_running(_coach(request), test_id)}
 
 
 @app.get("/api/status")
-def status_all():
-    return {tid: _is_running(tid) for tid in TESTS}
+def status_all(request: Request):
+    return {tid: _is_running(_coach(request), tid) for tid in TESTS}
 
 
 @app.post("/api/stop/{test_id}")
-def stop(test_id: str):
+def stop(test_id: str, request: Request):
     # Engines stage their own partial/best-available result during stop()
     # (_stage_on_stop / _maybe_stage / maybe_finish) — the HTTP layer just
     # stops whichever engine is registered for this test. engine.stop() runs
     # OUTSIDE _state_lock (see the deadlock rule at _state_lock's definition).
-    slot = _ENGINES.get(test_id)
+    # Only the coach who started it. Before this, either coach could stop the
+    # other's run mid-measurement, and neither had any way to tell.
+    coach = _coach(request)
     with _state_lock:
-        eng = slot.instance if slot is not None else None
+        eng = _RUNS.pop((coach, test_id), None)
+        _release_cameras_locked(coach, test_id)
     if eng is not None:
         eng.stop()
     return {"ok": True}
@@ -1160,13 +1311,18 @@ class EngineAction(BaseModel):
     value: Any = None
 
 
-def _slot_engine(test_id: str):
-    """Resolve (slot, current engine) or (None, 404 response)."""
+def _slot_engine(test_id: str, request: Request):
+    """Resolve (slot, THIS COACH's engine) or (None, 404 response).
+
+    Scoped by coach so a feed, a state poll or an action can only ever reach
+    the asker's own run — otherwise coach B polling /api/bmi/state would be
+    watching coach A's test, and B's buttons would drive it.
+    """
     slot = _ENGINES.get(test_id)
     if slot is None:
         return None, JSONResponse({"ok": False, "error": f"Unknown test '{test_id}'"}, status_code=404)
     with _state_lock:
-        return slot, slot.instance
+        return slot, _engine_locked(_coach(request), test_id)
 
 
 def _not_running(slot: _EngineSlot) -> JSONResponse:
@@ -1204,8 +1360,8 @@ _FEED_GETTERS = {
 }
 
 
-def _engine_feed(test_id: str, feed_name: str):
-    slot, eng = _slot_engine(test_id)
+def _engine_feed(test_id: str, feed_name: str, request: Request):
+    slot, eng = _slot_engine(test_id, request)
     if slot is None:
         return eng  # the 404
     if feed_name not in slot.feeds:
@@ -1216,23 +1372,23 @@ def _engine_feed(test_id: str, feed_name: str):
 
 
 @app.get("/api/{test_id}/feed")
-def engine_feed(test_id: str):
-    return _engine_feed(test_id, "feed")
+def engine_feed(test_id: str, request: Request):
+    return _engine_feed(test_id, "feed", request)
 
 
 @app.get("/api/{test_id}/feed_a")
-def engine_feed_a(test_id: str):
-    return _engine_feed(test_id, "feed_a")
+def engine_feed_a(test_id: str, request: Request):
+    return _engine_feed(test_id, "feed_a", request)
 
 
 @app.get("/api/{test_id}/feed_b")
-def engine_feed_b(test_id: str):
-    return _engine_feed(test_id, "feed_b")
+def engine_feed_b(test_id: str, request: Request):
+    return _engine_feed(test_id, "feed_b", request)
 
 
 @app.get("/api/{test_id}/state")
-def engine_state(test_id: str):
-    slot, eng = _slot_engine(test_id)
+def engine_state(test_id: str, request: Request):
+    slot, eng = _slot_engine(test_id, request)
     if slot is None:
         return eng  # the 404
     if eng is None:
@@ -1243,8 +1399,8 @@ def engine_state(test_id: str):
 
 
 @app.post("/api/{test_id}/action")
-def engine_action(test_id: str, b: EngineAction):
-    slot, eng = _slot_engine(test_id)
+def engine_action(test_id: str, b: EngineAction, request: Request):
+    slot, eng = _slot_engine(test_id, request)
     if slot is None:
         return eng  # the 404
     if eng is None or not eng.is_running():
@@ -1260,12 +1416,16 @@ def engine_action(test_id: str, b: EngineAction):
 # ── Database — session management ──────────────────────────────────────────
 
 @app.post("/api/session")
-def create_session(body: SessionCreate):
+def create_session(body: SessionCreate, request: Request):
     """
     Create a student session before running tests.
 
     Body (JSON, all fields optional):
         student_name, age, gender ("M"/"F"/"Other"), school, grade, notes
+
+    The coach comes from the signed-in identity, never from the body — a
+    measurement must be stamped with who actually took it, not with whatever
+    the page claimed.
     """
     sid = db.new_session(
         student_name = body.student_name,
@@ -1274,6 +1434,7 @@ def create_session(body: SessionCreate):
         school       = body.school,
         grade        = body.grade,
         notes        = body.notes,
+        coach        = _coach(request),
     )
     return {"ok": True, "session_id": sid}
 
@@ -1287,8 +1448,10 @@ def get_session(session_id: int):
 
 
 @app.get("/api/sessions")
-def list_sessions():
-    return {"ok": True, "sessions": db.list_sessions()}
+def list_sessions(request: Request, everyone: bool = Query(default=False)):
+    """This coach's sessions. ?everyone=1 for the whole server's."""
+    coach = None if everyone else _coach(request)
+    return {"ok": True, "sessions": db.list_sessions(coach=coach), "coach": _coach(request)}
 
 
 # ── Pending results — AI scripts hand off here instead of auto-saving ───────
@@ -1303,22 +1466,25 @@ async def stage_result(test_id: str, request: Request):
         return JSONResponse({"ok": False, "error": f"Unknown test '{test_id}'"}, status_code=404)
     body = await _json_body(request)
     with _state_lock:
-        _pending[test_id] = body
+        _pending[(_coach(request), test_id)] = body
     return {"ok": True}
 
 
 @app.get("/api/pending/{test_id}")
-def get_pending(test_id: str):
+def get_pending(test_id: str, request: Request):
     if test_id not in TESTS:
         return JSONResponse({"ok": False, "error": f"Unknown test '{test_id}'"}, status_code=404)
+    # Only this coach's staged reading. This lookup is the exact line that
+    # used to hand one coach the other's measurement, which screen3 then
+    # saved against the wrong student.
     with _state_lock:
-        return {"ok": True, "pending": _pending.get(test_id)}
+        return {"ok": True, "pending": _pending.get((_coach(request), test_id))}
 
 
 @app.post("/api/pending/{test_id}/clear")
-def clear_pending(test_id: str):
+def clear_pending(test_id: str, request: Request):
     with _state_lock:
-        _pending.pop(test_id, None)
+        _pending.pop((_coach(request), test_id), None)
     return {"ok": True}
 
 
@@ -1460,13 +1626,23 @@ def save_run_600m(b: Run600mSave):
 # ── Database — fetch results ───────────────────────────────────────────────
 
 @app.get("/api/results")
-def results_all(student: Optional[str] = Query(default=None)):
-    """Flat view across all tests. ?student=<name> to filter by student."""
+def results_all(request: Request,
+                student: Optional[str] = Query(default=None),
+                everyone: bool = Query(default=False)):
+    """Flat view across all tests, scoped to the signed-in coach by default.
+
+    ?student=<name> filters by student; ?everyone=1 drops the coach scope for
+    a whole-school view. Rows recorded before coach sign-in existed have
+    coach NULL and only ever appear under ?everyone=1.
+    """
+    coach = _coach(request)
     if student:
         rows = db.get_student_summary(student)
+        if not everyone:
+            rows = [r for r in rows if r.get("coach") == coach]
     else:
-        rows = db.get_all_results()
-    return {"ok": True, "results": rows}
+        rows = db.get_all_results(coach=None if everyone else coach)
+    return {"ok": True, "results": rows, "coach": coach, "scoped": not everyone}
 
 
 @app.get("/api/results/{test_id}")

@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     school       TEXT,
     grade        TEXT,
     notes        TEXT,
+    -- Which coach took these measurements. Lives on the session rather than
+    -- on all nine result tables: a result reaches its coach through
+    -- session_id, so one column both stamps the record and scopes the views.
+    -- NULL means "recorded before coach sign-in existed".
+    coach        TEXT,
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
@@ -161,42 +166,49 @@ CREATE TABLE IF NOT EXISTS run_600m (
     recorded_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+"""
+
+# The view is created SEPARATELY, after _migrate() has run. It selects
+# s.coach, and on a database that predates that column CREATE VIEW would
+# fail outright — the tables above are all CREATE TABLE IF NOT EXISTS, so
+# they no-op on an existing db and the ALTER has to land between the two.
+_SCHEMA_VIEW = """
 -- ── Convenience view: all results flat ────────────────────────────────────
 DROP VIEW IF EXISTS all_results;
 CREATE VIEW IF NOT EXISTS all_results AS
-    SELECT 'bmi' AS test, b.id AS row_id, b.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'bmi' AS test, b.id AS row_id, b.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            b.height_cm, b.weight_kg, b.bmi_value AS primary_result, b.bmi_category AS rating, b.recorded_at
     FROM bmi b LEFT JOIN sessions s ON b.session_id = s.id
 UNION ALL
-    SELECT 'wingspan', w.id, w.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'wingspan', w.id, w.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, w.wingspan_cm, NULL, w.recorded_at
     FROM wingspan w LEFT JOIN sessions s ON w.session_id = s.id
 UNION ALL
-    SELECT 'curl_up', c.id, c.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'curl_up', c.id, c.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, c.reps, c.rating, c.recorded_at
     FROM curl_up c LEFT JOIN sessions s ON c.session_id = s.id
 UNION ALL
-    SELECT 'wall_toss', t.id, t.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'wall_toss', t.id, t.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, t.catches, t.rating, t.recorded_at
     FROM wall_toss t LEFT JOIN sessions s ON t.session_id = s.id
 UNION ALL
-    SELECT 'shuttle_run', r.id, r.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'shuttle_run', r.id, r.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, r.time_sec, r.rating, r.recorded_at
     FROM shuttle_run r LEFT JOIN sessions s ON r.session_id = s.id
 UNION ALL
-    SELECT 'dash_50m', d.id, d.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'dash_50m', d.id, d.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, d.time_sec, d.rating, d.recorded_at
     FROM dash_50m d LEFT JOIN sessions s ON d.session_id = s.id
 UNION ALL
-    SELECT 'sit_reach', sr.id, sr.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'sit_reach', sr.id, sr.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, sr.reach_cm, sr.rating, sr.recorded_at
     FROM sit_reach sr LEFT JOIN sessions s ON sr.session_id = s.id
 UNION ALL
-    SELECT 'vertical_jump', vj.id, vj.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'vertical_jump', vj.id, vj.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, vj.jump_cm, vj.rating, vj.recorded_at
     FROM vertical_jump vj LEFT JOIN sessions s ON vj.session_id = s.id
 UNION ALL
-    SELECT 'run_600m', rm.id, rm.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+    SELECT 'run_600m', rm.id, rm.session_id, s.student_name, s.age, s.gender, s.school, s.grade, s.coach,
            NULL, NULL, rm.time_sec, rm.rating, rm.recorded_at
     FROM run_600m rm LEFT JOIN sessions s ON rm.session_id = s.id;
 """
@@ -209,10 +221,27 @@ def _bmi_category(bmi: float) -> str:
     else:            return "Obese"
 
 
+def _migrate(con):
+    """Bring an existing database up to the current schema.
+
+    CREATE TABLE IF NOT EXISTS silently does nothing when the table is
+    already there, so a new column never reaches a database that predates
+    it — the app would then fail on every insert against a live goforfit.db
+    full of real measurements. Each step must be safe to run repeatedly.
+    """
+    columns = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+    if not columns:
+        return  # brand-new database; the CREATE TABLE above already got it right
+    if "coach" not in columns:
+        con.execute("ALTER TABLE sessions ADD COLUMN coach TEXT")
+
+
 def init_db():
-    """Create tables if they don't exist."""
+    """Create tables, migrate what's already there, then build the view."""
     with _conn() as con:
         con.executescript(_SCHEMA)
+        _migrate(con)
+        con.executescript(_SCHEMA_VIEW)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -233,13 +262,14 @@ class GoForFitDB:
         school: str = None,
         grade: str = None,
         notes: str = None,
+        coach: str = None,
     ) -> int:
         """Create a new session row and return its id."""
         with _conn() as con:
             cur = con.execute(
-                """INSERT INTO sessions (student_name, age, gender, school, grade, notes)
-                   VALUES (?,?,?,?,?,?)""",
-                (student_name, age, gender, school, grade, notes),
+                """INSERT INTO sessions (student_name, age, gender, school, grade, notes, coach)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (student_name, age, gender, school, grade, notes, coach),
             )
             return cur.lastrowid
 
@@ -248,10 +278,24 @@ class GoForFitDB:
             row = con.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
             return dict(row) if row else None
 
-    def list_sessions(self) -> list[dict]:
+    def list_sessions(self, coach: str = None) -> list[dict]:
+        """coach=None lists every session; a name scopes to that coach's own."""
+        q = "SELECT * FROM sessions"
+        params = ()
+        if coach is not None:
+            q += " WHERE coach=?"
+            params = (coach,)
+        q += " ORDER BY created_at DESC"
         with _conn() as con:
-            rows = con.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
-            return [dict(r) for r in rows]
+            return [dict(r) for r in con.execute(q, params).fetchall()]
+
+    def list_coaches(self) -> list[str]:
+        """Coach names seen before, for the sign-in screen's pick list."""
+        with _conn() as con:
+            return [r["coach"] for r in con.execute(
+                "SELECT DISTINCT coach FROM sessions WHERE coach IS NOT NULL "
+                "AND TRIM(coach) <> '' ORDER BY coach"
+            )]
 
     # ── BMI ──────────────────────────────────────────────────────────────
 
@@ -439,12 +483,22 @@ class GoForFitDB:
         with _conn() as con:
             return [dict(r) for r in con.execute(q, params).fetchall()]
 
-    def get_all_results(self) -> list[dict]:
-        """Flat view across all tests — useful for dashboards."""
+    def get_all_results(self, coach: str = None) -> list[dict]:
+        """Flat view across all tests — useful for dashboards.
+
+        coach=None means EVERY coach's results, which is what the "show all"
+        toggle asks for. Passing a name scopes to that coach; rows recorded
+        before sign-in existed have coach NULL and belong to nobody, so they
+        only ever appear in the unscoped view.
+        """
+        q = "SELECT * FROM all_results"
+        params = ()
+        if coach is not None:
+            q += " WHERE coach=?"
+            params = (coach,)
+        q += " ORDER BY recorded_at DESC"
         with _conn() as con:
-            return [dict(r) for r in con.execute(
-                "SELECT * FROM all_results ORDER BY recorded_at DESC"
-            ).fetchall()]
+            return [dict(r) for r in con.execute(q, params).fetchall()]
 
     def get_student_summary(self, student_name: str) -> list[dict]:
         """All results for a particular student name."""
