@@ -1,9 +1,11 @@
 """
 GoForFit NEP FMS — FastAPI Launcher  (with DB storage)
 ======================================================
-Each test is an independent OpenCV/MediaPipe script that opens its own window.
-This server acts as a launchpad: it starts them as subprocesses so they run
-exactly as written (no code changes to the originals needed).
+Every test runs IN-PROCESS as a browser-controlled engine, streaming MJPEG
+frames to <img> in screen4 and taking its commands from on-screen buttons.
+The original desktop OpenCV scripts still live in tests/ and are still
+runnable by hand, but the server no longer spawns them: it stopped being a
+subprocess launchpad once the last test moved in-process.
 
 Converted from Flask to FastAPI. Behavior, routes, and JSON response shapes
 are preserved 1:1 with the original app. The Jinja templates (index.html,
@@ -30,7 +32,6 @@ os.environ.setdefault("DISPLAY", "")          # no X11 display → offscreen
 os.environ["QT_QPA_PLATFORM"] = "offscreen"   # Qt backend → offscreen
 os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"  # skip Windows Media Foundation GUI
 
-import subprocess
 import sys
 import csv
 import secrets
@@ -68,12 +69,11 @@ BASE_DIR  = Path(__file__).parent
 TESTS_DIR = BASE_DIR / "tests"
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-# ── Wingspan: browser-controlled live feed (no desktop OpenCV window) ──────
-# Every other test still opens its own OpenCV window via subprocess, as
-# before. Wingspan is the one test that needed several distinct in-test
-# actions (calibrate / measure / snapshot / save) which don't work from a
-# phone with no keyboard, so it now runs in-process and streams MJPEG
-# frames to <img> in screen4 instead, controlled by on-screen buttons.
+# ── Browser-controlled live feeds (no desktop OpenCV window) ──────────────
+# Wingspan went first — it needed several distinct in-test actions
+# (calibrate / measure / snapshot / save) that don't work from a phone with
+# no keyboard. Every other test has since followed, so all nine now run
+# in-process and stream MJPEG frames to <img> in screen4.
 sys.path.insert(0, str(TESTS_DIR))
 
 # These hold the *actual* exception text when an engine module fails to
@@ -120,9 +120,9 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
 # ── Shared-state lock ──────────────────────────────────────────────────────
 # FastAPI runs `def` endpoints in a threadpool and `async def` endpoints on
 # the event loop, and engine worker threads call on_stage callbacks — so the
-# engine globals above, `_running`, `_pending`, and `_launching` are all
-# mutated from genuinely concurrent threads. Every read-check-write of that
-# state must happen under this lock.
+# engine globals above, `_pending`, and `_launching` are all mutated from
+# genuinely concurrent threads. Every read-check-write of that state must
+# happen under this lock.
 #
 # DEADLOCK RULE: engine worker threads call on_stage (which takes this lock)
 # while holding the engine's own `_lock`. Therefore code holding _state_lock
@@ -748,10 +748,6 @@ LARAVEL_SYNC = {
     "run_600m":      {"exerciseType": "Run600m",      "scoreKey": "run600mScore"},
 }
 
-# ── Track running processes ────────────────────────────────────────────────
-_running: dict[str, subprocess.Popen] = {}
-
-
 def _is_running(test_id: str) -> bool:
     with _state_lock:
         return _is_running_locked(test_id)
@@ -760,15 +756,7 @@ def _is_running(test_id: str) -> bool:
 def _is_running_locked(test_id: str) -> bool:
     """Requires _state_lock. Only touches lock-free engine attrs (see rule above)."""
     slot = _ENGINES.get(test_id)
-    if slot is not None and slot.instance is not None:
-        return slot.instance.is_running()
-    proc = _running.get(test_id)
-    if proc is None:
-        return False
-    if proc.poll() is not None:
-        del _running[test_id]
-        return False
-    return True
+    return slot is not None and slot.instance is not None and slot.instance.is_running()
 
 
 def _active_test_id_locked() -> Optional[str]:
@@ -1089,63 +1077,31 @@ def _dispatch_launch(test_id: str, body: dict):
     # spawning the *original* desktop-window script instead, which is exactly
     # the "camera opens in another window, and Laravel never gets synced"
     # bug reports we've gotten — so refuse instead of silently degrading.
-    if cfg.get("live_feed"):
-        is_dual = test_id in ("shuttle_run", "dash_50m", "run_600m")
-        detail = DUAL_FEED_IMPORT_ERROR if is_dual else WEB_ENGINES_IMPORT_ERROR
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": (
-                    f"Live camera engine for '{test_id}' is unavailable "
-                    f"(module failed to import: {detail or 'unknown error — check server console'}). "
-                    "Refusing to fall back to a desktop OpenCV window — fix the "
-                    "dependency shown above and restart the server."
-                ),
-            },
-            status_code=503,
-        )
-
-    script = TESTS_DIR / cfg["script"]
-
-    if not script.exists():
-        return JSONResponse({"ok": False, "error": f"Script not found: {script.name}"}, status_code=500)
-
-    cmd  = [sys.executable, str(script)]
-
-    for param in cfg.get("params", []):
-        value = body.get(param["name"])
-        if value is None or str(value).strip() == "":
-            # Optional params have a default on the other side — omit the flag
-            # rather than refusing the launch. Same rule the engine builders
-            # follow, so screen4's pre-launch check matches both paths.
-            if not param.get("required", True):
-                continue
-            return JSONResponse(
-                {"ok": False, "error": f"Missing required parameter: {param['label']}"},
-                status_code=400,
-            )
-        cmd += [param["arg"], str(value)]
-
-    # Pass session_id to the test script so it can auto-save
-    session_id = body.get("session_id")
-    if session_id is not None:
-        cmd += ["--session-id", str(session_id)]
-
-    try:
-        # These subprocesses open real desktop OpenCV windows the coach types
-        # into — don't let them inherit the server's forced-offscreen env
-        # (see top of file), or the window can't render/receive input and
-        # ends up silently eating keyboard focus.
-        child_env = os.environ.copy()
-        child_env.pop("QT_QPA_PLATFORM", None)
-        proc = subprocess.Popen(cmd, cwd=str(TESTS_DIR), stdin=subprocess.DEVNULL, env=child_env)
-        with _state_lock:
-            _running[test_id] = proc
-            _pending.pop(test_id, None)  # clear any stale unsaved result from a previous run
-        return {"ok": True, "pid": proc.pid}
-    except Exception as exc:
-        _traceback.print_exc()  # str(exc) alone hides the real failure site
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    # Every registered test is live_feed, i.e. served by an in-process engine.
+    # Reaching here means the engine class is None — its module failed to
+    # import. This used to fall through to spawning the ORIGINAL desktop-window
+    # script as a subprocess, which is exactly the "camera opens in another
+    # window and nothing syncs back" bug reports we got, so it refuses instead
+    # of silently degrading.
+    #
+    # The whole subprocess launcher lived below this point and has been
+    # deleted: with no non-live test in the registry it could never execute,
+    # so it was untested surface that read as a working fallback. Bringing a
+    # desktop-window test back means writing that path again deliberately,
+    # with tests — not resurrecting code nobody had run.
+    is_dual = test_id in ("shuttle_run", "dash_50m", "run_600m")
+    detail = DUAL_FEED_IMPORT_ERROR if is_dual else WEB_ENGINES_IMPORT_ERROR
+    return JSONResponse(
+        {
+            "ok": False,
+            "error": (
+                f"Live camera engine for '{test_id}' is unavailable "
+                f"(module failed to import: {detail or 'unknown error — check server console'}). "
+                "Fix the dependency shown above and restart the server."
+            ),
+        },
+        status_code=503,
+    )
 
 
 @app.get("/api/engine-status")
@@ -1186,16 +1142,6 @@ def stop(test_id: str):
         eng = slot.instance if slot is not None else None
     if eng is not None:
         eng.stop()
-        return {"ok": True}
-
-    with _state_lock:
-        proc = _running.pop(test_id, None)
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
     return {"ok": True}
 
 

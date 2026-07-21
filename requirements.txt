@@ -10,6 +10,12 @@ opencv-python>=4.8.0
 mediapipe>=0.10.30
 numpy>=1.24.0
 pandas>=2.0.0
-pyaudio>=0.2.13
+# NOTE: pyaudio was here for tests/sprint_timer.py and tests/50m_dash_mod.py.
+# Neither is reachable — the server runs dash_50m through Dash50mEngine and
+# no longer spawns subprocesses at all — and pyaudio needs portaudio present
+# at the OS level, so it was a routine `pip install` failure for a capability
+# nobody could use. The live engines use sounddevice deliberately (see the
+# WhistleMixin note in tests/dual_feed_engines.py). Running those two legacy
+# scripts by hand now needs a manual `pip install pyaudio`.
 requests>=2.31.0
 sounddevice>=0.4.6
