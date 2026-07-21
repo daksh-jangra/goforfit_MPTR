@@ -581,6 +581,7 @@
             }
 
             async function launchEngine() {
+                if (MISSING_PARAMS.length) return;  // banner already explains why
                 const btn = document.getElementById('engine-btn');
                 btn.disabled = true; btn.innerText = '…';
                 const body = {};
@@ -661,7 +662,54 @@
                 saveAndExit();
             }
 
+            // ── Pre-launch guard: required params must already be in the URL ──
+            // Landing on this screen without them (a bookmarked/hand-typed
+            // /screen4?test=… , or a screen3 form that was skipped) used to
+            // look completely normal until START was pressed, and the 400 it
+            // returned left no way back. Detect it on load instead and point
+            // at screen3, which is where these values are filled in.
+            const MISSING_PARAMS = [];
+            {% for param in test.params if param.get('required', True) %}
+            if (!(urlParams.get({{ param.name|tojson }}) || '').trim()) {
+                MISSING_PARAMS.push({{ param.label|tojson }});
+            }
+            {% endfor %}
+
+            function blockOnMissingParams() {
+                if (!MISSING_PARAMS.length) return;
+
+                const btn = document.getElementById('engine-btn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerText = 'NOT CONFIGURED';
+                    btn.classList.remove('bg-emerald-500', 'active:bg-emerald-700');
+                    btn.classList.add('bg-white/10', 'text-white/40');
+                }
+
+                const placeholder = document.getElementById('ai-feed-placeholder');
+                if (placeholder) {
+                    placeholder.querySelector('span').innerText =
+                        'This test needs to be set up before it can run';
+                }
+
+                const back = new URLSearchParams({ test: testId });
+                if (sessionId) back.set('session_id', sessionId);
+
+                const banner = document.createElement('div');
+                banner.className = 'bg-amber-500/15 border-b border-amber-400/40 ' +
+                                   'text-amber-200 text-xs px-4 py-3 flex flex-col gap-2';
+                const msg = document.createElement('span');
+                msg.innerText = `Not configured — missing: ${MISSING_PARAMS.join(', ')}.`;
+                const link = document.createElement('a');
+                link.href = `/screen3?${back.toString()}`;
+                link.className = 'self-start bg-amber-500 text-black font-bold px-3 py-2 rounded-lg';
+                link.innerText = 'Configure this test first →';
+                banner.append(msg, link);
+                document.body.prepend(banner);
+            }
+
+            blockOnMissingParams();
             if (engineCfg) buildActionRow();
-    </script>
+</script>
   </body>
 </html>

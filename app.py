@@ -536,6 +536,7 @@ TESTS = {
                 "max":         12,
                 "placeholder": "e.g. 4",
                 "arg":         "--touches",
+                "required":    False,  # _build_shuttle_run defaults to 4
             },
         ],
         "timed":  True,
@@ -587,6 +588,7 @@ TESTS = {
                 "max":         9,
                 "placeholder": "e.g. 4",
                 "arg":         "--lanes",
+                "required":    False,  # _build_dash_50m defaults to 4
             },
             {
                 "name":        "lane_width",
@@ -596,6 +598,7 @@ TESTS = {
                 "max":         3,
                 "placeholder": "e.g. 1.22",
                 "arg":         "--lane-width",
+                "required":    False,  # _build_dash_50m defaults to 1.22
             },
         ],
         "timed":  True,
@@ -689,6 +692,7 @@ TESTS = {
                 "placeholder": "e.g. http://192.168.1.74:4747/video or 0",
                 "arg":         "--camera-url",
                 "camera":      True,
+                "required":    False,  # _build_run_600m defaults to index 0
             },
             {
                 "name":        "lane_colors",
@@ -705,6 +709,7 @@ TESTS = {
                 "max":         50,
                 "placeholder": "e.g. 5",
                 "arg":         "--camera-distance-m",
+                "required":    False,  # _build_run_600m defaults to 0.0
             },
         ],
         "timed":  True,
@@ -1069,6 +1074,11 @@ def _dispatch_launch(test_id: str, body: dict):
     for param in cfg.get("params", []):
         value = body.get(param["name"])
         if value is None or str(value).strip() == "":
+            # Optional params have a default on the other side — omit the flag
+            # rather than refusing the launch. Same rule the engine builders
+            # follow, so screen4's pre-launch check matches both paths.
+            if not param.get("required", True):
+                continue
             return JSONResponse(
                 {"ok": False, "error": f"Missing required parameter: {param['label']}"},
                 status_code=400,

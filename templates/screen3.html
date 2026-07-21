@@ -59,7 +59,9 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             {% for param in test.params %}
             <div class="space-y-1.5">
-                <label for="{{ param.name }}" class="block text-sm font-bold text-gray-900">{{ param.label }}</label>
+                <label for="{{ param.name }}" class="block text-sm font-bold text-gray-900">
+                    {{ param.label }}{% if not param.get('required', True) %}<span class="font-normal text-gray-400"> — optional</span>{% endif %}
+                </label>
                 <div class="flex gap-2">
                     <input id="{{ param.name }}" type="{{ param.type }}" min="{{ param.min }}" max="{{ param.max }}" placeholder="{{ param.placeholder }}" class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
                     {% if param.camera %}
@@ -511,9 +513,14 @@
             if(!id) return alert('Select a student first.');
             const student = mockDb[cls].find(s => s.id === id);
 
+            // Only params the launch endpoint actually insists on block the
+            // hand-off — the rest have a server-side default, and demanding
+            // them here contradicts screen4's own pre-launch check.
             {% for param in test.params %}
             const {{ param.name }} = document.getElementById('{{ param.name }}').value.trim();
+            {% if param.get('required', True) %}
             if (!{{ param.name }}) return alert('Enter {{ param.label }}.');
+            {% endif %}
             {% endfor %}
 
             // Auto-create a session for this student
@@ -551,7 +558,7 @@
             });
             if (sessionId) params.set('session_id', sessionId);
             {% for param in test.params %}
-            params.set('{{ param.name }}', {{ param.name }});
+            if ({{ param.name }}) params.set('{{ param.name }}', {{ param.name }});
             {% endfor %}
             window.location.href = `/screen4?${params.toString()}`;
         }
