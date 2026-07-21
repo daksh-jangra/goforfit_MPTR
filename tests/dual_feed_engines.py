@@ -548,7 +548,10 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         self.reverse_lanes = False
         self._finish_strip = None       # (x1, x2) set via calib_click, like calibrate_finish_strip()
         self._calib_points = []
+        # One per camera: the two point at different scenes, so a single
+        # shared model would learn a blend of both as "background".
         self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=30, detectShadows=False)
+        self._bg_overhead = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=30, detectShadows=False)
 
     def _load_models(self):
         self._start_whistle_listener()
@@ -568,6 +571,21 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
             return self.num_lanes - column_idx0
         return column_idx0 + 1
 
+    def _column_bounds(self, column_idx0, width):
+        """[x0, x1) of the idx-th overhead column.
+
+        Rounded from the exact fraction rather than a fixed integer stride, so
+        the columns tile the full frame whatever the lane count: 960px over 7
+        lanes is 137.1px each, and a fixed stride leaves a 6px strip on the
+        right belonging to no lane. This also replaces a reshape() that
+        required width to divide evenly — with lanes=7 or 9 (both offered by
+        the setup form) it raised inside the run loop and killed the test
+        mid-race, after the runners had already gone.
+        """
+        x0 = round(column_idx0 * width / self.num_lanes)
+        x1 = round((column_idx0 + 1) * width / self.num_lanes)
+        return x0, x1
+
     def _process_pair(self, frame_a, frame_b):
         # frame_a = finish camera: motion crossing a calibrated vertical
         # strip = a finish event. frame_b = overhead camera: divide frame
@@ -586,21 +604,29 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         # Label the overhead columns so lane identity is verifiable before a
         # timed run instead of after the times come out attached to the wrong
         # runners.
-        col_w = frame_b.shape[1] / self.num_lanes
         for idx0 in range(self.num_lanes):
-            x = int(idx0 * col_w)
-            cv2.line(frame_b, (x, 0), (x, frame_b.shape[0]), (255, 255, 0), 1)
-            cv2.putText(frame_b, f"L{self._lane_for_column(idx0)}", (x + 5, 25),
+            x0, _ = self._column_bounds(idx0, frame_b.shape[1])
+            cv2.line(frame_b, (x0, 0), (x0, frame_b.shape[0]), (255, 255, 0), 1)
+            cv2.putText(frame_b, f"L{self._lane_for_column(idx0)}", (x0 + 5, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
+        # Feed BOTH models every frame, before the whistle and regardless of
+        # whether the mask gets used. A background subtractor only knows what
+        # it has been shown: the overhead model used to be applied solely
+        # inside the motion branch below, so the very first frame it ever saw
+        # was the one being asked about — it reported the whole frame as
+        # foreground and the lane pick collapsed to whichever column argmax
+        # tried first, every single time.
+        mask_a = self._bg_subtractor.apply(frame_a)
+        mask_b = self._bg_overhead.apply(frame_b)
+
         if self.start_t is not None:
-            mask = self._bg_subtractor.apply(frame_a)
-            strip_mask = mask[:, x1:x2]
-            motion_px = int(np.count_nonzero(strip_mask))
+            motion_px = int(np.count_nonzero(mask_a[:, x1:x2]))
             if motion_px > 400:  # tune to track lighting — a runner's body crossing the strip
                 # Identify which lane via the overhead camera's horizontal split
-                fg_b = self._bg_subtractor.apply(frame_b)
-                cols = fg_b.reshape(fg_b.shape[0], self.num_lanes, -1).sum(axis=(0, 2))
+                width = mask_b.shape[1]
+                cols = [int(mask_b[:, x0:x1].sum())
+                        for x0, x1 in (self._column_bounds(i, width) for i in range(self.num_lanes))]
                 lane = self._lane_for_column(int(np.argmax(cols)))
                 if self.lane_times.get(lane) is None:
                     self.lane_times[lane] = time.time() - self.start_t

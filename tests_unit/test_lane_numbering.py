@@ -121,6 +121,61 @@ def test_desktop_calibration_exposes_the_same_mapping():
     assert [calib.lane_number_for_column(i) for i in range(4)] == [4, 3, 2, 1]
 
 
+@pytest.mark.parametrize("lanes", [1, 2, 4, 5, 7, 9])
+def test_dash50m_columns_tile_the_frame_for_any_lane_count(fake_camera, lanes):
+    """960px does not divide by 7 or 9 — both offered by the setup form. The
+    old reshape() raised inside the run loop, killing the test mid-race."""
+    from dual_feed_engines import Dash50mEngine
+
+    eng = Dash50mEngine("0", "1", lanes=lanes)
+    width = 960
+    bounds = [eng._column_bounds(i, width) for i in range(lanes)]
+
+    assert bounds[0][0] == 0, "first column must start at the frame edge"
+    assert bounds[-1][1] == width, "last column must reach the frame edge"
+    for (_, prev_end), (next_start, _) in zip(bounds, bounds[1:]):
+        assert prev_end == next_start, "columns must not gap or overlap"
+    assert all(x1 > x0 for x0, x1 in bounds), "every lane needs a non-empty column"
+
+
+@pytest.mark.parametrize("lanes,runner_col", [(4, 0), (4, 3), (7, 0), (7, 3), (7, 6), (9, 8)])
+def test_dash50m_attributes_the_finish_to_the_right_lane(fake_camera, lanes, runner_col):
+    """End-to-end through _process_pair: warm the background up, whistle,
+    then put a runner in one overhead column and check the time lands on
+    that lane. Catches both the reshape crash and the uninitialised overhead
+    model, which silently pinned every finish to whichever column argmax
+    reached first."""
+    import numpy as np
+    from dual_feed_engines import Dash50mEngine
+
+    h, w = 540, 960
+    eng = Dash50mEngine("0", "1", lanes=lanes)
+    eng._finish_strip = (400, 560)
+
+    blank = lambda: np.zeros((h, w, 3), np.uint8)
+    for _ in range(30):  # background learns an empty track, pre-whistle
+        eng._process_pair(blank(), blank())
+    eng._on_whistle()
+
+    finish, overhead = blank(), blank()
+    finish[:, 400:560] = 255                                  # body crosses the strip
+    x0, x1 = eng._column_bounds(runner_col, w)
+    overhead[:, x0:x1] = 255                                  # ...in this lane
+    eng._process_pair(finish, overhead)
+
+    timed = sorted(lane for lane, t in eng.lane_times.items() if t is not None)
+    assert timed == [eng._lane_for_column(runner_col)]
+
+
+def test_dash50m_uses_a_separate_subtractor_per_camera(fake_camera):
+    """The finish and overhead cameras see different scenes; one shared
+    background model learns a blend of both and neither mask means anything."""
+    from dual_feed_engines import Dash50mEngine
+
+    eng = Dash50mEngine("0", "1", lanes=4)
+    assert eng._bg_subtractor is not eng._bg_overhead
+
+
 def test_dash50m_lane_labels_follow_the_flip(fake_camera):
     """dash_50m has one overhead camera, so nothing can infer the right
     order — but the flip must relabel columns consistently."""
