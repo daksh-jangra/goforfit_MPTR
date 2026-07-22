@@ -132,6 +132,9 @@
 
     <script>
             const testId = {{ test.id|tojson }};
+            // Where STOP/SAVE posts the result. Injected from app.py
+            // (GOFORFIT_PARENT_ORIGIN); postMessage delivers only to this origin.
+            const LARAVEL_PARENT_ORIGIN = {{ parent_origin|tojson }};
             const urlParams = new URLSearchParams(window.location.search);
             let runActive = false, engineStart = null;
             const sessionId = urlParams.get('session_id') ? parseInt(urlParams.get('session_id')) : null;
@@ -662,7 +665,7 @@
                         testId,
                         sessionId,
                         ...fields,
-                    }, 'https://nep.goforfit.in');
+                    }, LARAVEL_PARENT_ORIGIN);
                 } else if (fields && !window.opener) {
                     console.warn('No window.opener — page not opened by Laravel, skipping sync.');
                 } else if (!fields) {

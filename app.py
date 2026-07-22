@@ -779,6 +779,14 @@ TESTS = {
 # labels the Laravel parent window expects in the postMessage payload. Only
 # "wingspan" has been confirmed against Bhawani's sample code — confirm the
 # rest with the integration owner before relying on them.
+# Where results are posted back to on Save. The app is opened as a popup from
+# the Laravel dashboard, and postMessage's second argument locks delivery to
+# exactly this origin — a message to any other window is silently dropped.
+# Configurable because it was hardcoded in two templates, which meant the
+# integration could only ever run against production: no staging, no local
+# test. Override for testing:  GOFORFIT_PARENT_ORIGIN=http://localhost:5001
+PARENT_ORIGIN = os.environ.get("GOFORFIT_PARENT_ORIGIN", "https://nep.goforfit.in")
+
 LARAVEL_SYNC = {
     "bmi":           {"exerciseType": "BMI",          "scoreKey": "bmiScore"},
     "wingspan":      {"exerciseType": "Wingspan",     "scoreKey": "wingspanScore"},   # confirmed
@@ -1054,7 +1062,7 @@ def screen3(request: Request, test: Optional[str] = None):
     test_cfg = TESTS.get(test_id, TESTS["wall_toss"])
     return templates.TemplateResponse(
         request, "screen3.html",
-        {"test": test_cfg, "sync_map": LARAVEL_SYNC},
+        {"test": test_cfg, "sync_map": LARAVEL_SYNC, "parent_origin": PARENT_ORIGIN},
     )
 
 
@@ -1067,8 +1075,18 @@ def screen4(request: Request, test: Optional[str] = None):
     engine_feeds = {tid: list(slot.feeds) for tid, slot in _ENGINES.items()}
     return templates.TemplateResponse(
         request, "screen4.html",
-        {"test": test_cfg, "engine_feeds": engine_feeds},
+        {"test": test_cfg, "engine_feeds": engine_feeds, "parent_origin": PARENT_ORIGIN},
     )
+
+
+if os.environ.get("GOFORFIT_DEV") == "1":
+    # A local stand-in for the Laravel dashboard, for proving the postMessage
+    # handoff without their server. Behind a flag so it never ships to
+    # production — it is a test rig, not a feature.
+    @app.get("/dev/parent")
+    def dev_parent(request: Request):
+        return templates.TemplateResponse(
+            request, "dev_parent_sim.html", {"parent_origin": PARENT_ORIGIN})
 
 
 @app.get("/results", name="results")

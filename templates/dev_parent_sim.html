@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Laravel parent — sync test harness</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-6 font-mono text-sm">
+    <div class="max-w-3xl mx-auto space-y-5">
+
+      <div class="bg-white rounded-2xl shadow p-6 space-y-3">
+        <h1 class="text-lg font-bold text-gray-900">Laravel parent — sync test harness</h1>
+        <p class="text-gray-600 leading-6">
+          This page stands in for the <b>nep.goforfit.in</b> dashboard. It opens
+          the GoForFit app as a popup — so the app's <code>window.opener</code>
+          points here — and logs every <code>postMessage</code> it receives.
+          Run a test in the popup and press <b>STOP / SAVE</b>: the result should
+          appear below.
+        </p>
+        <div class="text-xs text-gray-500 bg-gray-50 rounded p-3 space-y-1">
+          <div>This window's origin: <b id="my-origin"></b></div>
+          <div>App expects to post to: <b id="expected">{{ parent_origin }}</b></div>
+          <div id="origin-warn" class="text-rose-600 hidden">
+            ⚠ These don't match — the app will post to a different origin and this
+            page will receive nothing. Start the server with
+            <code>GOFORFIT_PARENT_ORIGIN=&lt;this origin&gt;</code>.
+          </div>
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <input id="test-id" value="wingspan"
+                 class="border border-gray-300 rounded px-3 py-2 w-40" />
+          <button onclick="openApp()"
+                  class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg">
+            Open the app popup
+          </button>
+          <button onclick="clearLog()"
+                  class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg">
+            Clear log
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow p-6 space-y-2">
+        <h2 class="font-bold text-gray-900">Messages received
+          <span id="count" class="text-gray-400 font-normal">(0)</span></h2>
+        <div id="log" class="space-y-2">
+          <p class="text-gray-400">Nothing yet. Open the popup and finish a test.</p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const EXPECTED = {{ parent_origin|tojson }};
+      document.getElementById('my-origin').textContent = window.location.origin;
+      if (EXPECTED !== window.location.origin && EXPECTED !== '*') {
+        document.getElementById('origin-warn').classList.remove('hidden');
+      }
+
+      let popup = null;
+      function openApp() {
+        const id = document.getElementById('test-id').value.trim() || 'wingspan';
+        // A named popup window — window.opener in the app points back here.
+        popup = window.open(`/screen3?test=${encodeURIComponent(id)}`, 'gfapp',
+                            'width=460,height=900');
+      }
+
+      let n = 0;
+      function clearLog() {
+        n = 0;
+        document.getElementById('count').textContent = '(0)';
+        document.getElementById('log').innerHTML =
+          '<p class="text-gray-400">Cleared.</p>';
+      }
+
+      // The whole point: log what arrives, and from WHERE. A real integration
+      // must check event.origin before trusting a message — so we show it, and
+      // flag anything that isn't the origin we expect.
+      window.addEventListener('message', (e) => {
+        // Ignore chatter from tooling / extensions — only care about ours.
+        if (!e.data || e.data.type !== 'AI_SYNC_DATA') return;
+
+        n++;
+        document.getElementById('count').textContent = `(${n})`;
+        const trusted = e.origin === EXPECTED;
+        const card = document.createElement('div');
+        card.className = 'rounded-lg p-3 border ' +
+          (trusted ? 'border-emerald-300 bg-emerald-50' : 'border-rose-300 bg-rose-50');
+        card.innerHTML =
+          `<div class="text-xs mb-1 ${trusted ? 'text-emerald-700' : 'text-rose-700'}">` +
+          `from ${e.origin} ${trusted ? '✓ trusted' : '✗ UNEXPECTED ORIGIN'}</div>` +
+          `<pre class="text-xs whitespace-pre-wrap">${
+             JSON.stringify(e.data, null, 2)}</pre>`;
+        const log = document.getElementById('log');
+        if (n === 1) log.innerHTML = '';
+        log.prepend(card);
+      });
+    </script>
+  </body>
+</html>

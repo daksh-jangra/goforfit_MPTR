@@ -370,7 +370,9 @@
         // nep.goforfit.in. Once a result is confirmed saved to our own DB,
         // we also hand the score back to that parent window via postMessage
         // so Laravel can sync it immediately, then close this popup.
-        const LARAVEL_PARENT_ORIGIN = "https://nep.goforfit.in";
+        // Injected from app.py (GOFORFIT_PARENT_ORIGIN) — one source of truth,
+        // and settable for local/staging testing.
+        const LARAVEL_PARENT_ORIGIN = {{ parent_origin|tojson }};
         // Maps our internal testId -> the exerciseType string + score field
         // name Laravel expects. Only "wingspan" has been confirmed against
         // Bhawani's sample code — confirm the rest with him before relying
