@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Take Fitness Assessment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#f8fafc] text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm">
+        <div class="flex items-center space-x-2">
+            <span class="text-xl font-bold text-blue-600">fitness<span class="text-green-500">365</span></span>
+            <span class="text-xs text-gray-400 border-l pl-2 border-gray-300">Active Schools. Active Communities.</span>
+        </div>
+        <div class="flex items-center space-x-1 font-semibold text-indigo-900 text-sm">
+            <span>go</span><span class="text-orange-500">for</span><span>fit</span>
+        </div>
+        <a href="/results" class="text-sm font-semibold text-indigo-700 hover:text-orange-500 transition border border-indigo-200 rounded px-3 py-1 hover:border-orange-400">📊 Results</a>
+        <div class="flex items-center space-x-2 text-sm text-gray-600">
+            <span>Hareram Singh</span>
+            <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-500">
+                <i class="fa-solid fa-user"></i>
+            </div>
+            <i class="fa-solid fa-caret-down text-gray-400 text-xs"></i>
+        </div>
+    </header>
+
+    <main class="flex-grow p-6 max-w-7xl mx-auto w-full space-y-6">
+        <div class="flex justify-between items-center gap-4 flex-wrap">
+            <div class="flex items-center space-x-3">
+                <button type="button" class="w-8 h-8 rounded-full border border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-50 transition">
+                    <i class="fa-solid fa-arrow-left text-sm"></i>
+                </button>
+                <h1 class="text-lg font-bold text-indigo-950 tracking-wide uppercase">Take Fitness Assessment</h1>
+            </div>
+            <div class="flex items-center space-x-3">
+                <select class="border border-orange-400 text-orange-600 rounded px-3 py-1 text-xs bg-white font-medium focus:outline-none">
+                    <option>2026-2027 | Full-Term</option>
+                </select>
+                <div class="inline-flex rounded text-xs overflow-hidden border border-orange-500">
+                    <button class="bg-white text-orange-500 px-3 py-1 font-medium">All</button>
+                    <button class="bg-orange-500 text-white px-3 py-1 font-medium">Incomplete</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <div class="bg-white rounded shadow-sm border border-gray-100 overflow-hidden">
+                <div class="bg-indigo-950 text-white px-4 py-2.5 text-xs font-semibold tracking-wide">
+                    Development Skills for Age 5-8 (Class 1-3)
+                </div>
+                <div class="divide-y divide-gray-100">
+                    <a href="{{ url_for('screen2', category='All Tests') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>All Computer Vision Fitness Tests</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Anthropometry') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Anthropometry</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Coordination') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Coordination</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                </div>
+            </div>
+
+            <div class="bg-white rounded shadow-sm border border-gray-100 overflow-hidden">
+                <div class="bg-indigo-950 text-white px-4 py-2.5 text-xs font-semibold tracking-wide">
+                    Physical Fitness Assessment for Age 5-8 (Class 1-3)
+                </div>
+                <div class="divide-y divide-gray-100">
+                    <a href="{{ url_for('screen2', category='Flexibility') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Flexibility</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Coordination') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span class="font-medium text-indigo-900">Hand Eye Coordination</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Anthropometry') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Body Composition</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                </div>
+            </div>
+
+            <div class="bg-white rounded shadow-sm border border-gray-100 overflow-hidden">
+                <div class="bg-indigo-950 text-white px-4 py-2.5 text-xs font-semibold tracking-wide">
+                    Physical Fitness Assessment for Age 9-18 (Class 4-12)
+                </div>
+                <div class="divide-y divide-gray-100">
+                    <a href="{{ url_for('screen2', category='Speed') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Speed</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Muscular Endurance') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Abdominal/Core Strength</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                    <a href="{{ url_for('screen2', category='Agility') }}" class="p-4 flex justify-between items-center text-sm text-gray-700 hover:bg-gray-50">
+                        <span>Agility</span>
+                        <i class="fa-solid fa-arrow-right text-indigo-900 text-xs"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

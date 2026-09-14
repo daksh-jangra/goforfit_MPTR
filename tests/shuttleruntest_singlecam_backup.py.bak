@@ -1,0 +1,569 @@
+"""
+4×10 m Shuttle Run Timer — Sideline Camera Edition
+===================================================
+Identical behaviour to the original, but uses the modern
+MediaPipe Tasks API (mediapipe.tasks) instead of the deprecated
+mp.solutions.pose interface.
+
+Dependencies
+------------
+    pip install mediapipe opencv-python numpy
+
+Model file (downloaded automatically on first run if absent):
+    pose_landmarker_full.task   — from the MediaPipe model hub
+
+WHY THE DISTANCE MATTERS
+─────────────────────────
+Camera sits OUTSIDE the track at the sideline, at the 5 m midpoint.
+See original docstring geometry for full derivation.
+
+Recommended camera distance from the NEAR LANE EDGE:
+  • Minimum : 7 m
+  • Optimal  : 9 m  ← default
+  • Maximum  : 12 m
+
+Camera height: 1.5 m   Camera tilt: ~17° downward
+
+Controls
+--------
+  Mouse click → place cone (setup mode)
+  SPACE       → start timing
+  R           → reset
+  S           → save CSV
+  + / -       → adjust FOV ±5°
+  Q / ESC     → quit
+"""
+
+import os
+import sys
+import urllib.request
+import cv2
+import numpy as np
+import time
+import csv
+from datetime import datetime
+
+# ── MediaPipe Tasks ────────────────────────────────────────────────────────────
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions
+from mediapipe.tasks.python.components.containers import landmark as mp_landmark
+
+# ── Landmark indices (mirroring the old PoseLandmark enum values) ─────────────
+# These are fixed indices in the MediaPipe 33-landmark pose model.
+_LM_LEFT_WRIST  = 15
+_LM_RIGHT_WRIST = 16
+_LM_LEFT_ANKLE  = 27
+_LM_RIGHT_ANKLE = 28
+_LM_LEFT_HIP    = 23
+_LM_RIGHT_HIP   = 24
+
+EXTREMITY_INDICES = [_LM_LEFT_WRIST, _LM_RIGHT_WRIST,
+                     _LM_LEFT_ANKLE, _LM_RIGHT_ANKLE]
+EXTREMITY_LABELS  = ["LH", "RH", "LF", "RF"]
+
+# ── Model setup ───────────────────────────────────────────────────────────────
+MODEL_URL  = ("https://storage.googleapis.com/mediapipe-models/"
+              "pose_landmarker/pose_landmarker_full/float16/1/"
+              "pose_landmarker_full.task")
+MODEL_PATH = "pose_landmarker_full.task"
+
+def _ensure_model():
+    if not os.path.exists(MODEL_PATH):
+        print(f"[MODEL] Downloading pose model to {MODEL_PATH} …")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        print("[MODEL] Download complete.")
+
+# ── Physical constants ─────────────────────────────────────────────────────────
+NUM_STUDENTS       = 4
+SHUTTLE_LAPS       = 4
+LANE_WIDTH_M       = 1.25
+CAMERA_HEIGHT_M    = 1.5
+CAMERA_TILT_DEG    = 17.0
+CAMERA_TO_NEAR_LANE_M = 9.0   # ← change to match your tape measurement
+DEFAULT_HFOV_DEG   = 70.0
+TOUCH_RADIUS_M     = 0.45
+VISIBILITY_THRESH  = 0.4
+
+STUDENT_COLORS = [
+    (0,   200, 255),
+    (50,  255, 50),
+    (255, 100, 50),
+    (200,  50, 255),
+]
+STUDENT_LABELS = ["S1", "S2", "S3", "S4"]
+
+# ── Utility ────────────────────────────────────────────────────────────────────
+
+def deg2rad(d):
+    return d * np.pi / 180.0
+
+def lane_distance(i):
+    return CAMERA_TO_NEAR_LANE_M + (i + 0.5) * LANE_WIDTH_M
+
+def hfov_to_px_per_m(frame_w, hfov_deg, distance_m):
+    fov_rad    = deg2rad(hfov_deg)
+    real_width = 2 * distance_m * np.tan(fov_rad / 2)
+    return frame_w / real_width
+
+def recommended_camera_distance(num_lanes, lane_w, hfov_deg, margin_m=0.5):
+    total_width = num_lanes * lane_w + margin_m
+    return total_width / (2 * np.tan(deg2rad(hfov_deg / 2)))
+
+
+# ── State classes ──────────────────────────────────────────────────────────────
+
+class Cone:
+    def __init__(self, px, py):
+        self.px = int(px)
+        self.py = int(py)
+
+    def draw(self, frame, color, radius_px, label=""):
+        cv2.circle(frame, (self.px, self.py), 10, color, -1)
+        cv2.circle(frame, (self.px, self.py), radius_px, color, 1)
+        if label:
+            cv2.putText(frame, label, (self.px + 12, self.py + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+
+class Student:
+    def __init__(self, idx):
+        self.idx         = idx
+        self.label       = STUDENT_LABELS[idx]
+        self.color       = STUDENT_COLORS[idx]
+        self.cones       = []
+        self.active      = False
+        self.laps        = 0
+        self.start_time  = None
+        self.finish_time = None
+        self.last_at     = None
+        self.cooldown    = 0.0
+        self.extremities = [None] * 4
+        self.px_per_m    = None
+
+    @property
+    def finished(self):
+        return self.laps >= SHUTTLE_LAPS
+
+    def elapsed(self):
+        if self.start_time is None:
+            return 0.0
+        end = self.finish_time if self.finish_time else time.time()
+        return end - self.start_time
+
+    def check_touch(self):
+        if len(self.cones) < 2 or self.px_per_m is None:
+            return None
+        now = time.time()
+        if now < self.cooldown:
+            return None
+        r_px = max(int(self.px_per_m * TOUCH_RADIUS_M), 20)
+        for ci, cone in enumerate(self.cones):
+            for pt in self.extremities:
+                if pt is None:
+                    continue
+                dx = pt[0] - cone.px
+                dy = pt[1] - cone.py
+                if np.sqrt(dx * dx + dy * dy) < r_px:
+                    if self.last_at != ci:
+                        return ci
+        return None
+
+    def record_touch(self, ci):
+        now = time.time()
+        if self.start_time is None:
+            self.start_time = now
+            self.active     = True
+        self.last_at  = ci
+        self.laps    += 1
+        self.cooldown = now + 0.8
+        if self.laps >= SHUTTLE_LAPS and self.finish_time is None:
+            self.finish_time = now
+            self.active      = False
+
+    def draw_extremities(self, frame):
+        for i, pt in enumerate(self.extremities):
+            if pt is None:
+                continue
+            x, y = pt
+            if i < 2:   # hand → square
+                s = 7
+                cv2.rectangle(frame, (x - s, y - s), (x + s, y + s), self.color, -1)
+                cv2.rectangle(frame, (x - s, y - s), (x + s, y + s), (255, 255, 255), 1)
+            else:        # foot → triangle
+                pts = np.array([[x, y - 9], [x - 7, y + 5], [x + 7, y + 5]], np.int32)
+                cv2.fillPoly(frame, [pts], self.color)
+                cv2.polylines(frame, [pts], True, (255, 255, 255), 1)
+
+
+# ── Main application ───────────────────────────────────────────────────────────
+
+def _autosave_shuttle_run(session_id, students):
+    """Stages each student's result on the server for human review/save on
+    screen3 — does NOT write to the database directly."""
+    try:
+        import requests
+        laps = [
+            {"lane": s.idx + 1, "time_sec": round(s.elapsed(), 3)}
+            for s in students if s.finish_time is not None
+        ]
+        requests.post(
+            "http://localhost:5000/api/stage/shuttle_run",
+            json={"session_id": session_id, "laps": laps},
+            timeout=2,
+        )
+        print(f"  [DB] shuttle_run staged for review  session={session_id}")
+    except Exception as e:
+        print(f"  [DB] Stage failed: {e}")
+
+
+class ShuttleRunApp:
+    def __init__(self):
+        self.frame_w  = 0
+        self.frame_h  = 0
+        self.hfov_deg = DEFAULT_HFOV_DEG
+
+        self.students   = [Student(i) for i in range(NUM_STUDENTS)]
+        self.setup_mode = True
+        self.setup_step = 0
+
+        self.cap      = None
+        self.landmarker = None   # PoseLandmarker (Tasks API)
+
+        self.calibrated              = False
+        self.calibration_px_per_m    = None
+
+        self._init_default_scales()
+
+    # ── Scales ────────────────────────────────────────────────────────────────
+
+    def _init_default_scales(self):
+        for i, s in enumerate(self.students):
+            d = lane_distance(i)
+            s.px_per_m = hfov_to_px_per_m(1280, self.hfov_deg, d)
+
+    def _calibrate_from_s1(self):
+        s0 = self.students[0]
+        D0 = lane_distance(0)
+        self.calibration_px_per_m = s0.px_per_m
+        for i in range(1, NUM_STUDENTS):
+            Di = lane_distance(i)
+            self.students[i].px_per_m = self.calibration_px_per_m * (D0 / Di)
+        self.calibrated = True
+        print(f"\n[CALIBRATION] S1 finished in {s0.elapsed():.2f}s")
+        for i in range(NUM_STUDENTS):
+            print(f"  Lane {i + 1}: D={lane_distance(i):.2f}m  "
+                  f"px/m={self.students[i].px_per_m:.1f}")
+
+    def _refresh_scales(self):
+        for i, s in enumerate(self.students):
+            if not self.calibrated or i == 0:
+                d = lane_distance(i)
+                s.px_per_m = hfov_to_px_per_m(self.frame_w or 1280,
+                                               self.hfov_deg, d)
+        if self.calibrated:
+            D0 = lane_distance(0)
+            for i in range(1, NUM_STUDENTS):
+                Di = lane_distance(i)
+                self.students[i].px_per_m = (self.students[0].px_per_m * D0 / Di)
+
+    # ── Setup ─────────────────────────────────────────────────────────────────
+
+    def _setup_lines(self):
+        if self.setup_step < NUM_STUDENTS * 2:
+            si   = self.setup_step // 2
+            side = "START cone" if self.setup_step % 2 == 0 else "FAR cone"
+            return [
+                f"SETUP  Click → {side} for {STUDENT_LABELS[si]}",
+                f"  ({self.setup_step + 1} / {NUM_STUDENTS * 2} cones total)",
+                f"  Nearest lane (S1) is calibration reference",
+            ]
+        return ["All cones placed.  Press SPACE to begin timing."]
+
+    # ── HUD ───────────────────────────────────────────────────────────────────
+
+    def _draw_hud(self, frame):
+        h, w = frame.shape[:2]
+        ov = frame.copy()
+        cv2.rectangle(ov, (0, 0), (w, 38), (0, 0, 0), -1)
+        cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
+
+        mode = ("SETUP" if self.setup_mode
+                else ("CALIBRATED" if self.calibrated
+                      else "TIMING — awaiting S1 finish"))
+        cv2.putText(frame, mode, (10, 26),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.75, (255, 255, 255), 2)
+
+        if self.setup_mode:
+            for j, txt in enumerate(self._setup_lines()):
+                cv2.putText(frame, txt, (10, 58 + j * 24),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+        else:
+            y = 52
+            for s in self.students:
+                cal_tag = "" if (self.calibrated or s.idx == 0) else " [est]"
+                status  = ("DONE" if s.finished
+                           else (f"LAP {s.laps}/{SHUTTLE_LAPS}" if s.active
+                                 else "READY"))
+                line = f"{s.label}: {status}  {s.elapsed():.2f}s{cal_tag}"
+                cv2.putText(frame, line, (10, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, s.color, 2)
+                y += 26
+            if self.calibrated:
+                cv2.putText(frame, "Depth-calibrated from S1",
+                            (10, y + 4), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45, (180, 255, 180), 1)
+
+        for s in self.students:
+            r = max(int(s.px_per_m * TOUCH_RADIUS_M), 20) if s.px_per_m else 30
+            for ci, cone in enumerate(s.cones):
+                cone.draw(frame, s.color, r,
+                          f"{s.label}-{'A' if ci == 0 else 'B'}")
+
+        d_min = recommended_camera_distance(NUM_STUDENTS, LANE_WIDTH_M, self.hfov_deg)
+        info  = (f"FOV:{self.hfov_deg:.0f}°  "
+                 f"Cam→lane0:{CAMERA_TO_NEAR_LANE_M}m  "
+                 f"Min dist:{d_min:.1f}m  "
+                 f"| ■=hand ▲=foot")
+        cv2.putText(frame, info, (10, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+
+    # ── Mouse ─────────────────────────────────────────────────────────────────
+
+    def on_mouse(self, event, x, y, flags, param):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        if not self.setup_mode or self.setup_step >= NUM_STUDENTS * 2:
+            return
+        si   = self.setup_step // 2
+        cone = Cone(x, y)
+        self.students[si].cones.append(cone)
+        tag  = "A (start)" if self.setup_step % 2 == 0 else "B (far)"
+        print(f"[SETUP] {STUDENT_LABELS[si]} cone {tag} → ({x},{y})")
+        self.setup_step += 1
+
+    # ── Detection (Tasks API — no mp.solutions) ────────────────────────────────
+
+    def _lane_x_bounds(self):
+        bounds = []
+        for s in self.students:
+            if s.cones:
+                bounds.append(int(np.mean([c.px for c in s.cones])))
+            else:
+                bounds.append(None)
+        if sum(1 for v in bounds if v is not None) < 2:
+            w     = self.frame_w or 1280
+            strip = w // NUM_STUDENTS
+            bounds = [strip // 2 + i * strip for i in range(NUM_STUDENTS)]
+        return bounds
+
+    def detect_extremities(self, frame):
+        """
+        Run PoseLandmarker (Tasks API) on the full frame.
+        Returns a list of 4 extremity-lists (one per student lane).
+
+        The Tasks API returns results via a callback registered at
+        landmarker creation time.  For a VIDEO-mode landmarker we call
+        detect_for_video() and get results synchronously.
+        """
+        h, w  = frame.shape[:2]
+        all_ext = [[None] * 4 for _ in range(NUM_STUDENTS)]
+
+        # Convert BGR→RGB and wrap in MediaPipe Image
+        rgb        = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image   = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int(time.time() * 1000)
+
+        result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
+
+        if not result.pose_landmarks:
+            return all_ext
+
+        # Tasks API: result.pose_landmarks is a list-of-lists
+        # (one inner list of NormalizedLandmark per detected person).
+        # We use only the first detected person (single-pose model).
+        landmarks = result.pose_landmarks[0]   # list of NormalizedLandmark
+
+        # Assign to lane via mid-hip x position
+        lh_x = landmarks[_LM_LEFT_HIP].x
+        rh_x = landmarks[_LM_RIGHT_HIP].x
+        hip_x = int(((lh_x + rh_x) / 2) * w)
+
+        lane_centres = self._lane_x_bounds()
+        dists        = [abs(hip_x - cx) for cx in lane_centres]
+        target       = int(np.argmin(dists))
+
+        for j, lm_idx in enumerate(EXTREMITY_INDICES):
+            lm = landmarks[lm_idx]
+            # NormalizedLandmark has .x, .y, .z, .visibility (Tasks API ≥0.10)
+            vis = getattr(lm, 'visibility', 1.0)
+            if vis > VISIBILITY_THRESH:
+                px = int(lm.x * w)
+                py = int(lm.y * h)
+                all_ext[target][j] = (px, py)
+
+        return all_ext
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+
+    def save_results(self):
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = f"shuttle_results_{ts}.csv"
+        with open(path, "w", newline="") as f:
+            wr = csv.writer(f)
+            wr.writerow(["Student", "Lane_dist_m", "Laps", "Time_sec",
+                         "px_per_m", "Calibrated",
+                         "Cone_A", "Cone_B",
+                         "FOV_deg", "Cam_to_near_lane_m", "Lane_width_m"])
+            for s in self.students:
+                ca = s.cones[0] if len(s.cones) > 0 else None
+                cb = s.cones[1] if len(s.cones) > 1 else None
+                wr.writerow([
+                    s.label,
+                    f"{lane_distance(s.idx):.2f}",
+                    s.laps,
+                    f"{s.elapsed():.3f}",
+                    f"{s.px_per_m:.2f}" if s.px_per_m else "",
+                    "yes" if (self.calibrated or s.idx == 0) else "no (default)",
+                    f"({ca.px},{ca.py})" if ca else "",
+                    f"({cb.px},{cb.py})" if cb else "",
+                    self.hfov_deg,
+                    CAMERA_TO_NEAR_LANE_M,
+                    LANE_WIDTH_M,
+                ])
+        print(f"\n✅  Results saved → {path}")
+        return path
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+
+    def run(self):
+        print("=" * 64)
+        print("  4×10 m SHUTTLE RUN TIMER — Sideline Camera Edition")
+        print("  (MediaPipe Tasks API — no mp.solutions)")
+        print("=" * 64)
+
+        _ensure_model()
+
+        # Build PoseLandmarker using the Tasks API
+        base_opts  = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
+        lm_options = PoseLandmarkerOptions(
+            base_options=base_opts,
+            running_mode=mp_vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = PoseLandmarker.create_from_options(lm_options)
+
+        # ── Session ID for DB auto-save ──────────────────────────────────────────
+        import sys as _sys, os as _os
+        _session_id = None
+        for _i, _a in enumerate(_sys.argv[1:], 1):
+            if _a == "--session-id" and _i + 1 < len(_sys.argv):
+                try: _session_id = int(_sys.argv[_i + 1])
+                except ValueError: pass
+        if _session_id is None:
+            try: _session_id = int(_os.environ.get("SESSION_ID", ""))
+            except (ValueError, TypeError): pass
+
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        ret, frame = self.cap.read()
+        if not ret:
+            print("❌  Cannot open camera")
+            self.landmarker.close()
+            return
+
+        self.frame_h, self.frame_w = frame.shape[:2]
+        self._refresh_scales()
+
+        cv2.namedWindow("Shuttle Run Timer", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("Shuttle Run Timer", self.on_mouse)
+
+        s1_calibration_done = False
+        all_done_notified   = False
+
+        while True:
+            ret, frame = self.cap.read()
+            if not ret:
+                break
+
+            if not self.setup_mode:
+                all_ext = self.detect_extremities(frame)
+
+                for i, s in enumerate(self.students):
+                    s.extremities = all_ext[i]
+                    if not s.finished:
+                        s.draw_extremities(frame)
+
+                    touched = s.check_touch()
+                    if touched is not None:
+                        s.record_touch(touched)
+                        cx, cy = s.cones[touched].px, s.cones[touched].py
+                        cv2.circle(frame, (cx, cy),
+                                   max(int(s.px_per_m * TOUCH_RADIUS_M), 20) + 8,
+                                   (255, 255, 255), 3)
+                        print(f"[TOUCH] {s.label} cone {'A' if touched == 0 else 'B'} "
+                              f"lap={s.laps} t={s.elapsed():.2f}s")
+
+                if self.students[0].finished and not s1_calibration_done:
+                    self._calibrate_from_s1()
+                    s1_calibration_done = True
+
+                if all(s.finished for s in self.students) and not all_done_notified:
+                    all_done_notified = True
+                    self.save_results()
+                    print("\n🏁  All students finished!")
+
+            self._draw_hud(frame)
+            cv2.imshow("Shuttle Run Timer", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key in (ord('q'), 27):
+                break
+            elif key == ord(' '):
+                if self.setup_step >= NUM_STUDENTS * 2:
+                    self.setup_mode = False
+                    print("[INFO] Timing started — GO!")
+                else:
+                    print(f"[WARN] {NUM_STUDENTS * 2 - self.setup_step} cones still to place")
+            elif key == ord('r'):
+                for s in self.students:
+                    s.__init__(s.idx)
+                self.setup_mode              = True
+                self.setup_step              = 0
+                self.calibrated              = False
+                s1_calibration_done          = False
+                all_done_notified            = False
+                self.calibration_px_per_m    = None
+                self._refresh_scales()
+                print("[RESET] Cones cleared")
+            elif key == ord('s'):
+                self.save_results()
+            elif key in (ord('+'), ord('=')):
+                self.hfov_deg = min(self.hfov_deg + 5, 130)
+                self._refresh_scales()
+                print(f"[FOV] {self.hfov_deg}°")
+            elif key == ord('-'):
+                self.hfov_deg = max(self.hfov_deg - 5, 30)
+                self._refresh_scales()
+                print(f"[FOV] {self.hfov_deg}°")
+
+        # ── Auto-save ─────────────────────────────────────────────────────────────
+        if _session_id is not None:
+            _autosave_shuttle_run(_session_id, self.students)
+
+        self.cap.release()
+        cv2.destroyAllWindows()
+        self.landmarker.close()
+
+
+if __name__ == "__main__":
+    app = ShuttleRunApp()
+    app.run()
