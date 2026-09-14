@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Results — GoForFit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <style>
+    /* Rating colours */
+    .rating-excellent { color: #16a34a; font-weight: 600; }
+    .rating-good      { color: #2563eb; }
+    .rating-average   { color: #d97706; }
+    .rating-poor      { color: #dc2626; }
+    .rating-none      { color: #9ca3af; font-style: italic; }
+
+    /* Test badge pills — use the site's indigo/orange palette */
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-bmi         { background:#e0e7ff; color:#3730a3; }
+    .badge-wingspan    { background:#dcfce7; color:#166534; }
+    .badge-curl_up     { background:#fef9c3; color:#854d0e; }
+    .badge-wall_toss   { background:#ffe4e6; color:#9f1239; }
+    .badge-shuttle_run { background:#e0f2fe; color:#075985; }
+    .badge-dash_50m    { background:#fce7f3; color:#9d174d; }
+    .badge-sit_reach   { background:#f3e8ff; color:#6b21a8; }
+    .badge-vertical_jump { background:#dbeafe; color:#1e3a8a; }
+    .badge-run_600m    { background:#fee2e2; color:#991b1b; }
+
+    /* Table row hover */
+    tbody tr:hover { background: #f8fafc; }
+
+    /* Sort arrow */
+    thead th { cursor: pointer; user-select: none; }
+    thead th.sorted { color: #f97316; }
+    thead th .arrow { margin-left: 4px; opacity: 0.4; font-size: 10px; }
+    thead th.sorted .arrow { opacity: 1; color: #f97316; }
+
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinning { display: inline-block; animation: spin 0.7s linear infinite; }
+
+    /* Toast */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px;
+      background: #1e293b; color: #f1f5f9;
+      padding: 10px 18px; border-radius: 6px;
+      font-size: 13px; opacity: 0;
+      transition: opacity .2s; pointer-events: none; z-index: 999;
+      border: 1px solid #f97316;
+    }
+    #toast.show { opacity: 1; }
+
+    /* Modal backdrop */
+    .modal-bg {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.45); backdrop-filter: blur(2px);
+      z-index: 200; align-items: center; justify-content: center;
+    }
+    .modal-bg.open { display: flex; }
+  </style>
+</head>
+<body class="bg-[#f8fafc] text-gray-800 min-h-screen flex flex-col">
+
+<!-- ── Header (matches site) ─────────────────────────────────────────── -->
+<header class="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm">
+  <div class="flex items-center space-x-2">
+    <span class="text-xl font-bold text-blue-600">fitness<span class="text-green-500">365</span></span>
+    <span class="text-xs text-gray-400 border-l pl-2 border-gray-300 hidden sm:inline">Active Schools. Active Communities.</span>
+  </div>
+  <div class="flex items-center space-x-1 font-semibold text-indigo-900 text-sm">
+    <span>go</span><span class="text-orange-500">for</span><span>fit</span>
+  </div>
+  <div class="flex items-center space-x-2 text-sm text-gray-600">
+    <span class="hidden sm:inline">Hareram Singh</span>
+    <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-500">
+      <i class="fa-solid fa-user"></i>
+    </div>
+  </div>
+</header>
+
+<!-- ── Page ──────────────────────────────────────────────────────────── -->
+<main class="flex-grow p-6 max-w-7xl mx-auto w-full space-y-6">
+
+  <!-- Title row -->
+  <div class="flex flex-wrap justify-between items-center gap-3">
+    <div class="flex items-center space-x-3">
+      <a href="/" class="w-8 h-8 rounded-full border border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-50 transition">
+        <i class="fa-solid fa-arrow-left text-sm"></i>
+      </a>
+      <h1 class="text-lg font-bold text-indigo-950 tracking-wide uppercase">Results Dashboard</h1>
+    </div>
+    <button id="btnNewSession"
+      class="bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded transition flex items-center gap-2">
+      <i class="fa-solid fa-plus"></i> New Session
+    </button>
+  </div>
+
+  <!-- Session created banner -->
+  <div id="sidBanner" class="hidden bg-green-50 border border-green-200 rounded p-4 flex flex-wrap items-center gap-4">
+    <div>
+      <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Session Created</div>
+      <div class="text-3xl font-black text-green-700" id="sidValue">—</div>
+    </div>
+    <div>
+      <div class="font-semibold text-gray-800" id="sidStudentName"></div>
+      <div class="text-xs text-gray-500">Use this Session ID when launching a test</div>
+    </div>
+    <button id="btnCopySid"
+      class="ml-auto border border-gray-300 text-gray-600 hover:border-orange-400 hover:text-orange-600 text-xs px-3 py-1.5 rounded transition">
+      Copy ID
+    </button>
+  </div>
+
+  <!-- Summary stat cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div class="bg-white border border-gray-200 rounded shadow-sm p-4">
+      <div class="text-2xl font-black text-indigo-900" id="statSessions">—</div>
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mt-1">Sessions</div>
+    </div>
+    <div class="bg-white border border-gray-200 rounded shadow-sm p-4">
+      <div class="text-2xl font-black text-indigo-900" id="statResults">—</div>
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mt-1">Total Results</div>
+    </div>
+    <div class="bg-white border border-gray-200 rounded shadow-sm p-4">
+      <div class="text-2xl font-black text-indigo-900" id="statTests">—</div>
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mt-1">Tests Run</div>
+    </div>
+    <div class="bg-white border border-gray-200 rounded shadow-sm p-4">
+      <div class="text-2xl font-black text-indigo-900" id="statStudents">—</div>
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mt-1">Students</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="border-b border-gray-200 flex gap-1">
+    <button data-tab="results"
+      class="tab-btn px-4 py-2.5 text-sm font-semibold text-orange-600 border-b-2 border-orange-500 -mb-px">
+      All Results
+    </button>
+    <button data-tab="sessions"
+      class="tab-btn px-4 py-2.5 text-sm font-semibold text-gray-400 border-b-2 border-transparent -mb-px hover:text-gray-600 transition">
+      Sessions
+    </button>
+  </div>
+
+  <!-- ── Results Tab ───────────────────────────────────────────────────── -->
+  <div id="tab-results">
+
+    <!-- Filters -->
+    <div class="flex flex-wrap gap-3 items-end mb-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Test</label>
+        <select id="filterTest" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 text-gray-700">
+          <option value="">All tests</option>
+          <option value="bmi">📏 BMI / Height</option>
+          <option value="wingspan">🦅 Wingspan</option>
+          <option value="curl_up">🏋️ Curl-Up</option>
+          <option value="wall_toss">🎯 Wall Toss</option>
+          <option value="shuttle_run">🏃 Shuttle Run</option>
+          <option value="dash_50m">⚡ 50 m Dash</option>
+          <option value="sit_reach">🤸 Sit &amp; Reach</option>
+          <option value="vertical_jump">🦘 Vertical Jump</option>
+          <option value="run_600m">🏃‍♂️ 600 m Run</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Student</label>
+        <input id="filterStudent" type="text" placeholder="Search name…"
+          class="border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 text-gray-700 w-40" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Rating</label>
+        <select id="filterRating" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 text-gray-700">
+          <option value="">Any</option>
+          <option value="Excellent">Excellent</option>
+          <option value="Good">Good</option>
+          <option value="Average">Average</option>
+          <option value="Poor">Poor</option>
+        </select>
+      </div>
+      <div class="flex gap-2 ml-auto">
+        <button id="btnRefresh"
+          class="border border-gray-300 text-gray-600 hover:border-indigo-400 hover:text-indigo-700 text-sm font-medium px-4 py-2 rounded transition">
+          ↻ Refresh
+        </button>
+        <a id="btnExport" href="#"
+          class="border border-gray-300 text-gray-600 hover:border-orange-400 hover:text-orange-600 text-sm font-medium px-4 py-2 rounded transition">
+          ⬇ Export CSV
+        </a>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="bg-white border border-gray-200 rounded shadow-sm overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
+        <span class="font-bold text-indigo-950 text-sm uppercase tracking-wide">Test Records</span>
+        <span id="recordCount" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">0 records</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-indigo-950 text-white">
+            <tr>
+              <th data-col="test"         class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">Test <span class="arrow">↕</span></th>
+              <th data-col="student_name" class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">Student <span class="arrow">↕</span></th>
+              <th data-col="primary_result" class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">Result <span class="arrow">↕</span></th>
+              <th data-col="rating"       class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">Rating <span class="arrow">↕</span></th>
+              <th data-col="age"          class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">Age <span class="arrow">↕</span></th>
+              <th data-col="school"       class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap">School <span class="arrow">↕</span></th>
+              <th data-col="recorded_at"  class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider whitespace-nowrap sorted">Recorded <span class="arrow">↓</span></th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider w-12"></th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody" class="divide-y divide-gray-100">
+            <tr><td colspan="8" class="text-center py-10 text-gray-400 italic">Loading results…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Sessions Tab ──────────────────────────────────────────────────── -->
+  <div id="tab-sessions" class="hidden">
+    <div class="flex justify-end mb-4">
+      <button id="btnRefreshSessions"
+        class="border border-gray-300 text-gray-600 hover:border-indigo-400 hover:text-indigo-700 text-sm font-medium px-4 py-2 rounded transition">
+        ↻ Refresh
+      </button>
+    </div>
+    <div id="sessionGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="col-span-full text-center py-10 text-gray-400 italic">Loading sessions…</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── New Session Modal ──────────────────────────────────────────────── -->
+<div class="modal-bg" id="sessionModal">
+  <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+    <h2 class="text-lg font-bold text-indigo-950 uppercase tracking-wide mb-5">New Student Session</h2>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Student Name *</label>
+        <input id="sName" type="text" placeholder="e.g. Riya Sharma"
+          class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-400" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Age</label>
+          <input id="sAge" type="text" placeholder="e.g. 15"
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Gender</label>
+          <select id="sGender" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400">
+            <option value="">— select —</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">School</label>
+          <input id="sSchool" type="text" placeholder="e.g. DPS Delhi"
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Grade</label>
+          <input id="sGrade" type="text" placeholder="e.g. 10"
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-400" />
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 justify-end mt-6">
+      <button id="btnModalClose"
+        class="border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-medium px-4 py-2 rounded transition">
+        Cancel
+      </button>
+      <button id="btnModalCreate"
+        class="bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-5 py-2 rounded transition">
+        Create Session →
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Delete Confirmation Modal ──────────────────────────────────────────── -->
+<div class="modal-bg" id="deleteModal">
+  <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+        <i class="fa-solid fa-trash text-red-500"></i>
+      </div>
+      <h2 class="text-base font-bold text-gray-800" id="deleteModalTitle">Confirm Delete</h2>
+    </div>
+    <p class="text-sm text-gray-600 mb-5" id="deleteModalBody">Are you sure you want to delete this record? This cannot be undone.</p>
+    <div class="flex gap-3 justify-end">
+      <button id="btnDeleteCancel"
+        class="border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-medium px-4 py-2 rounded transition">
+        Cancel
+      </button>
+      <button id="btnDeleteConfirm"
+        class="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-5 py-2 rounded transition flex items-center gap-2">
+        <i class="fa-solid fa-trash"></i> Delete
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────
+let allResults  = [];   // always the full flat data from /api/results
+let allSessions = [];
+let sortCol = 'recorded_at';
+let sortDir = -1;  // -1 = desc
+
+const TEST_META = {
+  bmi:         { label: '📏 BMI / Height',  unit: 'cm',      extraFn: r => r.weight_kg && r.height_cm ? ` · BMI ${(r.weight_kg/((r.height_cm/100)**2)).toFixed(1)}` : '' },
+  wingspan:    { label: '🦅 Wingspan',       unit: 'cm',      extraFn: () => '' },
+  curl_up:     { label: '🏋️ Curl-Up',       unit: 'reps',    extraFn: () => '' },
+  wall_toss:   { label: '🎯 Wall Toss',      unit: 'catches', extraFn: () => '' },
+  shuttle_run: { label: '🏃 Shuttle Run',    unit: 'sec',     extraFn: () => '' },
+  dash_50m:    { label: '⚡ 50 m Dash',      unit: 'sec',     extraFn: () => '' },
+  sit_reach:   { label: '🤸 Sit & Reach',    unit: 'cm',      extraFn: () => '' },
+  vertical_jump: { label: '🦘 Vertical Jump', unit: 'cm', extraFn: () => '' },
+  run_600m:    { label: '🏃‍♂️ 600 m Run',    unit: 'sec',     extraFn: () => '' },
+};
+
+// ── Fetch — always use the flat /api/results view ─────────────────────────
+// The individual /api/results/<test> tables don't have the unified columns
+// (test, primary_result, student_name) that the flat view provides.
+// We fetch everything once, then filter entirely in JS.
+async function fetchResults() {
+  try {
+    const resp = await fetch('/api/results');
+    const data = await resp.json();
+    allResults = data.results || [];
+  } catch(e) {
+    allResults = [];
+    toast('Could not load results — is the server running?');
+  }
+  applyFiltersAndRender();
+  updateStats();
+}
+
+async function fetchSessions() {
+  try {
+    const resp = await fetch('/api/sessions');
+    const data = await resp.json();
+    allSessions = data.sessions || [];
+  } catch(e) {
+    allSessions = [];
+  }
+  renderSessions();
+  updateStats();
+}
+
+// ── Filter + render results ───────────────────────────────────────────────
+function applyFiltersAndRender() {
+  const testFilter    = document.getElementById('filterTest').value;
+  const studentFilter = document.getElementById('filterStudent').value.trim().toLowerCase();
+  const ratingFilter  = document.getElementById('filterRating').value;
+
+  let rows = allResults.filter(r => {
+    if (testFilter    && r.test !== testFilter) return false;
+    if (studentFilter && !(r.student_name || '').toLowerCase().includes(studentFilter)) return false;
+    if (ratingFilter  && r.rating !== ratingFilter) return false;
+    return true;
+  });
+
+  // Sort
+  rows.sort((a, b) => {
+    let av = a[sortCol] ?? '', bv = b[sortCol] ?? '';
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return -sortDir;
+    if (av > bv) return  sortDir;
+    return 0;
+  });
+
+  const tbody = document.getElementById('resultsBody');
+  document.getElementById('recordCount').textContent =
+    `${rows.length} record${rows.length !== 1 ? 's' : ''}`;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-gray-400 italic">
+      No results found.${testFilter ? ' Try selecting a different test or clear the filter.' : ' Run a test first!'}
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const test = r.test || '—';
+    const meta = TEST_META[test] || { unit: '', extraFn: () => '' };
+    const val  = r.primary_result;
+
+    const valHtml = val != null
+      ? `<span class="font-semibold text-indigo-900">${typeof val === 'number' ? val.toFixed(val % 1 !== 0 ? 1 : 0) : val}</span>
+         <span class="text-xs text-gray-400 ml-1">${meta.unit}${meta.extraFn(r)}</span>`
+      : `<span class="text-gray-300">—</span>`;
+
+    const ratingClass = {
+      Excellent: 'rating-excellent',
+      'Above average': 'rating-good',
+      Good: 'rating-good',
+      Average: 'rating-average',
+      'Below average': 'rating-average',
+      Poor: 'rating-poor',
+    }[r.rating] || 'rating-none';
+
+    const dt = r.recorded_at ? new Date(r.recorded_at) : null;
+    const timeStr = dt
+      ? dt.toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) +
+        ' ' + dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+      : '—';
+
+    return `<tr>
+      <td class="px-4 py-3"><span class="badge badge-${test}">${test.replace(/_/g,' ')}</span></td>
+      <td class="px-4 py-3 font-medium text-gray-800">${r.student_name || '<span class="text-gray-300">—</span>'}</td>
+      <td class="px-4 py-3">${valHtml}</td>
+      <td class="px-4 py-3"><span class="${ratingClass}">${r.rating || '—'}</span></td>
+      <td class="px-4 py-3 text-gray-500">${r.age || '—'}</td>
+      <td class="px-4 py-3 text-gray-500 max-w-[140px] truncate">${r.school || '—'}</td>
+      <td class="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">${timeStr}</td>
+      <td class="px-4 py-3 text-center">
+        <button class="btn-delete-result text-gray-300 hover:text-red-500 transition p-1 rounded hover:bg-red-50"
+          data-test="${test}" data-row-id="${r.row_id}"
+          data-label="${test.replace(/_/g,' ')} · ${r.student_name || 'Unknown'}"
+          title="Delete this record">
+          <i class="fa-solid fa-trash-can text-sm"></i>
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Sessions grid ─────────────────────────────────────────────────────────
+function renderSessions() {
+  const grid = document.getElementById('sessionGrid');
+  if (!allSessions.length) {
+    grid.innerHTML = `<div class="col-span-full text-center py-12">
+      <i class="fa-solid fa-users text-gray-300 text-3xl mb-3 block"></i>
+      <div class="text-sm font-semibold text-gray-400">No sessions yet</div>
+      <div class="text-xs text-gray-400 mt-1">Create a session before launching a test.</div>
+    </div>`;
+    return;
+  }
+
+  // Map session_id → set of tests from flat results
+  const sessionTests = {};
+  allResults.forEach(r => {
+    if (r.session_id != null) {
+      if (!sessionTests[r.session_id]) sessionTests[r.session_id] = new Set();
+      sessionTests[r.session_id].add(r.test);
+    }
+  });
+
+  grid.innerHTML = allSessions.map(s => {
+    const tests  = sessionTests[s.id] ? [...sessionTests[s.id]] : [];
+    const badges = tests.map(t =>
+      `<span class="badge badge-${t}" style="font-size:10px">${t.replace(/_/g,' ')}</span>`
+    ).join('');
+    const dt = s.created_at ? new Date(s.created_at) : null;
+    const dateStr = dt ? dt.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}) : '';
+
+    return `<div class="bg-white border border-gray-200 rounded shadow-sm p-4 hover:border-orange-300 transition relative group">
+      <button class="btn-delete-session absolute top-3 right-3 text-gray-200 group-hover:text-gray-400 hover:!text-red-500 transition p-1 rounded hover:bg-red-50"
+        data-session-id="${s.id}" data-student-name="${s.student_name || 'Unnamed'}"
+        title="Delete session and all its results">
+        <i class="fa-solid fa-trash-can text-sm"></i>
+      </button>
+      <div class="font-bold text-indigo-900 text-base pr-7">${s.student_name || 'Unnamed'}</div>
+      <div class="text-xs text-gray-400 mt-1">
+        Session #${s.id}
+        ${s.age    ? ` · Age ${s.age}` : ''}
+        ${s.gender ? ` · ${s.gender}` : ''}
+        ${s.grade  ? ` · Grade ${s.grade}` : ''}
+        ${s.school ? ` · ${s.school}` : ''}
+        ${dateStr  ? ` · ${dateStr}`  : ''}
+      </div>
+      ${tests.length
+        ? `<div class="flex flex-wrap gap-1 mt-3">${badges}</div>`
+        : `<div class="text-xs text-gray-300 mt-3 italic">No tests recorded yet</div>`}
+    </div>`;
+  }).join('');
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('statSessions').textContent = allSessions.length;
+  document.getElementById('statResults').textContent  = allResults.length;
+  document.getElementById('statTests').textContent    = new Set(allResults.map(r => r.test)).size;
+  document.getElementById('statStudents').textContent =
+    new Set(allSessions.map(s => s.student_name).filter(Boolean)).size;
+}
+
+// ── Sort ──────────────────────────────────────────────────────────────────
+document.querySelectorAll('thead th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    sortDir = sortCol === col ? -sortDir : -1;
+    sortCol = col;
+    document.querySelectorAll('thead th').forEach(h => {
+      h.classList.remove('sorted');
+      const arrow = h.querySelector('.arrow');
+      if (arrow) arrow.textContent = '↕';
+    });
+    th.classList.add('sorted');
+    th.querySelector('.arrow').textContent = sortDir === 1 ? '↑' : '↓';
+    applyFiltersAndRender();
+  });
+});
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.toggle('text-orange-600',     b === btn);
+      b.classList.toggle('border-orange-500',   b === btn);
+      b.classList.toggle('text-gray-400',       b !== btn);
+      b.classList.toggle('border-transparent',  b !== btn);
+    });
+    document.getElementById('tab-results').classList.toggle('hidden',  tab !== 'results');
+    document.getElementById('tab-sessions').classList.toggle('hidden', tab !== 'sessions');
+    if (tab === 'sessions' && !allSessions.length) fetchSessions();
+  });
+});
+
+// ── Filter listeners ──────────────────────────────────────────────────────
+document.getElementById('filterTest').addEventListener('change', applyFiltersAndRender);
+document.getElementById('filterRating').addEventListener('change', applyFiltersAndRender);
+let debounce;
+document.getElementById('filterStudent').addEventListener('input', () => {
+  clearTimeout(debounce);
+  debounce = setTimeout(applyFiltersAndRender, 300);
+});
+
+// ── Refresh ───────────────────────────────────────────────────────────────
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+document.getElementById('btnRefresh').addEventListener('click', async () => {
+  const btn = document.getElementById('btnRefresh');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinning">↻</span> Refreshing…';
+  await Promise.all([fetchResults(), fetchSessions()]);
+  btn.disabled = false;
+  btn.innerHTML = '↻ Refresh';
+  toast('Results refreshed');
+});
+
+document.getElementById('btnRefreshSessions').addEventListener('click', async () => {
+  await fetchSessions();
+  toast('Sessions refreshed');
+});
+
+// ── Export CSV ────────────────────────────────────────────────────────────
+document.getElementById('btnExport').addEventListener('click', function(e) {
+  const test = document.getElementById('filterTest').value;
+  if (!test) {
+    e.preventDefault();
+    toast('Select a specific test to export CSV');
+    return;
+  }
+  this.href = `/api/export/${test}`;
+});
+
+// ── New Session modal ─────────────────────────────────────────────────────
+const modal = document.getElementById('sessionModal');
+
+document.getElementById('btnNewSession').addEventListener('click', () => {
+  modal.classList.add('open');
+  document.getElementById('sName').focus();
+});
+document.getElementById('btnModalClose').addEventListener('click', () => modal.classList.remove('open'));
+modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') modal.classList.remove('open'); });
+
+document.getElementById('btnModalCreate').addEventListener('click', async () => {
+  const name = document.getElementById('sName').value.trim();
+  if (!name) {
+    document.getElementById('sName').classList.add('border-red-400');
+    setTimeout(() => document.getElementById('sName').classList.remove('border-red-400'), 1500);
+    return;
+  }
+  const btn = document.getElementById('btnModalCreate');
+  btn.disabled = true; btn.textContent = 'Creating…';
+
+  try {
+    const res  = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        student_name: name,
+        age:    parseInt(document.getElementById('sAge').value)    || null,
+        gender: document.getElementById('sGender').value           || null,
+        school: document.getElementById('sSchool').value.trim()    || null,
+        grade:  document.getElementById('sGrade').value.trim()     || null,
+      })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      modal.classList.remove('open');
+      document.getElementById('sidValue').textContent      = data.session_id;
+      document.getElementById('sidStudentName').textContent = name;
+      document.getElementById('sidBanner').classList.remove('hidden');
+      ['sName','sAge','sSchool','sGrade'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('sGender').value = '';
+      await fetchSessions();
+      toast(`Session #${data.session_id} created for ${name}`);
+    } else {
+      toast('Error: ' + (data.error || 'Unknown'));
+    }
+  } catch(e) {
+    toast('Network error — is the server running?');
+  }
+  btn.disabled = false; btn.textContent = 'Create Session →';
+});
+
+document.getElementById('btnCopySid').addEventListener('click', () => {
+  const sid = document.getElementById('sidValue').textContent;
+  navigator.clipboard.writeText(sid).then(() => toast(`Session ID ${sid} copied!`));
+});
+
+// ── Delete Modal ──────────────────────────────────────────────────────────
+const deleteModal   = document.getElementById('deleteModal');
+const deleteTitle   = document.getElementById('deleteModalTitle');
+const deleteBody    = document.getElementById('deleteModalBody');
+const btnDelConfirm = document.getElementById('btnDeleteConfirm');
+const btnDelCancel  = document.getElementById('btnDeleteCancel');
+
+let pendingDelete = null;   // { type: 'result'|'session', test?, rowId?, sessionId?, label }
+
+function openDeleteModal(config) {
+  pendingDelete = config;
+  deleteTitle.textContent = config.type === 'session'
+    ? 'Delete Session?'
+    : 'Delete Result?';
+  deleteBody.textContent = config.type === 'session'
+    ? `This will permanently delete Session #${config.sessionId} for "${config.label}" and ALL its test results. This cannot be undone.`
+    : `Delete the "${config.label}" record? This cannot be undone.`;
+  deleteModal.classList.add('open');
+}
+
+function closeDeleteModal() {
+  deleteModal.classList.remove('open');
+  pendingDelete = null;
+}
+
+btnDelCancel.addEventListener('click', closeDeleteModal);
+deleteModal.addEventListener('click', e => { if (e.target === deleteModal) closeDeleteModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDeleteModal(); });
+
+btnDelConfirm.addEventListener('click', async () => {
+  if (!pendingDelete) return;
+  btnDelConfirm.disabled = true;
+  btnDelConfirm.innerHTML = '<span class="spinning">↻</span> Deleting…';
+
+  try {
+    let url, label;
+    if (pendingDelete.type === 'result') {
+      url   = `/api/result/${pendingDelete.test}/${pendingDelete.rowId}`;
+      label = pendingDelete.label;
+    } else {
+      url   = `/api/session/${pendingDelete.sessionId}`;
+      label = `Session #${pendingDelete.sessionId}`;
+    }
+
+    const res  = await fetch(url, { method: 'DELETE' });
+    const data = await res.json();
+
+    if (data.ok) {
+      closeDeleteModal();
+      toast(`Deleted: ${label}`);
+      await Promise.all([fetchResults(), fetchSessions()]);
+    } else {
+      toast('Error: ' + (data.error || 'Delete failed'));
+    }
+  } catch(e) {
+    toast('Network error — could not delete');
+  }
+
+  btnDelConfirm.disabled = false;
+  btnDelConfirm.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+});
+
+// Event delegation — results table
+document.getElementById('resultsBody').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-delete-result');
+  if (!btn) return;
+  openDeleteModal({
+    type:  'result',
+    test:  btn.dataset.test,
+    rowId: btn.dataset.rowId,
+    label: btn.dataset.label,
+  });
+});
+
+// Event delegation — sessions grid
+document.getElementById('sessionGrid').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-delete-session');
+  if (!btn) return;
+  openDeleteModal({
+    type:      'session',
+    sessionId: btn.dataset.sessionId,
+    label:     btn.dataset.studentName,
+  });
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────
+Promise.all([fetchResults(), fetchSessions()]);
+setInterval(() => { fetchResults(); fetchSessions(); }, 30000);
+</script>
+</body>
+</html>

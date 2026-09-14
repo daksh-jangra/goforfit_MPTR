@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ selected }} Tests</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#f8fafc] text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm">
+        <div class="flex items-center space-x-2"><span class="text-xl font-bold text-blue-600">fitness<span class="text-green-500">365</span></span></div>
+        <div class="flex items-center space-x-1 font-semibold text-indigo-900 text-sm"><span>go</span><span class="text-orange-500">for</span><span>fit</span></div>
+        <a href="/results" class="text-sm font-semibold text-indigo-700 hover:text-orange-500 transition border border-indigo-200 rounded px-3 py-1 hover:border-orange-400">📊 Results</a>
+        <div class="flex items-center space-x-2 text-sm text-gray-600"><span>Hareram Singh</span></div>
+    </header>
+
+    <main class="flex-grow p-6 max-w-7xl mx-auto w-full space-y-6">
+        <div class="flex items-center space-x-3">
+            <a href="{{ url_for('index') }}" class="w-8 h-8 rounded-full border border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-50 transition">
+                <i class="fa-solid fa-arrow-left text-sm"></i>
+            </a>
+            <h1 class="text-lg font-bold text-indigo-950 tracking-wide">{{ selected }}</h1>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+            <a href="{{ url_for('screen2', category='All Tests') }}" class="border rounded px-3 py-1.5 text-xs font-medium {{ 'bg-orange-500 text-white border-orange-500' if selected == 'All Tests' else 'bg-white text-orange-600 border-orange-400' }}">All Tests</a>
+            {% for category in categories %}
+            <a href="{{ url_for('screen2', category=category) }}" class="border rounded px-3 py-1.5 text-xs font-medium {{ 'bg-orange-500 text-white border-orange-500' if selected == category else 'bg-white text-orange-600 border-orange-400' }}">{{ category }}</a>
+            {% endfor %}
+        </div>
+
+        <div class="space-y-3">
+            {% for test in tests %}
+            <div class="bg-white rounded shadow-sm border border-gray-200 p-4 flex justify-between items-center gap-4 text-sm text-gray-700">
+                <div>
+                    <div class="font-medium text-indigo-900">{{ test.title }}</div>
+                    <div class="text-xs text-gray-500 mt-1">{{ test.subtitle }}</div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button type="button" onclick="quickLaunch('{{ test.id }}')" class="text-indigo-900 hover:text-indigo-700" title="Launch AI test"><i class="fa-regular fa-circle-play text-xl"></i></button>
+                    <a href="{{ url_for('screen3', test=test.id) }}" class="text-indigo-900 hover:text-indigo-700" title="Configure test"><i class="fa-solid fa-arrow-right text-sm"></i></a>
+                </div>
+            </div>
+            {% else %}
+            <div class="bg-white rounded shadow-sm border border-gray-200 p-4 text-sm text-gray-500">No tests available for this category.</div>
+            {% endfor %}
+        </div>
+    </main>
+
+    <script>
+        async function quickLaunch(id) {
+            if (id === 'sit_reach') {
+                window.location.href = `/screen3?test=${encodeURIComponent(id)}`;
+                return;
+            }
+            const res = await fetch(`/api/launch/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await res.json();
+            alert(data.ok ? `AI test launched. PID: ${data.pid}` : data.error);
+        }
+    </script>
+</body>
+</html>
