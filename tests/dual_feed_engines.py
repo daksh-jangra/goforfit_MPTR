@@ -452,6 +452,11 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         self.num_lanes = int(lanes)
         self.lane_width = float(lane_width)
         self.lane_times = {i: None for i in range(1, self.num_lanes + 1)}
+        # The official 50m dash protocol is two trials, best time kept —
+        # best_lane_times survives across `reset` (next trial), lane_times
+        # holds only the trial currently in progress.
+        self.best_lane_times = {i: None for i in range(1, self.num_lanes + 1)}
+        self.attempt = 1
         self.start_t = None
         self.whistle_armed = True
         self._finish_strip = None       # (x1, x2) set via calib_click, like calibrate_finish_strip()
@@ -470,6 +475,15 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         self.start_t = time.time()
         self.whistle_armed = False
 
+    def _fold_into_best(self):
+        """Keep the faster time per lane across trials — the official 50m
+        dash protocol is two trials with the best time recorded."""
+        for lane, t in self.lane_times.items():
+            if t is None:
+                continue
+            if self.best_lane_times.get(lane) is None or t < self.best_lane_times[lane]:
+                self.best_lane_times[lane] = t
+
     def _process_pair(self, frame_a, frame_b):
         # frame_a = finish camera: motion crossing a calibrated vertical
         # strip = a finish event. frame_b = overhead camera: divide frame
@@ -485,18 +499,31 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
         x1, x2 = self._finish_strip
         cv2.rectangle(frame_a, (x1, 0), (x2, frame_a.shape[0]), (0, 165, 255), 2)
 
-        if self.start_t is not None:
+        # Snapshot start_t/lane_times locally once. `action('reset')` runs on
+        # the browser's request thread and can flip start_t to None and swap
+        # in a fresh lane_times dict for the next trial at any point while
+        # this frame is mid-flight. Re-reading self.start_t further down
+        # (after real work in between) could see None there and crash on
+        # `float - NoneType`, killing the whole engine; re-reading self.lane_times
+        # could likewise write a stale trial-1 crossing into trial 2's fresh
+        # dict. Operating on local snapshots makes a late-arriving detection
+        # for an already-reset trial a harmless no-op instead.
+        start_t, lane_times = self.start_t, self.lane_times
+        if start_t is not None:
             mask = self._bg_subtractor.apply(frame_a)
             strip_mask = mask[:, x1:x2]
             motion_px = int(np.count_nonzero(strip_mask))
             if motion_px > 400:  # tune to track lighting — a runner's body crossing the strip
-                # Identify which lane via the overhead camera's horizontal split
-                lane_w_px = frame_b.shape[1] / self.num_lanes
+                # Identify which lane via the overhead camera's horizontal split.
+                # array_split (not reshape) because frame_b's actual width isn't
+                # guaranteed to divide evenly by num_lanes — cameras don't always
+                # honor the requested capture resolution — and reshape would raise
+                # ValueError and kill the whole engine mid-race in that case.
                 fg_b = self._bg_subtractor.apply(frame_b)
-                cols = fg_b.reshape(fg_b.shape[0], self.num_lanes, -1).sum(axis=(0, 2))
+                cols = np.array([col.sum() for col in np.array_split(fg_b, self.num_lanes, axis=1)])
                 lane = int(np.argmax(cols)) + 1
-                if self.lane_times.get(lane) is None:
-                    self.lane_times[lane] = time.time() - self.start_t
+                if lane_times.get(lane) is None:
+                    lane_times[lane] = time.time() - start_t
 
         return frame_a, frame_b
 
@@ -505,14 +532,22 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
             "phase": "calibrating" if self._finish_strip is None
                      else ("waiting_whistle" if self.whistle_armed else "running"),
             "num_lanes": self.num_lanes,
+            "attempt": self.attempt,
             "lane_times": dict(self.lane_times),
+            "best_lane_times": dict(self.best_lane_times),
         }
 
     def action(self, name, value=None):
         if name == "calib_click":
+            # Finish-strip calibration is Cam A (finish camera) coordinates only —
+            # Cam B (overhead) is a different camera's pixel space entirely, so a
+            # stray click there must never feed into self._calib_points.
+            cam = (value or {}).get("cam")
             x, y = (value or {}).get("x"), (value or {}).get("y")
-            if x is None:
-                return {"ok": False, "error": "calib_click needs {x, y}"}
+            if cam != "a":
+                return {"ok": False, "error": "Calibrate on Cam A (the FINISH camera) — Cam B is the overhead lane view and isn't clickable for calibration"}
+            if x is None or y is None:
+                return {"ok": False, "error": "calib_click needs {cam:'a', x, y}"}
             self._calib_points.append((int(x), int(y)))
             if len(self._calib_points) >= 2:
                 xs = sorted(p[0] for p in self._calib_points[:2])
@@ -526,14 +561,17 @@ class Dash50mEngine(DualFeedEngine, WhistleMixin):
             self._on_whistle()
             return {"ok": True}
         if name == "reset":
+            self._fold_into_best()  # bank this trial's time(s) before clearing for the next trial
+            self.attempt += 1
             self.lane_times = {i: None for i in range(1, self.num_lanes + 1)}
             self.whistle_armed = True
             self.start_t = None
-            return {"ok": True}
+            return {"ok": True, "attempt": self.attempt, "best_lane_times": dict(self.best_lane_times)}
         return {"ok": False, "error": f"Unknown action '{name}'"}
 
     def maybe_finish(self):
-        laps = [{"lane": i, "time_sec": round(t, 2)} for i, t in self.lane_times.items() if t]
+        self._fold_into_best()  # in case the coach stops right after the last trial without hitting RESET
+        laps = [{"lane": i, "time_sec": round(t, 2)} for i, t in self.best_lane_times.items() if t is not None]
         if laps:
             self._safe_stage({"session_id": self.session_id, "laps": laps})
 
