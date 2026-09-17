@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS curl_up (
     recorded_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Modified Pull-Up Counter ──────────────────────────────────────────────
+-- One untimed trial; duration_sec is how long the attempt took, recorded for
+-- context only (the Brockport protocol scores reps alone).
+CREATE TABLE IF NOT EXISTS pull_up (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    reps         INTEGER,        -- total correct modified pull-ups
+    duration_sec REAL,
+    rating       TEXT,
+    recorded_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Wall Toss Coordination Test ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS wall_toss (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,6 +200,10 @@ UNION ALL
     SELECT 'curl_up', c.id, c.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, c.reps, c.rating, c.recorded_at
     FROM curl_up c LEFT JOIN sessions s ON c.session_id = s.id
+UNION ALL
+    SELECT 'pull_up', p.id, p.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, p.reps, p.rating, p.recorded_at
+    FROM pull_up p LEFT JOIN sessions s ON p.session_id = s.id
 UNION ALL
     SELECT 'wall_toss', t.id, t.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, t.catches, t.rating, t.recorded_at
@@ -369,6 +385,23 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Modified Pull-Up ─────────────────────────────────────────────────
+
+    def save_pull_up(
+        self,
+        session_id: int,
+        reps: int,
+        duration_sec: float = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO pull_up (session_id, reps, duration_sec, rating)
+                   VALUES (?,?,?,?)""",
+                (session_id, reps, duration_sec, rating),
+            )
+            return cur.lastrowid
+
     # ── Wall Toss ────────────────────────────────────────────────────────
 
     def save_wall_toss(
@@ -481,7 +514,7 @@ class GoForFitDB:
     # ── Generic fetch helpers ────────────────────────────────────────────
 
     VALID_TABLES = {
-        "bmi", "wingspan", "curl_up", "wall_toss",
+        "bmi", "wingspan", "curl_up", "pull_up", "wall_toss",
         "shuttle_run", "dash_50m", "sit_reach", "run_600m", "vertical_jump",
     }
 

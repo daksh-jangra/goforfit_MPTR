@@ -13,6 +13,7 @@ SECTIONS IN THIS FILE
   0. BaseWebEngine      shared threading / MJPEG / lock plumbing
   1. BmiEngine           wraps bmi__3_.py         (height / BMI)
   2. CurlUpEngine        wraps parcurlup.py       (partial curl-up counter)
+  2B. PullUpEngine       wraps pullup.py          (modified pull-up counter)
   3. WallTossEngine      wraps wtt.py             (alternate-hand wall toss)
   4. SitReachEngine      wraps snr.py             (sit & reach)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
@@ -836,6 +837,218 @@ class CurlUpEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 2B — MODIFIED PULL-UP COUNTER   (wraps pullup.py)
+# ════════════════════════════════════════════════════════════════════════
+import pullup as pullup_mod  # noqa: E402
+
+_MODEL_PULLUP = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class PullUpEngine(BaseWebEngine):
+    """Live modified pull-up counter. There is no countdown: the FMS protocol
+    is one trial scored on total correct reps, which ends by itself when the
+    participant pauses for two seconds (pullup.PullUpCounter raises `stopped`,
+    and the result is staged right then). The coach can still tap STOP / SAVE
+    to end it early. Rep scoring and HUD are reused from pullup.py."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera (works on phone AND laptop): the browser
+        # captures the camera and POSTs JPEG frames to /api/pull_up/frame ->
+        # push_frame(); the loop consumes the newest one. Same model the other
+        # single-camera tests use.
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+        self.landmarker = None
+        self.counter = pullup_mod.PullUpCounter()
+        self.start_time = None
+        self.test_started = False
+        self.last_save = None
+
+    @property
+    def count(self):
+        return self.counter.count
+
+    def _open_camera(self):
+        # No server webcam — frames arrive from the browser via push_frame(),
+        # so self.cap stays None (_release_capture(None) is a safe no-op).
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept; older unprocessed frames are dropped
+        so the annotated feed stays near real-time. Returns True on decode."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_PULLUP)
+        base_opts = pullup_mod.mp_python.BaseOptions(model_asset_path=_MODEL_PULLUP)
+        opts = pullup_mod.mp_vision.PoseLandmarkerOptions(
+            base_options=base_opts,
+            running_mode=pullup_mod.mp_vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = pullup_mod.mp_vision.PoseLandmarker.create_from_options(opts)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    def _state_locked(self):
+        elapsed = (time.time() - self.start_time) if (self.test_started and self.start_time) else 0.0
+        return {
+            "count": self.counter.count,
+            "phase": self.counter.phase,
+            "test_started": self.test_started,
+            "test_done": self.counter.stopped,
+            "elapsed_sec": round(elapsed, 1),
+            "last_save": self.last_save,
+        }
+
+    def action_start(self):
+        with self._lock:
+            if self.test_started:
+                return {"ok": False, "error": "Test already started"}
+            self.start_time = time.time()
+            self.test_started = True
+            return {"ok": True}
+
+    def action_reset(self):
+        with self._lock:
+            self.counter.reset()
+            self.start_time = None
+            self.test_started = False
+            self.last_save = None
+            # Clear the "already staged" flag so a second attempt stages its own
+            # count instead of leaving the previous run's result staged.
+            self._staged = False
+            return {"ok": True}
+
+    def _stage_on_stop(self):
+        # Reached when the coach stops the test before the two-second pause rule
+        # fired; the loop stages it itself when the rule ends the test normally.
+        if self.counter.count > 0:
+            with self._lock:
+                self.last_save = self.counter.count
+                elapsed = (time.time() - self.start_time) if self.start_time else 0.0
+            self._safe_stage(self.counter.count, round(elapsed, 1))
+
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                # Frames come from the browser (push_frame), not a server
+                # camera. Wait up to 1s for the newest one; on timeout loop
+                # back so stop() (which flips self._running) stays responsive.
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so landmarks/overlays live in the same
+                # flipped space. Mirror-safe: the count uses one near-side arm's
+                # angle plus a vertical nose displacement, neither of which a
+                # horizontal flip changes.
+                frame = camera.mirror(frame, self.mirror_preview)
+                h, w = frame.shape[:2]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = pullup_mod.mp.Image(image_format=pullup_mod.mp.ImageFormat.SRGB, data=rgb)
+                # detect_for_video needs strictly increasing timestamps; browser
+                # frame arrival is wall-clock, so derive ts from elapsed time and
+                # bump on collision (mirrors the other browser-camera engines).
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                result = self.landmarker.detect_for_video(mp_image, ts)
+
+                body_visible = False
+
+                with self._lock:
+                    test_started = self.test_started
+                    start_time = self.start_time
+                elapsed = (time.time() - start_time) if (test_started and start_time) else 0.0
+
+                if result.pose_landmarks:
+                    lms = result.pose_landmarks[0]
+                    # Side-view gate: a modified pull-up is filmed from the SIDE,
+                    # so the far arm is occluded and scores low. near_arm() picks
+                    # whichever arm the camera sees best; the nose must also be
+                    # visible since it's the chin-rise reference.
+                    (s_i, e_i, wr_i), near_vis = pullup_mod.near_arm(lms)
+                    # The chin estimate needs the face, and the bar line needs a
+                    # wrist — without both there is nothing to score against.
+                    face_ok = all(lms[pullup_mod.IDX[k]].visibility > 0.5
+                                  for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
+                    body_visible = near_vis > 0.5 and face_ok
+
+                    if body_visible:
+                        shoulder = pullup_mod.lm_px(lms, s_i, w, h)
+                        elbow = pullup_mod.lm_px(lms, e_i, w, h)
+                        wrist = pullup_mod.lm_px(lms, wr_i, w, h)
+                        angle = pullup_mod.calc_angle(shoulder, elbow, wrist)
+                        with self._lock:
+                            self.counter.update(
+                                angle,
+                                pullup_mod.chin_y(lms),
+                                pullup_mod.bar_y(lms, wr_i),
+                                counting=test_started,
+                            )
+
+                    pullup_mod.draw_pose(frame, lms, w, h)
+
+                with self._lock:
+                    count = self.counter.count
+                    phase = self.counter.phase
+                    angle = self.counter.angle
+                    gap = self.counter.gap
+                    reached = self.counter.reached
+                    stopped = self.counter.stopped
+                    # The two-second pause rule is how this test normally ends —
+                    # stage the result the moment it fires, so screen3 has it even
+                    # if the coach walks away without tapping STOP.
+                    newly_stopped = stopped and self.last_save is None
+                    if newly_stopped:
+                        self.last_save = count
+                if newly_stopped:
+                    self._safe_stage(count, round(elapsed, 1))
+
+                pullup_mod.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
+                                   body_visible, test_started, stopped=stopped,
+                                   browser_mode=True)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 3 — ALTERNATE-HAND WALL TOSS   (wraps wtt.py)
 # ════════════════════════════════════════════════════════════════════════
 import wtt as wtt_mod  # noqa: E402
@@ -1316,6 +1529,7 @@ __all__ = [
     "BaseWebEngine",
     "BmiEngine",
     "CurlUpEngine",
+    "PullUpEngine",
     "WallTossEngine",
     "SitReachEngine",
     "WingspanEngine",
