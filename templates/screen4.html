@@ -419,7 +419,7 @@
               buttons: [
                   { id: 'manual_start', label: 'MANUAL START', action: 'manual_start', color: 'bg-sky-600' },
                   { id: 'calib_reset',  label: 'RECALIBRATE',  action: 'calib_reset',  color: 'bg-orange-600' },
-                  { id: 'reset',         label: 'RESET',       action: 'reset',       color: 'bg-rose-600' },
+                  { id: 'reset',         label: 'NEXT TRIAL',  action: 'reset',       color: 'bg-rose-600' },
               ],
               showCalibOverlay(state) { return false; },
               buttonDisabled(btnId, state) {
@@ -428,6 +428,7 @@
               },
               renderStatus(state) {
                   const lines = [];
+                  lines.push(`Trial ${state.attempt || 1} of 2 (best of two is saved)`);
                   if (state.phase === 'calibrating') lines.push('Tap the 2 edges of the finish strip on Cam A');
                   else if (state.phase === 'waiting_whistle') lines.push('Waiting for whistle — or tap MANUAL START');
                   else {
@@ -435,10 +436,14 @@
                       Object.entries(state.lane_times || {}).forEach(([lane, t]) =>
                           lines.push(`Lane ${lane}: ${t !== null ? t.toFixed(2) + 's' : '—'}`));
                   }
+                  const best = Object.entries(state.best_lane_times || {}).filter(([, t]) => t !== null);
+                  if (best.length) {
+                      lines.push('Best so far: ' + best.map(([lane, t]) => `Lane ${lane}: ${t.toFixed(2)}s`).join(', '));
+                  }
                   return lines;
               },
               syncFields(state) {
-                  const times = Object.entries(state.lane_times || {}).filter(([, t]) => t !== null);
+                  const times = Object.entries(state.best_lane_times || {}).filter(([, t]) => t !== null);
                   if (!times.length) return null;
                   return { dash50mScore: Object.fromEntries(times) };
               },
