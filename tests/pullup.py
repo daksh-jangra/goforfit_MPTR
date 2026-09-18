@@ -318,11 +318,17 @@ def draw_pose(frame, lms, w, h):
 
 def _autosave_pull_up(session_id, reps, duration_sec):
     """Stages the result on the server for human review/save on screen3 —
-    does NOT write to the database directly."""
+    does NOT write to the database directly.
+
+    app.py serves on 8080; the older test scripts still post to 5000 and their
+    staging has been silently failing. Override with GOFORFIT_URL if the server
+    is somewhere else."""
+    import os
+    base = os.environ.get("GOFORFIT_URL", "http://localhost:8080").rstrip("/")
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/pull_up",
+            f"{base}/api/stage/pull_up",
             json={"session_id": session_id, "reps": reps, "duration_sec": duration_sec},
             timeout=2,
         )

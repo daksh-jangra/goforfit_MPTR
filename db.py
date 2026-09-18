@@ -110,8 +110,8 @@ CREATE TABLE IF NOT EXISTS curl_up (
 );
 
 -- ── Modified Pull-Up Counter ──────────────────────────────────────────────
--- One untimed trial; duration_sec is how long the attempt took, recorded for
--- context only (the Brockport protocol scores reps alone).
+-- One untimed trial that ends on a two-second pause; duration_sec is how long
+-- the attempt took, recorded for context only (the protocol scores reps alone).
 CREATE TABLE IF NOT EXISTS pull_up (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
