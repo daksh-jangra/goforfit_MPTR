@@ -55,6 +55,11 @@ CHIN_BELOW_MOUTH_K  = 1.3
 
 # "The test will stop when the participant pauses for two or more seconds."
 PAUSE_SEC           = 2.0
+# A pause only counts if we actually watched them hold still. Frames where the
+# pose is lost (spotter crossing the camera, subject drifting out of shot, a
+# patch of glare) don't reach the counter at all, so a gap longer than this
+# means we stopped looking rather than that they stopped moving.
+SAMPLE_GAP_SEC      = 0.5
 PAUSE_ANGLE_TOL     = 10.0   # degrees of elbow movement within the window
 PAUSE_POS_TOL       = 0.012  # chin travel within the window (fraction of frame)
 
@@ -158,6 +163,7 @@ class PullUpCounter:
         self.chin_buf = deque(maxlen=NOSE_BUFFER_LEN)
         self._ref = None         # last pose the participant actually moved away from
         self._last_move = None   # when that happened
+        self._last_seen = None   # when a frame last reached the counter
         self._armed = False      # pause rule only applies once they've begun
 
     def update(self, elbow_angle, chin, bar, now=None, counting=True):
@@ -182,6 +188,16 @@ class PullUpCounter:
         # rep, where each individual frame barely changes, would read as a
         # pause. Armed only after the first pull begins: the participant lies
         # still under the bar waiting for "GO", and that must not end the test.
+        # Frames the pose was lost never arrive here, so a gap in the samples is
+        # time we spent not looking. Without this the counter would come back
+        # from a dropout, see that its last recorded movement was seconds ago,
+        # and end a test the participant is still performing.
+        blind = (self._last_seen is not None
+                 and now - self._last_seen > SAMPLE_GAP_SEC)
+        self._last_seen = now
+        if blind:
+            self._ref = None
+
         if self._ref is None:
             self._ref, self._last_move = (self.angle, chin), now
         if (abs(self.angle - self._ref[0]) > PAUSE_ANGLE_TOL
