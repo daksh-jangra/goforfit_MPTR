@@ -310,6 +310,37 @@
                   return (state.count !== null && state.count !== undefined) ? { pullUpScore: state.count } : null;
               },
           },
+          full_pull_up: {
+              feedUrl:    '/api/full_pull_up/feed',
+              stateUrl:   '/api/full_pull_up/state',
+              actionUrl:  '/api/full_pull_up/action',
+              browserCamera: true,
+              frameUrl:   '/api/full_pull_up/frame',
+              buttons: [
+                  { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'start') return !state.running || state.test_started;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [`Count: ${state.count}`];
+                  if (state.test_done) {
+                      lines.push('Dropped off the bar — test ended. Tap STOP / SAVE');
+                  } else if (state.test_started) {
+                      lines.push(`${state.elapsed_sec}s elapsed`);
+                      lines.push('Chin over the bar, back to a full hang each rep');
+                  } else {
+                      lines.push('Tap START as you call "GO"');
+                  }
+                  return lines;
+              },
+              syncFields(state) {
+                  return (state.count !== null && state.count !== undefined) ? { fullPullUpScore: state.count } : null;
+              },
+          },
           wall_toss: {
               feedUrl:    '/api/wall_toss/feed',
               stateUrl:   '/api/wall_toss/state',
@@ -987,7 +1018,7 @@
           console.log("Calculated sync payload:", fields);
 
           const EXERCISE_TYPE = {
-              wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp',
+              wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp', full_pull_up:'FullPullUp',
               wall_toss:'WallToss', sit_reach:'SitReach',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',

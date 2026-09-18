@@ -72,11 +72,12 @@ DUAL_FEED_IMPORT_ERROR: Optional[str] = None
 
 try:
     from web_engines import (
-        BmiEngine, CurlUpEngine, PullUpEngine, WallTossEngine, SitReachEngine,
-        WingspanEngine, VerticalJumpEngine,
+        BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
+        SitReachEngine, WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
-    BmiEngine = CurlUpEngine = PullUpEngine = WallTossEngine = SitReachEngine = None
+    BmiEngine = CurlUpEngine = PullUpEngine = FullPullUpEngine = None
+    WallTossEngine = SitReachEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -108,6 +109,7 @@ _run600m_engine = None
 _bmi_engine = None           
 _curl_up_engine = None
 _pull_up_engine = None
+_full_pull_up_engine = None
 _wall_toss_engine = None
 _sit_reach_engine = None     
 
@@ -256,6 +258,35 @@ TESTS = {
                 "on the mat. Point the camera so the head, one whole arm and the bar "
                 "are all in frame. Keep the knees straight and the back straight; a "
                 "steady, constant pace scores best."),
+        "params": [],
+        "unit":   "reps",
+        "live_feed":   True,
+    },
+    "full_pull_up": {
+        "id":          "full_pull_up",
+        "title":       "Pull-Up",
+        "subtitle":    "Upper-body strength and endurance — max reps, one trial",
+        "icon":        "🏋️",
+        "category":    "Muscular Endurance",
+        "script":      "pullup_full.py",
+        "description": (
+            "Counts pull-ups from a straight-arm hang. The participant hangs from the "
+            "bar with an overhand grip, pulls up until the chin is above the bar, then "
+            "lowers back to a full hang. A rep only counts if the chin clears the bar "
+            "and the arms straighten again before the next pull. Because the hands are "
+            "on the bar, the wrists mark its height, so the chin-over-bar criterion is "
+            "checked directly. The test ends by itself when the participant drops off "
+            "the bar."
+        ),
+        "controls": [
+            ("SPACE", "Start counting (the 'GO' signal)"),
+            ("R",     "Reset counter"),
+            ("F",     "Toggle fullscreen"),
+            ("Q",     "Quit"),
+        ],
+        "tip": ("Place the camera a few metres away, roughly level with the bar, so the "
+                "head, arms and bar are all in frame. The participant starts from a "
+                "still, straight-arm hang; no swinging, kicking or bent knees."),
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -526,6 +557,8 @@ def _is_running(test_id: str) -> bool:
         return _curl_up_engine.is_running()
     if test_id == "pull_up" and _pull_up_engine is not None:
         return _pull_up_engine.is_running()
+    if test_id == "full_pull_up" and _full_pull_up_engine is not None:
+        return _full_pull_up_engine.is_running()
     if test_id == "wall_toss" and _wall_toss_engine is not None:
         return _wall_toss_engine.is_running()
     if test_id == "sit_reach" and _sit_reach_engine is not None:
@@ -588,6 +621,13 @@ class CurlUpSave(BaseModel):
 
 
 class PullUpSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None
+    duration_sec: Optional[float] = None
+    rating: Optional[str] = None
+
+
+class FullPullUpSave(BaseModel):
     session_id: Optional[int] = None
     reps: Optional[int] = None
     duration_sec: Optional[float] = None
@@ -843,6 +883,9 @@ async def launch(test_id: str, request: Request):
     if test_id == "pull_up" and PullUpEngine is not None:
         return await _launch_pull_up(request)
 
+    if test_id == "full_pull_up" and FullPullUpEngine is not None:
+        return await _launch_full_pull_up(request)
+
     if test_id == "wall_toss" and WallTossEngine is not None:
         return await _launch_wall_toss(request)
 
@@ -1035,6 +1078,27 @@ async def _launch_pull_up(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_full_pull_up(request: Request):
+    global _full_pull_up_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    def _stage(reps, duration_sec):
+        _pending["full_pull_up"] = {
+            "session_id": session_id, "reps": reps, "duration_sec": duration_sec,
+        }
+
+    try:
+        engine = FullPullUpEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _full_pull_up_engine = engine
+    _pending.pop("full_pull_up", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 async def _launch_wall_toss(request: Request):
     global _wall_toss_engine
     body = await _json_body(request)
@@ -1208,7 +1272,8 @@ def engine_status():
     return {
         "web_engines_ok": WEB_ENGINES_IMPORT_ERROR is None,
         "web_engines_error": WEB_ENGINES_IMPORT_ERROR,
-        "web_engines_covers": ["wingspan", "bmi", "curl_up", "pull_up", "wall_toss",
+        "web_engines_covers": ["wingspan", "bmi", "curl_up", "pull_up", "full_pull_up",
+                               "wall_toss",
                                "sit_reach", "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
@@ -1263,6 +1328,11 @@ def stop(test_id: str):
         # The test is untimed, so STOP is how it always ends — the engine's
         # _stage_on_stop() is what stages the rep count for screen3.
         _pull_up_engine.stop()
+        return {"ok": True}
+    if test_id == "full_pull_up" and _full_pull_up_engine is not None:
+        # Untimed, like the modified pull-up: _stage_on_stop() stages the count
+        # if the coach stops before the participant drops off the bar.
+        _full_pull_up_engine.stop()
         return {"ok": True}
     if test_id == "wall_toss" and _wall_toss_engine is not None:
         if not _pending.get("wall_toss") and _wall_toss_engine.counter.toss_count > 0:
@@ -1420,6 +1490,11 @@ async def curl_up_frame(request: Request):
 @app.post("/api/pull_up/frame")
 async def pull_up_frame(request: Request):
     return await _receive_frame(_pull_up_engine, request)
+
+
+@app.post("/api/full_pull_up/frame")
+async def full_pull_up_frame(request: Request):
+    return await _receive_frame(_full_pull_up_engine, request)
 
 
 @app.post("/api/wall_toss/frame")
@@ -1744,6 +1819,45 @@ def pull_up_action(b: PullUpAction):
     return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
 
 
+# ── Pull-up live-feed control ──────────────────────────────────────────
+class FullPullUpAction(BaseModel):
+    action: str
+
+@app.get("/api/full_pull_up/feed")
+def full_pull_up_feed():
+    if _full_pull_up_engine is None or not _full_pull_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Pull-up test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _full_pull_up_engine is not None and _full_pull_up_engine.is_running():
+            jpg = _full_pull_up_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/full_pull_up/state")
+def full_pull_up_state():
+    if _full_pull_up_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_full_pull_up_engine.get_state()}
+
+@app.post("/api/full_pull_up/action")
+def full_pull_up_action(b: FullPullUpAction):
+    if _full_pull_up_engine is None or not _full_pull_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Pull-up test isn't running"}, status_code=409)
+    if b.action == "start":
+        return _full_pull_up_engine.action_start()
+    if b.action == "reset":
+        _pending.pop("full_pull_up", None)
+        return _full_pull_up_engine.action_reset()
+    return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
+
+
 # ── Wall-toss live-feed control ────────────────────────────────────────
 class WallTossAction(BaseModel):
     action: str
@@ -1941,6 +2055,20 @@ def save_pull_up(b: PullUpSave):
     if not b.session_id:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
     row_id = db.save_pull_up(
+        session_id   = b.session_id,
+        reps         = b.reps,
+        duration_sec = b.duration_sec,
+        rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/full_pull_up")
+def save_full_pull_up(b: FullPullUpSave):
+    """Fields: session_id, reps, duration_sec (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    row_id = db.save_full_pull_up(
         session_id   = b.session_id,
         reps         = b.reps,
         duration_sec = b.duration_sec,

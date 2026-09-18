@@ -14,6 +14,7 @@ SECTIONS IN THIS FILE
   1. BmiEngine           wraps bmi__3_.py         (height / BMI)
   2. CurlUpEngine        wraps parcurlup.py       (partial curl-up counter)
   2B. PullUpEngine       wraps pullup.py          (modified pull-up counter)
+  2C. FullPullUpEngine   wraps pullup_full.py     (pull-up counter)
   3. WallTossEngine      wraps wtt.py             (alternate-hand wall toss)
   4. SitReachEngine      wraps snr.py             (sit & reach)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
@@ -944,6 +945,34 @@ class PullUpEngine(BaseWebEngine):
             self._staged = False
             return {"ok": True}
 
+    _hud = pullup_mod  # module providing draw_ui(); overridden by FullPullUpEngine
+
+    def _score_pose(self, lms, w, h, test_started):
+        """Feed one pose to the counter; returns whether the body was visible
+        enough to score."""
+        # Side-view gate: a modified pull-up is filmed from the SIDE, so the
+        # far arm is occluded and scores low. near_arm() picks whichever arm
+        # the camera sees best.
+        (s_i, e_i, wr_i), near_vis = pullup_mod.near_arm(lms)
+        # The chin estimate needs the face, and the bar line needs a wrist —
+        # without both there is nothing to score against.
+        face_ok = all(lms[pullup_mod.IDX[k]].visibility > 0.5
+                      for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
+        if not (near_vis > 0.5 and face_ok):
+            return False
+        shoulder = pullup_mod.lm_px(lms, s_i, w, h)
+        elbow = pullup_mod.lm_px(lms, e_i, w, h)
+        wrist = pullup_mod.lm_px(lms, wr_i, w, h)
+        angle = pullup_mod.calc_angle(shoulder, elbow, wrist)
+        with self._lock:
+            self.counter.update(
+                angle,
+                pullup_mod.chin_y(lms),
+                pullup_mod.bar_y(lms, wr_i),
+                counting=test_started,
+            )
+        return True
+
     def _stage_on_stop(self):
         # Reached when the coach stops the test before the two-second pause rule
         # fired; the loop stages it itself when the rule ends the test normally.
@@ -996,30 +1025,7 @@ class PullUpEngine(BaseWebEngine):
 
                 if result.pose_landmarks:
                     lms = result.pose_landmarks[0]
-                    # Side-view gate: a modified pull-up is filmed from the SIDE,
-                    # so the far arm is occluded and scores low. near_arm() picks
-                    # whichever arm the camera sees best; the nose must also be
-                    # visible since it's the chin-rise reference.
-                    (s_i, e_i, wr_i), near_vis = pullup_mod.near_arm(lms)
-                    # The chin estimate needs the face, and the bar line needs a
-                    # wrist — without both there is nothing to score against.
-                    face_ok = all(lms[pullup_mod.IDX[k]].visibility > 0.5
-                                  for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
-                    body_visible = near_vis > 0.5 and face_ok
-
-                    if body_visible:
-                        shoulder = pullup_mod.lm_px(lms, s_i, w, h)
-                        elbow = pullup_mod.lm_px(lms, e_i, w, h)
-                        wrist = pullup_mod.lm_px(lms, wr_i, w, h)
-                        angle = pullup_mod.calc_angle(shoulder, elbow, wrist)
-                        with self._lock:
-                            self.counter.update(
-                                angle,
-                                pullup_mod.chin_y(lms),
-                                pullup_mod.bar_y(lms, wr_i),
-                                counting=test_started,
-                            )
-
+                    body_visible = self._score_pose(lms, w, h, test_started)
                     pullup_mod.draw_pose(frame, lms, w, h)
 
                 with self._lock:
@@ -1029,23 +1035,51 @@ class PullUpEngine(BaseWebEngine):
                     gap = self.counter.gap
                     reached = self.counter.reached
                     stopped = self.counter.stopped
-                    # The two-second pause rule is how this test normally ends —
-                    # stage the result the moment it fires, so screen3 has it even
-                    # if the coach walks away without tapping STOP.
+                    # The counter's own end rule (two-second pause here, dropping
+                    # off the bar for the full pull-up) is how the test normally
+                    # ends — stage the result the moment it fires, so screen3 has
+                    # it even if the coach walks away without tapping STOP.
                     newly_stopped = stopped and self.last_save is None
                     if newly_stopped:
                         self.last_save = count
                 if newly_stopped:
                     self._safe_stage(count, round(elapsed, 1))
 
-                pullup_mod.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
-                                   body_visible, test_started, stopped=stopped,
-                                   browser_mode=True)
+                self._hud.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
+                                  body_visible, test_started, stopped=stopped,
+                                  browser_mode=True)
                 self._publish(frame)
         except Exception as e:
             with self._lock:
                 self._error = str(e)
             self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  SECTION 2C — PULL-UP COUNTER   (wraps pullup_full.py)
+# ════════════════════════════════════════════════════════════════════════
+import pullup_full as pullup_full_mod  # noqa: E402
+
+
+class FullPullUpEngine(PullUpEngine):
+    """Live (full-hang) pull-up counter. Same browser-camera plumbing, START /
+    RESET flow and staging as the modified pull-up; only the scoring differs:
+    reps run full hang -> chin over bar -> full hang, and the test ends by
+    itself when the participant drops off the bar (pullup_full raises
+    `stopped`). Rep scoring and HUD are reused from pullup_full.py."""
+
+    _hud = pullup_full_mod
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        self.counter = pullup_full_mod.FullPullUpCounter()
+
+    def _score_pose(self, lms, w, h, test_started):
+        visible, angle, chin, bar, shoulder = pullup_full_mod.pose_sample(lms, w, h)
+        if visible:
+            with self._lock:
+                self.counter.update(angle, chin, bar, shoulder, counting=test_started)
+        return visible
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1530,6 +1564,7 @@ __all__ = [
     "BmiEngine",
     "CurlUpEngine",
     "PullUpEngine",
+    "FullPullUpEngine",
     "WallTossEngine",
     "SitReachEngine",
     "WingspanEngine",
