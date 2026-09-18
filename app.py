@@ -255,8 +255,8 @@ TESTS = {
             ("Q",     "Quit"),
         ],
         "tip": ("Set the bar just within reach of the participant lying on their back "
-                "on the mat. Point the camera so the head, one whole arm and the bar "
-                "are all in frame. Keep the knees straight and the back straight; a "
+                "on the mat. Point the camera so the face and one whole arm, hand included, "
+                "are in frame. Keep the knees straight and the back straight; a "
                 "steady, constant pace scores best."),
         "params": [],
         "unit":   "reps",

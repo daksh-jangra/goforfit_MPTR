@@ -53,6 +53,13 @@ CHIN_MARGIN_FRAC    = 0.01   # chin may finish this far below the bar and still 
 # how close they are to the camera.
 CHIN_BELOW_MOUTH_K  = 1.3
 
+# A rep can only begin from the hanging position: hands on the bar, which puts
+# the wrists this far above the shoulders. Measured on the demo footage, the
+# gap at the bottom of a rep runs 0.12-0.18 of frame height, so 0.05 passes
+# every real rep with room to spare while rejecting someone who simply lifts a
+# hand towards their face.
+POSTURE_MARGIN      = 0.05
+
 # "The test will stop when the participant pauses for two or more seconds."
 PAUSE_SEC           = 2.0
 # A pause only counts if we actually watched them hold still. Frames where the
@@ -143,9 +150,11 @@ class PullUpCounter:
     bar height) samples. Shared by the desktop script and the browser engine
     so both score a rep identically.
 
-    A rep is one elbow flex-and-extend cycle in which the chin reached the bar
-    — the protocol's own criterion. `stopped` goes True once the participant
-    holds still for PAUSE_SEC, which is how the test is meant to end.
+    A rep is one elbow flex-and-extend cycle, begun from a position where the
+    hands are clearly above the shoulders (i.e. actually gripping the bar),
+    in which the chin reached the bar — the protocol's own criterion.
+    `stopped` goes True once the participant holds still for PAUSE_SEC, which
+    is how the test is meant to end.
     """
 
     def __init__(self):
@@ -157,6 +166,7 @@ class PullUpCounter:
         self.angle = 0.0
         self.gap = 0.0           # how far the chin still is below the bar (+ = below)
         self.reached = False     # chin has reached the bar during the rep in progress
+        self.hung = False        # hands seen above the shoulders — on the bar
         self.stopped = False     # ended by the two-second pause rule
         self.idle_sec = 0.0
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
@@ -166,10 +176,10 @@ class PullUpCounter:
         self._last_seen = None   # when a frame last reached the counter
         self._armed = False      # pause rule only applies once they've begun
 
-    def update(self, elbow_angle, chin, bar, now=None, counting=True):
-        """Feed one frame. `chin` and `bar` are heights in 0..1 of frame height
-        (bigger = lower on screen). Returns True iff this frame completed a
-        rep."""
+    def update(self, elbow_angle, chin, bar, shoulder, now=None, counting=True):
+        """Feed one frame. `chin`, `bar` and `shoulder` are heights in 0..1 of
+        frame height (bigger = lower on screen). Returns True iff this frame
+        completed a rep."""
         now = time.time() if now is None else now
 
         self.angle_buf.append(elbow_angle)
@@ -205,6 +215,7 @@ class PullUpCounter:
             # with nothing to show the coach it happened.
             self.phase = "extended"
             self.reached = False
+            self.hung = False
 
         if self._ref is None:
             self._ref, self._last_move = (self.angle, chin), now
@@ -218,7 +229,17 @@ class PullUpCounter:
 
         # ── rep state machine ──────────────────────────────────────────────
         if self.phase == "extended":
-            if self.angle <= ELBOW_FLEX_ANGLE:
+            # Only a participant hanging under the bar can start a rep. Lying
+            # under it with arms up, the hands sit well above the shoulders;
+            # someone sitting at a desk with a hand near their face does not,
+            # so idle movement can't be scored as pull-ups. Checked only while
+            # extended — at the TOP of a real rep the shoulders come up almost
+            # level with the hands (measured: within 0.01 of frame height), so
+            # testing this every frame would reject the very frames that
+            # validate the rep.
+            if bar < shoulder - POSTURE_MARGIN:
+                self.hung = True
+            if self.hung and self.angle <= ELBOW_FLEX_ANGLE:
                 self.phase = "flexed"
                 self.reached = False
                 self._armed = True
@@ -233,6 +254,8 @@ class PullUpCounter:
             self.reached = True
         if self.angle >= ELBOW_EXTEND_ANGLE:
             self.phase = "extended"
+            # The next rep has to prove the hanging position for itself.
+            self.hung = False
             if self.reached:
                 self.count += 1
                 return True
@@ -253,7 +276,7 @@ def draw_panel(img, x1, y1, x2, y2, r=12, colour=C_DARK, alpha=0.65):
 
 
 def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_started,
-            stopped=False, browser_mode=False):
+            stopped=False, browser_mode=False, hung=True):
     h, w = frame.shape[:2]
 
     # Count
@@ -270,18 +293,26 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
     # Bottom info
     draw_panel(frame, 10, h-75, 470, h-10)
     if visible:
-        arrow = "^ PULL UP" if phase == "extended" else "v RETURN"
-        pc = C_ORANGE if phase == "extended" else C_GREEN
         cv2.putText(frame, f"Elbow Angle: {angle:.1f} deg", (20,h-48),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, C_WHITE, 1, cv2.LINE_AA)
-        if reached:
-            chin_txt, cc = "CHIN AT BAR", C_GREEN
+        if not hung and phase == "extended":
+            # Nothing can be scored until they're hanging under the bar — say
+            # so, rather than showing a chin reading that can't count.
+            cv2.putText(frame, "Grip the bar - hands above shoulders",
+                        (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, C_YELLOW, 2, cv2.LINE_AA)
         else:
-            chin_txt, cc = f"Chin {gap*100:.1f}% below bar", C_ORANGE
-        cv2.putText(frame, f"{chin_txt}  {arrow}",
-                    (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, cc, 2, cv2.LINE_AA)
+            arrow = "^ PULL UP" if phase == "extended" else "v RETURN"
+            pc = C_ORANGE if phase == "extended" else C_GREEN
+            if reached:
+                chin_txt, cc = "CHIN AT BAR", C_GREEN
+            else:
+                chin_txt, cc = f"Chin {gap*100:.1f}% below bar", C_ORANGE
+            cv2.putText(frame, f"{chin_txt}  {arrow}",
+                        (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, cc, 2, cv2.LINE_AA)
     else:
-        cv2.putText(frame, "Head, arms and bar must all be in frame",
+        # The bar itself is never detected — the wrists stand in for it — so
+        # the message names what actually has to be visible.
+        cv2.putText(frame, "Face and one full arm (to the hand) must be visible",
                     (20,h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, C_YELLOW, 2, cv2.LINE_AA)
 
     # Ended by the two-second pause rule
@@ -301,7 +332,7 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
         cv2.rectangle(ov, (0,0), (w,h), (0,0,0), -1)
         cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
         ready_col = C_GREEN if visible else C_YELLOW
-        ready_txt = "Body detected! " if visible else "Position yourself in frame (side-on)"
+        ready_txt = "Body detected! " if visible else "Get your face and one arm in frame"
         cv2.putText(frame, ready_txt, (w//2 - 300, h//2 - 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, ready_col, 2, cv2.LINE_AA)
         start_txt = ("Tap START to begin" if browser_mode
@@ -457,6 +488,7 @@ def run(source):
                     calc_angle(shoulder, elbow, wrist),
                     chin_y(lms),
                     bar_y(lms, wr_i),
+                    lms[s_i].y,
                     counting=test_started,
                 )
                 if scored:
@@ -473,7 +505,7 @@ def run(source):
 
         draw_ui(frame, counter.count, counter.phase, counter.angle, elapsed,
                 counter.gap, counter.reached, body_visible, test_started,
-                stopped=counter.stopped)
+                stopped=counter.stopped, hung=counter.hung)
         cv2.imshow(WIN, frame)
 
         key = cv2.waitKey(1) & 0xFF

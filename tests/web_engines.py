@@ -969,6 +969,7 @@ class PullUpEngine(BaseWebEngine):
                 angle,
                 pullup_mod.chin_y(lms),
                 pullup_mod.bar_y(lms, wr_i),
+                lms[s_i].y,
                 counting=test_started,
             )
         return True
@@ -1045,9 +1046,16 @@ class PullUpEngine(BaseWebEngine):
                 if newly_stopped:
                     self._safe_stage(count, round(elapsed, 1))
 
+                # The modified pull-up's HUD reports whether they're hanging on
+                # the bar yet; the full pull-up's doesn't take that argument, and
+                # its counter keeps the flag private, so this stays empty there.
+                extra = {}
+                hung = getattr(self.counter, "hung", None)
+                if hung is not None:
+                    extra["hung"] = hung
                 self._hud.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
                                   body_visible, test_started, stopped=stopped,
-                                  browser_mode=True)
+                                  browser_mode=True, **extra)
                 self._publish(frame)
         except Exception as e:
             with self._lock:
