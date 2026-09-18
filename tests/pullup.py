@@ -197,6 +197,14 @@ class PullUpCounter:
         self._last_seen = now
         if blind:
             self._ref = None
+            # A rep that was mid-flight is also void: we didn't see how it
+            # ended, and "chin reached the bar" earlier in the cycle is not
+            # evidence they lowered again rather than dropping off. Scrapping
+            # it can cost a real rep, which the coach can add back on the
+            # review screen; crediting an unwatched one inflates the score
+            # with nothing to show the coach it happened.
+            self.phase = "extended"
+            self.reached = False
 
         if self._ref is None:
             self._ref, self._last_move = (self.angle, chin), now
