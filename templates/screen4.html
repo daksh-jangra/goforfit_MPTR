@@ -392,6 +392,71 @@
                   return state.disp_cm !== null ? { sitReachScore: state.disp_cm } : null;
               },
           },
+          trunk_lift: {
+              feedUrl:    '/api/trunk_lift/feed',
+              stateUrl:   '/api/trunk_lift/state',
+              actionUrl:  '/api/trunk_lift/action',
+              browserCamera: true,
+              frameUrl:   '/api/trunk_lift/frame',
+              // Calibration is two taps on the video itself (the ends of the
+              // measuring stick), not a typed number — so clickCalibrate is on
+              // and the enter-cm overlay stays hidden.
+              clickCalibrate: true,
+              buttons: [
+                  { id: 'mark',    label: 'MARK',       action: 'mark',        color: 'bg-sky-600' },
+                  { id: 'undo',    label: 'UNDO TRIAL', action: 'undo',        color: 'bg-amber-600' },
+                  { id: 'recalib', label: 'RECALIBRATE', action: 'calib_reset', color: 'bg-orange-600' },
+                  { id: 'reset',   label: 'RESET',      action: 'reset',       color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (!state.running) return true;
+                  if (btnId === 'mark') return !state.calibrated || state.state === 'DONE';
+                  if (btnId === 'undo') return !state.trials || state.trials.length === 0;
+                  return false;
+              },
+              renderStatus(state) {
+                  const lines = [];
+                  if (!state.calibrated) {
+                      const n = state.calib_points || 0;
+                      lines.push(`Tap both ends of the ${state.stick_cm} cm measuring stick on the video (${n}/2)`);
+                  } else {
+                      lines.push(`Scale: ${state.px_per_cm} px/cm — floor line set`);
+                      if (state.height_cm !== null && state.height_cm !== undefined) {
+                          lines.push(`Chin: ${state.height_cm} cm (${state.height_in} in)` +
+                                     (state.hold_pct > 0 ? `  — holding ${state.hold_pct}%` : ''));
+                      } else {
+                          lines.push(state.pose_detected ? 'Chin not visible — turn the head toward the camera'
+                                                         : 'No participant detected');
+                      }
+                      const trials = state.trials || [];
+                      lines.push(`Trials: ${trials.length ? trials.map(t => t + ' cm').join('  |  ') : '--'}` +
+                                 `  (${trials.length}/${state.trials_required})`);
+                      if (state.best_cm !== null && state.best_cm !== undefined) {
+                          // The protocol records to the nearest cm, so show the
+                          // measured value and the recorded one together — a best
+                          // that matches neither trial otherwise looks like a bug.
+                          const exact = state.best_exact_cm;
+                          // A capped score says so on its own; showing
+                          // "30.5 → records as 30" as well reads as rounding,
+                          // which isn't what happened.
+                          const rounds = (exact !== null && exact !== undefined
+                                          && exact !== state.best_cm && !state.capped);
+                          lines.push((rounds ? `Best: ${exact} cm → records as ${state.best_cm} cm`
+                                             : `Best: ${state.best_cm} cm`) +
+                                     ` (${state.best_in} in)` +
+                                     (state.capped ? ' — capped at 12 in' : ''));
+                      }
+                  }
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              syncFields(state) {
+                  return (state.best_cm !== null && state.best_cm !== undefined)
+                      ? { trunkLiftScore: state.best_cm }
+                      : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1019,7 +1084,7 @@
 
           const EXERCISE_TYPE = {
               wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp', full_pull_up:'FullPullUp',
-              wall_toss:'WallToss', sit_reach:'SitReach',
+              wall_toss:'WallToss', sit_reach:'SitReach', trunk_lift:'TrunkLift',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };

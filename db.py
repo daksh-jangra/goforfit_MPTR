@@ -174,6 +174,18 @@ CREATE TABLE IF NOT EXISTS sit_reach (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Trunk Lift Test ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trunk_lift (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    lift_cm         REAL,        -- best trial, chin to floor, capped at 30.5 cm (12 in)
+    trial1_cm       REAL,        -- the two trials the protocol allows, kept for review
+    trial2_cm       REAL,
+    stick_cm        REAL,        -- measuring-stick length used to set the scale
+    rating          TEXT,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +247,10 @@ UNION ALL
     SELECT 'sit_reach', sr.id, sr.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, sr.reach_cm, sr.rating, sr.recorded_at
     FROM sit_reach sr LEFT JOIN sessions s ON sr.session_id = s.id
+UNION ALL
+    SELECT 'trunk_lift', tl.id, tl.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, tl.lift_cm, tl.rating, tl.recorded_at
+    FROM trunk_lift tl LEFT JOIN sessions s ON tl.session_id = s.id
 UNION ALL
     SELECT 'vertical_jump', vj.id, vj.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, vj.jump_cm, vj.rating, vj.recorded_at
@@ -504,6 +520,26 @@ class GoForFitDB:
             )
             return cur.lastrowid
         
+    # ── Trunk Lift ───────────────────────────────────────────────────────
+
+    def save_trunk_lift(
+        self,
+        session_id: int,
+        lift_cm: float,
+        trial1_cm: float = None,
+        trial2_cm: float = None,
+        stick_cm: float = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO trunk_lift (session_id, lift_cm, trial1_cm, trial2_cm,
+                                           stick_cm, rating)
+                   VALUES (?,?,?,?,?,?)""",
+                (session_id, lift_cm, trial1_cm, trial2_cm, stick_cm, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -547,7 +583,8 @@ class GoForFitDB:
 
     VALID_TABLES = {
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
-        "shuttle_run", "dash_50m", "sit_reach", "run_600m", "vertical_jump",
+        "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
+        "vertical_jump",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:
@@ -636,6 +673,7 @@ if __name__ == "__main__":
     db.save_shuttle_run(sid, time_sec=12.4, lane=1, rating="Good")
     db.save_dash_50m(sid, time_sec=8.1, lane=1, start_mode="whistle", rating="Excellent")
     db.save_sit_reach(sid, reach_cm=5.3, leg_cm=87.0, rating="Average")
+    db.save_trunk_lift(sid, lift_cm=23, trial1_cm=21.4, trial2_cm=22.8, stick_cm=30.0)
 
     print("\n── BMI ──────────────────────────────────────")
     for r in db.get_all("bmi"):

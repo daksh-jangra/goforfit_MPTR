@@ -17,6 +17,7 @@ SECTIONS IN THIS FILE
   2C. FullPullUpEngine   wraps pullup_full.py     (pull-up counter)
   3. WallTossEngine      wraps wtt.py             (alternate-hand wall toss)
   4. SitReachEngine      wraps snr.py             (sit & reach)
+  4B. TrunkLiftEngine    wraps trunk_lift.py      (trunk lift height)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -1559,6 +1560,353 @@ class SitReachEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4B — TRUNK LIFT   (wraps trunk_lift.py)
+# ════════════════════════════════════════════════════════════════════════
+import trunk_lift as tl_mod  # noqa: E402
+
+_MODEL_TRUNK = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class TrunkLiftEngine(BaseWebEngine):
+    """Live trunk-lift engine. The coach taps the two ends of the measuring
+    stick on the video (`calib_click`), which fixes both the scale and the
+    floor line; from then on every frame reports the chin height above the
+    mat. Trials capture themselves when the height holds steady, and the
+    MARK button captures manually when the coach would rather call it.
+
+    All the geometry and the trial state machine live in trunk_lift.py —
+    this class only replaces the desktop cv2.imshow/waitKey loop, the same
+    way SitReachEngine wraps snr.py."""
+
+    def __init__(self, session_id=None, on_stage=None, stick_cm=None,
+                 trials=tl_mod.DEFAULT_TRIALS, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera, like sit & reach: frames are POSTed to
+        # /api/trunk_lift/frame -> push_frame(), so no server webcam is
+        # opened and the test runs on a phone or a camera-less host.
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.stick_cm = float(stick_cm) if stick_cm else tl_mod.DEFAULT_STICK_CM
+        self.landmarker = None
+        self.tracker = tl_mod.TrunkLiftTracker(trials=trials)
+        self.cx_sm = tl_mod.RollingMean(tl_mod.SMOOTH_FRAMES)
+        self.cy_sm = tl_mod.RollingMean(tl_mod.SMOOTH_FRAMES)
+
+        self.calib = None          # tl_mod.FloorCalibration once both ends are tapped
+        self._calib_points = []    # raw taps, in frame pixels, like the shuttle-run engine
+        self.height_cm = None      # latest chin height above the mat
+        self.pose_detected = False
+        self.last_save = None
+
+    # ── camera plumbing (identical contract to SitReachEngine) ──────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """Switching cameras flips the preview horizontally, which moves the
+        stick to different pixels — the stored taps would then describe a
+        floor line that is no longer under the participant. Drop the
+        calibration and ask for two fresh taps."""
+        was = self.mirror_preview
+        super().set_facing(facing)
+        if was != self.mirror_preview:
+            with self._lock:
+                self._clear_calibration_locked("Camera changed — tap the stick ends again")
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_TRUNK)
+        options = tl_mod.PoseLandmarkerOptions(
+            base_options=tl_mod.BaseOptions(model_asset_path=_MODEL_TRUNK),
+            running_mode=tl_mod.VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = tl_mod.PoseLandmarker.create_from_options(options)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        best = self.tracker.best_cm
+        return {
+            "state": tl_mod.State.CALIBRATE.name if self.calib is None else self.tracker.state.name,
+            "calibrated": self.calib is not None,
+            "calib_points": len(self._calib_points),
+            "px_per_cm": round(self.calib.px_per_cm, 2) if self.calib else None,
+            "stick_cm": self.stick_cm,
+            "pose_detected": self.pose_detected,
+            "height_cm": round(self.height_cm, 1) if self.height_cm is not None else None,
+            "height_in": round(tl_mod.to_inches(self.height_cm), 1) if self.height_cm is not None else None,
+            "hold_pct": int(round(self.tracker.hold_progress() * 100)),
+            "trials": [round(t, 1) for t in self.tracker.trials],
+            "trials_required": self.tracker.trials_required,
+            # The manual records to the nearest centimetre; the decimals stay
+            # in `trials` so the coach can see what the cap or the rounding did.
+            # best_exact_cm carries the unrounded value so screen4 can show
+            # "11.7 cm -> records as 12 cm" — otherwise a best that doesn't
+            # match either trial reads as an arithmetic bug.
+            "best_cm": round(best) if best is not None else None,
+            "best_exact_cm": round(best, 1) if best is not None else None,
+            "best_in": round(tl_mod.to_inches(best), 1) if best is not None else None,
+            "capped": bool(best is not None and best >= tl_mod.MAX_CM - 1e-6),
+            "status_msg": self.tracker.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons / taps on the feed) ────────────────────
+    def _clear_calibration_locked(self, msg=""):
+        self.calib = None
+        self._calib_points = []
+        self.height_cm = None
+        self.tracker.status_msg = msg
+
+    def action_calib_click(self, value=None):
+        """One tap on the video, in frame pixels — {x, y}. Two taps make the
+        stick line: the first sets one end, the second completes it."""
+        x = (value or {}).get("x")
+        y = (value or {}).get("y")
+        if x is None or y is None:
+            return {"ok": False, "error": "calib_click needs {x, y}"}
+        with self._lock:
+            if self.calib is not None:
+                self._clear_calibration_locked()
+            self._calib_points.append((float(x), float(y)))
+            if len(self._calib_points) < 2:
+                return {"ok": True, "count": 1}
+            try:
+                self.calib = tl_mod.FloorCalibration(
+                    self._calib_points[0], self._calib_points[1], self.stick_cm)
+            except ValueError as exc:
+                self._calib_points = []
+                return {"ok": False, "error": f"{exc} — tap both ends again"}
+            self.tracker.status_msg = f"Calibrated: {self.calib.px_per_cm:.1f} px/cm"
+            return {"ok": True, "count": 2, "px_per_cm": round(self.calib.px_per_cm, 2)}
+
+    def action_calib_reset(self, value=None):
+        with self._lock:
+            self._clear_calibration_locked("Tap both ends of the stick")
+            return {"ok": True}
+
+    def action_stick_cm(self, value=None):
+        """Change the reference length (the coach's stick isn't 30 cm).
+        Rebuilds the calibration from the taps already made rather than
+        making the coach tap again."""
+        try:
+            cm = float(value)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Stick length must be a number"}
+        if not 5.0 <= cm <= 300.0:
+            return {"ok": False, "error": "Stick length must be between 5 and 300 cm"}
+        with self._lock:
+            # Trials already captured were measured against the old scale.
+            # Rebuilding it now would leave one test holding two different
+            # units, so make the coach clear the trials deliberately.
+            if self.tracker.trials:
+                return {"ok": False,
+                        "error": "Trials already recorded on the old scale — tap RESET first"}
+            self.stick_cm = cm
+            if len(self._calib_points) == 2:
+                try:
+                    self.calib = tl_mod.FloorCalibration(
+                        self._calib_points[0], self._calib_points[1], cm)
+                except ValueError as exc:
+                    self._clear_calibration_locked(str(exc))
+            return {"ok": True, "stick_cm": cm}
+
+    def action_mark(self, value=None):
+        """Capture the current height as a trial, for when the automatic
+        hold doesn't fire but the coach saw a good one."""
+        with self._lock:
+            if self.calib is None:
+                return {"ok": False, "error": "Tap both ends of the measuring stick first"}
+            captured = self.tracker.mark()
+            if captured is None:
+                return {"ok": False, "error": self.tracker.status_msg or "Nothing to capture"}
+            self._maybe_stage_locked()
+            return {"ok": True, "trial_cm": round(captured, 1),
+                    "best_cm": round(self.tracker.best_cm)}
+
+    def action_undo(self, value=None):
+        with self._lock:
+            if not self.tracker.undo():
+                return {"ok": False, "error": "No trials to undo"}
+            # The staged result described the trial that just went away, and
+            # screen3 reads that staged copy — so correct it NOW rather than
+            # at stop(), or the coach can save the value they just undid.
+            self._staged = False
+            self.last_save = None
+            self._maybe_stage_locked(force=True)
+            return {"ok": True, "trials": [round(t, 1) for t in self.tracker.trials]}
+
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.cx_sm.reset()
+            self.cy_sm.reset()
+            self.height_cm = None
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        """Generic dispatcher, so app.py can forward screen4's {action, value}
+        payload straight through the way the dual-feed engines do."""
+        handler = {
+            "calib_click": self.action_calib_click,
+            "calib_reset": self.action_calib_reset,
+            "stick_cm":    self.action_stick_cm,
+            "mark":        self.action_mark,
+            "undo":        self.action_undo,
+            "reset":       self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self, force=False):
+        """Stage the best trial once the protocol's two are in. `force` also
+        stages a shorter (or empty) set, which undo needs so the staged copy
+        stops describing a trial that no longer exists. Called with
+        self._lock held."""
+        if not (self.tracker.complete or force):
+            return
+        best = self.tracker.best_cm
+        if best is None:
+            if force:
+                # Every trial was undone: replace the staged result with an
+                # empty one instead of leaving the old number for review.
+                self.last_save = None
+                self._safe_stage(None, None, None, self.stick_cm, None)
+            return
+        trials = [round(t, 1) for t in self.tracker.trials]
+        self.last_save = round(best)
+        # Rounded to the nearest cm, as the manual records it. No rating:
+        # the age-banded zones aren't confirmed yet, so screen3 shows the
+        # number alone rather than a label the coach would have to undo.
+        self._safe_stage(self.last_save,
+                         trials[0] if len(trials) > 0 else None,
+                         trials[1] if len(trials) > 1 else None,
+                         self.stick_cm, None)
+
+    def _stage_on_stop(self):
+        """Stopped mid-test: one good trial still beats sending screen3
+        nothing, so stage whatever was captured."""
+        with self._lock:
+            if self._staged or not self.tracker.trials:
+                return
+            best = self.tracker.best_cm
+            trials = [round(t, 1) for t in self.tracker.trials]
+            self.last_save = round(best)
+            self._safe_stage(self.last_save,
+                             trials[0] if len(trials) > 0 else None,
+                             trials[1] if len(trials) > 1 else None,
+                             self.stick_cm, None)
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                # Frames come from the browser; a 1s timeout keeps stop()
+                # responsive when the phone stops sending.
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so landmarks, the coach's taps and
+                # the overlay all live in the same pixel space.
+                frame = camera.mirror(frame, self.mirror_preview)
+                fh, fw = frame.shape[:2]
+                mp_image = tl_mod.mp.Image(
+                    image_format=tl_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+
+                chin_pt = None
+                height_cm = None
+                pose_detected = bool(results.pose_landmarks)
+
+                if pose_detected:
+                    lms = results.pose_landmarks[0]
+                    raw_chin = tl_mod.chin_point(lms, fw, fh)
+                    if raw_chin is not None:
+                        chin_pt = np.array([self.cx_sm.push(raw_chin[0]),
+                                            self.cy_sm.push(raw_chin[1])])
+                    else:
+                        # Face lost: drop the smoothing history so the chin
+                        # doesn't creep back from stale frames on re-detect.
+                        self.cx_sm.reset()
+                        self.cy_sm.reset()
+
+                    for i, j in tl_mod._POSE_CONNECTIONS:
+                        if lms[i].visibility >= 0.45 and lms[j].visibility >= 0.45:
+                            p1 = (int(lms[i].x * fw), int(lms[i].y * fh))
+                            p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+
+                with self._lock:
+                    calib = self.calib
+                    if calib is not None and chin_pt is not None:
+                        height_cm = calib.height_cm(chin_pt)
+                    self.height_cm = height_cm
+                    self.pose_detected = pose_detected
+                    captured = self.tracker.update(height_cm)
+                    if captured is not None:
+                        self._maybe_stage_locked()
+                    calib_pts = list(self._calib_points) if calib is None else None
+                    stick_cm = self.stick_cm
+                    # Drawn inside the lock: the HUD walks tracker.trials, and
+                    # an UNDO arriving mid-draw would shrink that list between
+                    # the length check and the index, killing the loop.
+                    tl_mod.draw_hud(frame, self.tracker, calib, chin_pt, height_cm,
+                                    calib_points=calib_pts, stick_cm=stick_cm)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -1575,6 +1923,7 @@ __all__ = [
     "FullPullUpEngine",
     "WallTossEngine",
     "SitReachEngine",
+    "TrunkLiftEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]
