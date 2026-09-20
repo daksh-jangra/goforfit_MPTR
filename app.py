@@ -35,7 +35,7 @@ import time
 import concurrent.futures
 from pathlib import Path
 import sqlite3
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 import cv2
@@ -73,11 +73,11 @@ DUAL_FEED_IMPORT_ERROR: Optional[str] = None
 try:
     from web_engines import (
         BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
-        SitReachEngine, WingspanEngine, VerticalJumpEngine,
+        SitReachEngine, TrunkLiftEngine, WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
     BmiEngine = CurlUpEngine = PullUpEngine = FullPullUpEngine = None
-    WallTossEngine = SitReachEngine = None
+    WallTossEngine = SitReachEngine = TrunkLiftEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -112,6 +112,7 @@ _pull_up_engine = None
 _full_pull_up_engine = None
 _wall_toss_engine = None
 _sit_reach_engine = None     
+_trunk_lift_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -462,6 +463,44 @@ TESTS = {
         "unit":   "cm",
         "live_feed":   True,
     },
+    "trunk_lift": {
+        "id":          "trunk_lift",
+        "title":       "Trunk Lift",
+        "subtitle":    "Chin-to-floor height, best of two trials",
+        "icon":        "🧎",
+        "category":    "Musculoskeletal",
+        "script":      "trunk_lift.py",
+        "description": (
+            "Measures trunk extension: the participant lies prone and lifts the upper "
+            "body, and the chin height above the mat is measured at the held peak. "
+            "Tap both ends of the measuring stick on the video once to set the scale "
+            "and the floor line. Two trials, better one kept, capped at 12 in (30 cm)."
+        ),
+        "controls": [
+            ("TAP x2", "Tap both ends of the measuring stick"),
+            ("MARK",   "Capture the current height as a trial"),
+            ("UNDO",   "Remove the last trial"),
+            ("RESET",  "Start the trials over"),
+        ],
+        "tip": (
+            "Camera on the floor, side-on, 1.5-2 m away, whole mat in frame. Lay the "
+            "measuring stick on the mat in front of the chin - where the protocol "
+            "already puts it - so it sits the same distance from the lens as the chin."
+        ),
+        "params": [
+            {
+                "name":        "stick_cm",
+                "label":       "Measuring stick length (cm)",
+                "type":        "number",
+                "min":         5,
+                "max":         300,
+                "placeholder": "e.g. 30",
+                "arg":         "--stick-cm",
+            }
+        ],
+        "unit":   "cm",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -563,6 +602,8 @@ def _is_running(test_id: str) -> bool:
         return _wall_toss_engine.is_running()
     if test_id == "sit_reach" and _sit_reach_engine is not None:
         return _sit_reach_engine.is_running()
+    if test_id == "trunk_lift" and _trunk_lift_engine is not None:
+        return _trunk_lift_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -661,6 +702,14 @@ class SitReachSave(BaseModel):
     session_id: Optional[int] = None
     reach_cm: Optional[float] = None
     leg_cm: Optional[float] = None
+    rating: Optional[str] = None
+
+class TrunkLiftSave(BaseModel):
+    session_id: Optional[int] = None
+    lift_cm: Optional[float] = None
+    trial1_cm: Optional[float] = None
+    trial2_cm: Optional[float] = None
+    stick_cm: Optional[float] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -891,6 +940,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "sit_reach" and SitReachEngine is not None:
         return await _launch_sit_reach(request)
+
+    if test_id == "trunk_lift" and TrunkLiftEngine is not None:
+        return await _launch_trunk_lift(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1149,6 +1201,42 @@ async def _launch_sit_reach(request: Request):
     _pending.pop("sit_reach", None)
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
+async def _launch_trunk_lift(request: Request):
+    global _trunk_lift_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # Optional: the protocol's stick is 30 cm, and that default is what most
+    # coaches will use. Any known length works as long as it is entered here.
+    stick_cm = body.get("stick_cm")
+    if stick_cm is None or str(stick_cm).strip() == "":
+        stick_cm = 30.0
+    else:
+        try:
+            stick_cm = float(stick_cm)
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "Stick length must be a number"}, status_code=400)
+        if not 5.0 <= stick_cm <= 300.0:
+            return JSONResponse({"ok": False, "error": "Stick length must be between 5 and 300 cm"}, status_code=400)
+
+    def _stage(lift_cm, trial1_cm, trial2_cm, stick_cm_val, rating):
+        _pending["trunk_lift"] = {
+            "session_id": session_id, "lift_cm": lift_cm,
+            "trial1_cm": trial1_cm, "trial2_cm": trial2_cm,
+            "stick_cm": stick_cm_val, "rating": rating,
+        }
+
+    try:
+        engine = TrunkLiftEngine(session_id=session_id, on_stage=_stage, stick_cm=stick_cm)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _trunk_lift_engine = engine
+    _pending.pop("trunk_lift", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1274,7 +1362,7 @@ def engine_status():
         "web_engines_error": WEB_ENGINES_IMPORT_ERROR,
         "web_engines_covers": ["wingspan", "bmi", "curl_up", "pull_up", "full_pull_up",
                                "wall_toss",
-                               "sit_reach", "vertical_jump"],
+                               "sit_reach", "trunk_lift", "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -1345,6 +1433,11 @@ def stop(test_id: str):
         return {"ok": True}
     if test_id == "sit_reach" and _sit_reach_engine is not None:
         _sit_reach_engine.stop()
+        return {"ok": True}
+    if test_id == "trunk_lift" and _trunk_lift_engine is not None:
+        # The engine stages the best trial captured so far from its own
+        # stop() hook, so a half-finished test still reaches screen3.
+        _trunk_lift_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -1500,6 +1593,11 @@ async def full_pull_up_frame(request: Request):
 @app.post("/api/wall_toss/frame")
 async def wall_toss_frame(request: Request):
     return await _receive_frame(_wall_toss_engine, request)
+
+
+@app.post("/api/trunk_lift/frame")
+async def trunk_lift_frame(request: Request):
+    return await _receive_frame(_trunk_lift_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -1899,6 +1997,43 @@ def wall_toss_action(b: WallTossAction):
     return JSONResponse({"ok": False, "error": f"Unknown action '{b.action}'"}, status_code=400)
 
 
+# ── Trunk lift live-feed control ───────────────────────────────────────
+class TrunkLiftAction(BaseModel):
+    action: str
+    # calib_click carries {x, y}; stick_cm carries a number. Both arrive in
+    # the same `value` field screen4 already sends for every engine action.
+    value: Optional[Any] = None
+
+@app.get("/api/trunk_lift/feed")
+def trunk_lift_feed():
+    if _trunk_lift_engine is None or not _trunk_lift_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Trunk lift test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _trunk_lift_engine is not None and _trunk_lift_engine.is_running():
+            jpg = _trunk_lift_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/trunk_lift/state")
+def trunk_lift_state():
+    if _trunk_lift_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_trunk_lift_engine.get_state()}
+
+@app.post("/api/trunk_lift/action")
+def trunk_lift_action(b: TrunkLiftAction):
+    if _trunk_lift_engine is None or not _trunk_lift_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Trunk lift test isn't running"}, status_code=409)
+    # The engine validates the action name itself and reports unknown ones.
+    return _trunk_lift_engine.action(b.action, b.value)
+
 # ── Sit & reach live-feed control ──────────────────────────────────────
 class SitReachAction(BaseModel):
     action: str
@@ -2133,6 +2268,22 @@ def save_sit_reach(b: SitReachSave):
         rating     = b.rating,
     )
     return {"ok": True, "id": row_id}
+
+@app.post("/api/save/trunk_lift")
+def save_trunk_lift(b: TrunkLiftSave):
+    """Fields: session_id, lift_cm, trial1_cm (opt), trial2_cm (opt), stick_cm (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    row_id = db.save_trunk_lift(
+        session_id = b.session_id,
+        lift_cm    = b.lift_cm,
+        trial1_cm  = b.trial1_cm,
+        trial2_cm  = b.trial2_cm,
+        stick_cm   = b.stick_cm,
+        rating     = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
 
 @app.post("/api/save/vertical_jump")
 def save_vertical_jump(b: VerticalJumpSave):
