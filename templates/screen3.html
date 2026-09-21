@@ -165,6 +165,18 @@
                 <div id="bmi-value" class="text-3xl font-bold"></div>
                 <div id="bmi-category" class="text-sm font-semibold"></div>
             </div>
+            {% elif test.id == 'reverse_curl' %}
+            <!-- One trial, pass/fail (Brockport p.84) — there is no number to
+                 type, so the override is a verdict the coach confirms. -->
+            <div class="max-w-md mx-auto w-full">
+                <select id="override-input"
+                        class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-white focus:outline-none focus:border-indigo-500">
+                    <option value="">Select result</option>
+                    <option value="1">Pass</option>
+                    <option value="0">Fail</option>
+                </select>
+                <p id="override-msg" class="text-xs text-amber-700 mt-1.5 text-center hidden"></p>
+            </div>
             {% else %}
             <div class="max-w-md mx-auto w-full">
                 <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
@@ -372,6 +384,7 @@
             wall_toss:   'catches',
             sit_reach:   'reach_cm',
             trunk_lift:  'lift_cm',
+            reverse_curl: 'passed',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
             vertical_jump: 'jump_cm',
@@ -386,11 +399,20 @@
             wall_toss:   'catches',
             sit_reach:   'cm',
             trunk_lift:  'cm',
+            reverse_curl: '',
             bmi:         'cm',
             wingspan:    'cm',
             vertical_jump: 'cm',
             run_600m:    's',
         };
+
+        // Pass/fail tests record a verdict, not a measurement. Their override
+        // control is a Pass/Fail select and Fail is stored as 0 — so the
+        // "must be a positive number" guards used for every measured test
+        // would make a Fail impossible to save. These branches skip them.
+        const PASS_FAIL_TESTS = new Set(['reverse_curl']);
+        const IS_PASS_FAIL = PASS_FAIL_TESTS.has(testId);
+        const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
 
         let pendingResult = null;
 
@@ -452,6 +474,26 @@
             const field = RESULT_FIELD_MAP[testId];
             const unit = RESULT_UNIT_MAP[testId] || '';
 
+            if (!TEST_TIMED && IS_PASS_FAIL) {
+                const passed = pendingResult[field];
+                const sel = document.getElementById('override-input');
+                if (passed !== undefined && passed !== null) {
+                    sel.value = (passed === true || passed === 1) ? '1' : '0';
+                }
+                const extra = [];
+                if (pendingResult.arm) extra.push(`${pendingResult.arm} arm`);
+                if (pendingResult.peak_angle_deg !== undefined && pendingResult.peak_angle_deg !== null)
+                    extra.push(`best flexion ${pendingResult.peak_angle_deg}\u00b0`);
+                if (pendingResult.hold_s !== undefined && pendingResult.hold_s !== null)
+                    extra.push(`held ${pendingResult.hold_s}s`);
+                const detail = extra.length ? ` (${extra.join(', ')})` : '';
+                document.getElementById('pending-summary').innerHTML =
+                    (passed !== undefined && passed !== null)
+                        ? `AI verdict: <span class="font-semibold text-indigo-950">${passFailLabel(passed)}</span>${detail} — change above if it looks wrong.`
+                        : '<span class="text-gray-400">No AI verdict staged. Choose Pass or Fail below, or use Switch to AI.</span>';
+                return;
+            }
+
             if (!TEST_TIMED) {
                 // Single-input layout: drop the AI value straight into the
                 // editable box so the user can review or correct it inline.
@@ -487,6 +529,24 @@
         function applyOverride() {
             const input = document.getElementById('override-input');
             const msg   = document.getElementById('override-msg');
+            if (IS_PASS_FAIL) {
+                if (input.value !== '0' && input.value !== '1') {
+                    msg.innerText = 'Choose Pass or Fail.';
+                    msg.classList.remove('hidden');
+                    return;
+                }
+                if (!pendingResult) {
+                    const sid0 = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
+                    pendingResult = { session_id: sid0 };
+                }
+                const passed = input.value === '1';
+                pendingResult[RESULT_FIELD_MAP[testId]] = passed;
+                pendingResult.rating = passFailLabel(passed);
+                msg.innerText = `Result set to ${passFailLabel(passed)}. Click Save to Database to confirm.`;
+                msg.classList.remove('hidden');
+                renderPendingResult();
+                return;
+            }
             const v = parseFloat(input.value);
             if (!v || v <= 0) {
                 msg.innerText = 'Please enter a valid positive number.';
@@ -511,17 +571,31 @@
                 // Single-input layout: the box itself is the value to save —
                 // no separate "Apply" step needed.
                 const input = document.getElementById('override-input');
-                const v = parseFloat(input.value);
-                if (!v || v <= 0) {
-                    showSaveMessage('Enter a value before saving.', false);
-                    return;
+                if (IS_PASS_FAIL) {
+                    if (input.value !== '0' && input.value !== '1') {
+                        showSaveMessage('Choose Pass or Fail before saving.', false);
+                        return;
+                    }
+                    if (!pendingResult) {
+                        const sid0 = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
+                        pendingResult = { session_id: sid0 };
+                    }
+                    const passed = input.value === '1';
+                    pendingResult[RESULT_FIELD_MAP[testId]] = passed;
+                    pendingResult.rating = passFailLabel(passed);
+                } else {
+                    const v = parseFloat(input.value);
+                    if (!v || v <= 0) {
+                        showSaveMessage('Enter a value before saving.', false);
+                        return;
+                    }
+                    if (!pendingResult) {
+                        const sid = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
+                        pendingResult = { session_id: sid };
+                    }
+                    const field = RESULT_FIELD_MAP[testId] || 'wingspan_cm';
+                    pendingResult[field] = v;
                 }
-                if (!pendingResult) {
-                    const sid = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
-                    pendingResult = { session_id: sid };
-                }
-                const field = RESULT_FIELD_MAP[testId] || 'wingspan_cm';
-                pendingResult[field] = v;
 
                 // BMI: also carry weight so the server computes bmi_value + category.
                 if (testId === 'bmi') {
@@ -589,9 +663,14 @@
                     loadSavedResults();
 
                     // Hand the confirmed score back to the Laravel parent window (if any) and close.
+                    // Pass/fail goes over as 1/0 — the same thing all_results
+                    // exposes as primary_result — since the dashboard expects a
+                    // number, not a boolean.
                     const syncValue = Array.isArray(payload.laps)
                         ? payload.laps.reduce((sum, l) => sum + l.time_sec, 0) / payload.laps.length
-                        : payload[RESULT_FIELD_MAP[testId]];
+                        : IS_PASS_FAIL
+                            ? (payload[RESULT_FIELD_MAP[testId]] ? 1 : 0)
+                            : payload[RESULT_FIELD_MAP[testId]];
                     syncResultToLaravel(syncValue);
                 } else {
                     showSaveMessage('Could not save result.', false);
@@ -638,7 +717,8 @@
                     const tr = document.createElement('tr');
                     tr.className = 'border-b border-gray-100';
                     const ts = r.recorded_at || r.created_at || r.timestamp || '-';
-                    const val = (r[field] !== undefined && r[field] !== null) ? r[field] : '-';
+                    let val = (r[field] !== undefined && r[field] !== null) ? r[field] : '-';
+                    if (IS_PASS_FAIL && val !== '-') val = passFailLabel(val);
                     tr.innerHTML = `<td class="py-1.5 pr-3 text-gray-500">${ts}</td><td class="py-1.5 pr-3 font-semibold text-indigo-950">${val}</td>`;
                     tbody.appendChild(tr);
                 });
