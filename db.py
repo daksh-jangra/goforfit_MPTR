@@ -186,6 +186,21 @@ CREATE TABLE IF NOT EXISTS trunk_lift (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Reverse Curl Test ─────────────────────────────────────────────────────
+-- Pass/fail on a single trial (Brockport p.84), so there is no score to
+-- record — `passed` IS the result. peak_angle_deg and hold_s are kept so the
+-- coach can see how close a failed trial came.
+CREATE TABLE IF NOT EXISTS reverse_curl (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    passed          INTEGER,     -- 1 = one correct reverse curl, 0 = not completed
+    arm             TEXT,        -- 'left' / 'right' — the preferred arm used
+    peak_angle_deg  REAL,        -- deepest interior elbow angle reached (target <= 45)
+    hold_s          REAL,        -- longest hold at the target (protocol: 2 s)
+    rating          TEXT,        -- 'Pass' / 'Fail'
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,7 +273,11 @@ UNION ALL
 UNION ALL
     SELECT 'run_600m', rm.id, rm.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, rm.time_sec, rm.rating, rm.recorded_at
-    FROM run_600m rm LEFT JOIN sessions s ON rm.session_id = s.id;
+    FROM run_600m rm LEFT JOIN sessions s ON rm.session_id = s.id
+UNION ALL
+    SELECT 'reverse_curl', rc.id, rc.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, rc.passed, rc.rating, rc.recorded_at
+    FROM reverse_curl rc LEFT JOIN sessions s ON rc.session_id = s.id;
 """
 
 
@@ -540,6 +559,30 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Reverse Curl ─────────────────────────────────────────────────────
+
+    def save_reverse_curl(
+        self,
+        session_id: int,
+        passed: bool,
+        arm: str = None,
+        peak_angle_deg: float = None,
+        hold_s: float = None,
+        rating: str = None,
+    ) -> int:
+        """One trial, pass/fail. `rating` defaults to Pass/Fail so the results
+        view shows a word rather than a bare 1/0."""
+        if rating is None:
+            rating = "Pass" if passed else "Fail"
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO reverse_curl (session_id, passed, arm,
+                                             peak_angle_deg, hold_s, rating)
+                   VALUES (?,?,?,?,?,?)""",
+                (session_id, 1 if passed else 0, arm, peak_angle_deg, hold_s, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -584,7 +627,7 @@ class GoForFitDB:
     VALID_TABLES = {
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
-        "vertical_jump",
+        "vertical_jump", "reverse_curl",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:

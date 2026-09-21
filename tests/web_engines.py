@@ -18,6 +18,7 @@ SECTIONS IN THIS FILE
   3. WallTossEngine      wraps wtt.py             (alternate-hand wall toss)
   4. SitReachEngine      wraps snr.py             (sit & reach)
   4B. TrunkLiftEngine    wraps trunk_lift.py      (trunk lift height)
+  4C. ReverseCurlEngine  wraps reverse_curl.py    (reverse curl pass/fail)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -1907,6 +1908,285 @@ class TrunkLiftEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4C — REVERSE CURL   (wraps reverse_curl.py)
+# ════════════════════════════════════════════════════════════════════════
+import reverse_curl as rc_mod  # noqa: E402
+
+_MODEL_REVERSE_CURL = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class ReverseCurlEngine(BaseWebEngine):
+    """Live reverse-curl engine. Pass/fail on a single trial: the elbow must
+    flex to rc_mod.UP_ANGLE_DEG or less, hold there for 2 seconds, and the
+    weight must come back down to the thigh.
+
+    Nothing to calibrate — the resting elbow angle is picked up automatically
+    once the participant sits still with the weight on the thigh, so the coach
+    only has to press Start. PASS / FAIL buttons let the coach overrule the
+    detector either way, which matters because the manual allows exactly one
+    trial and the human is the final word on it.
+
+    All the geometry and the state machine live in reverse_curl.py — this
+    class only replaces the desktop cv2.imshow/waitKey loop, the same way
+    TrunkLiftEngine wraps trunk_lift.py."""
+
+    def __init__(self, session_id=None, on_stage=None, arm=rc_mod.ARM_AUTO,
+                 up_angle=rc_mod.UP_ANGLE_DEG, hold_s=rc_mod.HOLD_S,
+                 camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera, like trunk lift: frames are POSTed to
+        # /api/reverse_curl/frame -> push_frame(), so no server webcam is
+        # opened and the test runs on a phone or a camera-less host.
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.tracker = rc_mod.ReverseCurlTracker(up_angle=up_angle, hold_s=hold_s)
+        self.selector = rc_mod.ArmSelector(forced=arm)
+        self.smooth = rc_mod.MedianSmoother(rc_mod.SMOOTH_FRAMES)
+        self.requested_arm = arm
+
+        self.angle_deg = None
+        self.pose_detected = False
+        self.last_save = None
+
+    # ── camera plumbing (identical contract to TrunkLiftEngine) ─────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """Mirroring swaps left and right, so an auto-picked arm would be
+        reported under the wrong name. The angle itself is unaffected (it is
+        an interior angle), so an attempt in progress is left alone — only the
+        naming is re-derived, by releasing the auto lock."""
+        was = self.mirror_preview
+        super().set_facing(facing)
+        if was != self.mirror_preview and self.requested_arm == rc_mod.ARM_AUTO:
+            with self._lock:
+                if not self.tracker.resolved and self.tracker.state in (
+                        rc_mod.State.READY, rc_mod.State.SET):
+                    self.selector.reset()
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_REVERSE_CURL)
+        options = rc_mod.PoseLandmarkerOptions(
+            base_options=rc_mod.BaseOptions(model_asset_path=_MODEL_REVERSE_CURL),
+            running_mode=rc_mod.VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = rc_mod.PoseLandmarker.create_from_options(options)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        return {
+            "state": tr.state.name,
+            "arm": self.selector.arm,
+            "arm_locked": self.selector.locked,
+            "requested_arm": self.requested_arm,
+            "pose_detected": self.pose_detected,
+            "angle_deg": round(self.angle_deg, 1) if self.angle_deg is not None else None,
+            "baseline_deg": round(tr.baseline_deg, 1) if tr.baseline_deg is not None else None,
+            "target_angle_deg": tr.up_angle,
+            "hold_s": round(tr.hold_elapsed, 1),
+            "hold_best_s": round(tr.hold_best_s, 1),
+            "required_hold_s": tr.hold_s,
+            "hold_pct": int(round(tr.hold_progress() * 100)),
+            "peak_angle_deg": tr.best_peak_deg,
+            # Shown on screen4 as information only — the manual gives the
+            # "slower than gravity" judgement to the tester, not the app.
+            "descent_deg_s": tr.descent_deg_s,
+            "attempts": len(tr.attempts),
+            "resolved": tr.resolved,
+            "passed": bool(tr.passed) if tr.resolved else None,
+            "verdict_by": tr.verdict_by,
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_pass(self, value=None):
+        """The coach saw a correct curl the detector didn't resolve."""
+        with self._lock:
+            outcome = self.tracker.mark_pass()
+            if outcome is None:
+                return {"ok": False, "error": "Trial already marked PASS"}
+            self._maybe_stage_locked(force=True)
+            return {"ok": True, "passed": True}
+
+    def action_fail(self, value=None):
+        """The coach ends the single trial without a correct curl."""
+        with self._lock:
+            outcome = self.tracker.mark_fail()
+            if outcome is None:
+                return {"ok": False, "error": "Trial already marked FAIL"}
+            self._maybe_stage_locked(force=True)
+            return {"ok": True, "passed": False}
+
+    def action_arm(self, value=None):
+        """Force the working arm (or go back to auto). Only before a verdict —
+        switching arms afterwards would relabel a result already staged."""
+        arm = (value or "").strip().lower() if isinstance(value, str) else None
+        if arm not in (rc_mod.ARM_AUTO, rc_mod.ARM_LEFT, rc_mod.ARM_RIGHT):
+            return {"ok": False, "error": "Arm must be auto, left or right"}
+        with self._lock:
+            if self.tracker.resolved:
+                return {"ok": False, "error": "Trial already decided — press RESET first"}
+            self.requested_arm = arm
+            self.selector = rc_mod.ArmSelector(forced=arm)
+            self.smooth.reset()
+            # The baseline belongs to the old arm; start the trial over rather
+            # than measure the new arm against the other one's rest angle.
+            self.tracker.reset()
+            return {"ok": True, "arm": arm}
+
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.selector.reset()
+            self.smooth.reset()
+            self.angle_deg = None
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        """Generic dispatcher, so app.py can forward screen4's {action, value}
+        payload straight through the way the other engines do."""
+        handler = {
+            "pass":  self.action_pass,
+            "fail":  self.action_fail,
+            "arm":   self.action_arm,
+            "reset": self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self, force=False):
+        """Stage the verdict once the trial resolves. Called with self._lock
+        held."""
+        if not (self.tracker.resolved or force):
+            return
+        res = self.tracker.result()
+        self.last_save = "Pass" if res["passed"] else "Fail"
+        self._safe_stage(res["passed"], self.selector.arm, res["peak_angle_deg"],
+                         res["hold_s"], self.last_save)
+
+    def _stage_on_stop(self):
+        """Stopped mid-test: send screen3 what the trial actually achieved
+        rather than nothing. An unresolved trial stages as NOT passed, with
+        the best flexion and hold reached, so the coach can see how close it
+        came and correct the verdict on the review screen."""
+        with self._lock:
+            if self._staged:
+                return
+            self._maybe_stage_locked(force=True)
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                # Frames come from the browser; a 1s timeout keeps stop()
+                # responsive when the phone stops sending.
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # live in the same pixel space.
+                frame = camera.mirror(frame, self.mirror_preview)
+                fh, fw = frame.shape[:2]
+                mp_image = rc_mod.mp.Image(
+                    image_format=rc_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+
+                angle = None
+                arm_pts = None
+                pose_detected = bool(results.pose_landmarks)
+
+                if pose_detected:
+                    lms = results.pose_landmarks[0]
+                    for i, j in rc_mod._POSE_CONNECTIONS:
+                        if lms[i].visibility >= 0.45 and lms[j].visibility >= 0.45:
+                            p1 = (int(lms[i].x * fw), int(lms[i].y * fh))
+                            p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+
+                    raw = {a: rc_mod.elbow_angle(lms, a, fw, fh)
+                           for a in (rc_mod.ARM_LEFT, rc_mod.ARM_RIGHT)}
+                    arm = self.selector.update(raw)
+                    if arm is not None and raw.get(arm) is not None:
+                        angle = self.smooth.push(raw[arm])
+                        arm_pts = [rc_mod.lm_px(lms, i, fw, fh) for i in rc_mod.ARM_IDX[arm]]
+                    else:
+                        # Arm lost: drop the history so the angle doesn't creep
+                        # back from stale frames when it is re-detected.
+                        self.smooth.reset()
+                else:
+                    self.smooth.reset()
+
+                with self._lock:
+                    self.angle_deg = angle
+                    self.pose_detected = pose_detected
+                    outcome = self.tracker.update(angle)
+                    if outcome is not None:
+                        self._maybe_stage_locked()
+                    # Drawn inside the lock: the HUD reads tracker fields that
+                    # a PASS/FAIL/RESET action could change mid-draw.
+                    rc_mod.draw_hud(frame, self.tracker, arm=self.selector.arm,
+                                    angle=angle, arm_pts=arm_pts)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -1924,6 +2204,7 @@ __all__ = [
     "WallTossEngine",
     "SitReachEngine",
     "TrunkLiftEngine",
+    "ReverseCurlEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]

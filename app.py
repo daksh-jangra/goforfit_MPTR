@@ -73,11 +73,13 @@ DUAL_FEED_IMPORT_ERROR: Optional[str] = None
 try:
     from web_engines import (
         BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
-        SitReachEngine, TrunkLiftEngine, WingspanEngine, VerticalJumpEngine,
+        SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
+        WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
     BmiEngine = CurlUpEngine = PullUpEngine = FullPullUpEngine = None
     WallTossEngine = SitReachEngine = TrunkLiftEngine = None
+    ReverseCurlEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -113,6 +115,7 @@ _full_pull_up_engine = None
 _wall_toss_engine = None
 _sit_reach_engine = None     
 _trunk_lift_engine = None
+_reverse_curl_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -501,6 +504,41 @@ TESTS = {
         "unit":   "cm",
         "live_feed":   True,
     },
+    "reverse_curl": {
+        "id":          "reverse_curl",
+        "title":       "Reverse Curl",
+        "subtitle":    "Lift a 1 lb weight to 45\u00b0, hold 2 s \u2014 pass/fail",
+        "icon":        "\U0001f4aa",
+        "category":    "Musculoskeletal",
+        "script":      "reverse_curl.py",
+        "description": (
+            "Hand, wrist and arm strength. Seated, the 1 lb (0.5 kg) dumbbell starts "
+            "on the midpoint of the thigh; the participant flexes the elbow to 45\u00b0 "
+            "or less, holds it there for 2 seconds, then lowers it back to the thigh "
+            "under control. One trial \u2014 the item is PASSED if one correct reverse "
+            "curl is performed. The app tracks the elbow angle, the hold and the "
+            "return; the coach judges that the descent is slower than gravity."
+        ),
+        "controls": [
+            ("PASS",  "Record the trial as passed"),
+            ("FAIL",  "Record the trial as failed"),
+            ("ARM",   "Force the working arm (auto by default)"),
+            ("RESET", "Start the trial over"),
+        ],
+        "tip": (
+            "Camera side-on to the working arm at seated-shoulder height, 1.5-2 m "
+            "away, with the shoulder, elbow, wrist and thigh all in frame. A "
+            "straight-on front view foreshortens the elbow angle and good curls "
+            "will read as short."
+        ),
+        # No pre-launch params: the working arm is detected automatically and
+        # can be pinned from the LEFT ARM / RIGHT ARM buttons once the coach
+        # can actually see the feed. (/api/tests/reverse_curl/launch still
+        # accepts an "arm" field for scripted launches.)
+        "params": [],
+        "unit":   "pass/fail",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -604,6 +642,8 @@ def _is_running(test_id: str) -> bool:
         return _sit_reach_engine.is_running()
     if test_id == "trunk_lift" and _trunk_lift_engine is not None:
         return _trunk_lift_engine.is_running()
+    if test_id == "reverse_curl" and _reverse_curl_engine is not None:
+        return _reverse_curl_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -710,6 +750,14 @@ class TrunkLiftSave(BaseModel):
     trial1_cm: Optional[float] = None
     trial2_cm: Optional[float] = None
     stick_cm: Optional[float] = None
+    rating: Optional[str] = None
+
+class ReverseCurlSave(BaseModel):
+    session_id: Optional[int] = None
+    passed: Optional[bool] = None
+    arm: Optional[str] = None
+    peak_angle_deg: Optional[float] = None
+    hold_s: Optional[float] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -943,6 +991,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "trunk_lift" and TrunkLiftEngine is not None:
         return await _launch_trunk_lift(request)
+
+    if test_id == "reverse_curl" and ReverseCurlEngine is not None:
+        return await _launch_reverse_curl(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1237,6 +1288,37 @@ async def _launch_trunk_lift(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_reverse_curl(request: Request):
+    global _reverse_curl_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # The manual says "preferred arm", which the participant picks — so the
+    # default is to work it out from who is actually curling. A coach can
+    # pin it when the auto choice keeps landing on the wrong side.
+    arm = (body.get("arm") or "auto")
+    arm = str(arm).strip().lower() or "auto"
+    if arm not in ("auto", "left", "right"):
+        return JSONResponse({"ok": False, "error": "Arm must be auto, left or right"},
+                            status_code=400)
+
+    def _stage(passed, arm_val, peak_angle_deg, hold_s, rating):
+        _pending["reverse_curl"] = {
+            "session_id": session_id, "passed": passed, "arm": arm_val,
+            "peak_angle_deg": peak_angle_deg, "hold_s": hold_s, "rating": rating,
+        }
+
+    try:
+        engine = ReverseCurlEngine(session_id=session_id, on_stage=_stage, arm=arm)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _reverse_curl_engine = engine
+    _pending.pop("reverse_curl", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1362,7 +1444,8 @@ def engine_status():
         "web_engines_error": WEB_ENGINES_IMPORT_ERROR,
         "web_engines_covers": ["wingspan", "bmi", "curl_up", "pull_up", "full_pull_up",
                                "wall_toss",
-                               "sit_reach", "trunk_lift", "vertical_jump"],
+                               "sit_reach", "trunk_lift", "reverse_curl",
+                               "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -1438,6 +1521,11 @@ def stop(test_id: str):
         # The engine stages the best trial captured so far from its own
         # stop() hook, so a half-finished test still reaches screen3.
         _trunk_lift_engine.stop()
+        return {"ok": True}
+    if test_id == "reverse_curl" and _reverse_curl_engine is not None:
+        # Stops stage whatever the trial reached, so an unresolved one still
+        # reaches screen3 (as not-passed) for the coach to confirm.
+        _reverse_curl_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -1598,6 +1686,11 @@ async def wall_toss_frame(request: Request):
 @app.post("/api/trunk_lift/frame")
 async def trunk_lift_frame(request: Request):
     return await _receive_frame(_trunk_lift_engine, request)
+
+
+@app.post("/api/reverse_curl/frame")
+async def reverse_curl_frame(request: Request):
+    return await _receive_frame(_reverse_curl_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -2034,6 +2127,43 @@ def trunk_lift_action(b: TrunkLiftAction):
     # The engine validates the action name itself and reports unknown ones.
     return _trunk_lift_engine.action(b.action, b.value)
 
+# ── Reverse curl live-feed control ─────────────────────────────────────
+class ReverseCurlAction(BaseModel):
+    action: str
+    # `arm` carries "auto"/"left"/"right"; pass/fail/reset carry nothing. Both
+    # arrive in the same `value` field screen4 already sends for every engine.
+    value: Optional[Any] = None
+
+@app.get("/api/reverse_curl/feed")
+def reverse_curl_feed():
+    if _reverse_curl_engine is None or not _reverse_curl_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Reverse curl test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _reverse_curl_engine is not None and _reverse_curl_engine.is_running():
+            jpg = _reverse_curl_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/reverse_curl/state")
+def reverse_curl_state():
+    if _reverse_curl_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_reverse_curl_engine.get_state()}
+
+@app.post("/api/reverse_curl/action")
+def reverse_curl_action(b: ReverseCurlAction):
+    if _reverse_curl_engine is None or not _reverse_curl_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Reverse curl test isn't running"}, status_code=409)
+    # The engine validates the action name itself and reports unknown ones.
+    return _reverse_curl_engine.action(b.action, b.value)
+
 # ── Sit & reach live-feed control ──────────────────────────────────────
 class SitReachAction(BaseModel):
     action: str
@@ -2281,6 +2411,24 @@ def save_trunk_lift(b: TrunkLiftSave):
         trial2_cm  = b.trial2_cm,
         stick_cm   = b.stick_cm,
         rating     = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/reverse_curl")
+def save_reverse_curl(b: ReverseCurlSave):
+    """Fields: session_id, passed, arm (opt), peak_angle_deg (opt), hold_s (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.passed is None:
+        return JSONResponse({"ok": False, "error": "passed required (pass/fail test)"}, status_code=400)
+    row_id = db.save_reverse_curl(
+        session_id     = b.session_id,
+        passed         = b.passed,
+        arm            = b.arm,
+        peak_angle_deg = b.peak_angle_deg,
+        hold_s         = b.hold_s,
+        rating         = b.rating,
     )
     return {"ok": True, "id": row_id}
 
