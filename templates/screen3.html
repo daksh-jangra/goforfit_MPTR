@@ -166,11 +166,12 @@
                 <div id="bmi-category" class="text-sm font-semibold"></div>
             </div>
             {% elif test.id == 'reverse_curl' %}
-            <!-- One trial, pass/fail (Brockport p.84) — there is no number to
-                 type, so the override is a verdict the coach confirms. -->
+            <!-- One trial, pass/fail (Brockport p.84). The camera decides this
+                 test, so the verdict is shown read-only: the coach can confirm
+                 and save it but not change it. Same control as shoulder_stretch. -->
             <div class="max-w-md mx-auto w-full">
-                <select id="override-input"
-                        class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-white focus:outline-none focus:border-indigo-500">
+                <select id="override-input" disabled
+                        class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-gray-100 cursor-not-allowed">
                     <option value="">Select result</option>
                     <option value="1">Pass</option>
                     <option value="0">Fail</option>
@@ -492,8 +493,11 @@
             if (!TEST_TIMED && IS_PASS_FAIL) {
                 const passed = pendingResult[field];
                 const sel = document.getElementById('override-input');
+                const locked = !!(sel && sel.disabled);   // camera-decided test
                 if (passed !== undefined && passed !== null) {
                     sel.value = (passed === true || passed === 1) ? '1' : '0';
+                } else if (sel) {
+                    sel.value = '';   // never leave an older verdict showing
                 }
                 const extra = [];
                 if (pendingResult.arm) extra.push(`${pendingResult.arm} arm`);
@@ -508,10 +512,18 @@
                 if (pendingResult.best_gap_ratio !== undefined && pendingResult.best_gap_ratio !== null)
                     extra.push(`closest gap ${pendingResult.best_gap_ratio} palm`);
                 const detail = extra.length ? ` (${extra.join(', ')})` : '';
+                // A trial stopped before any real attempt stages passed=null
+                // with this rating — a camera/setup problem, not a fail.
+                const notCompleted = pendingResult.rating === 'Not completed';
                 document.getElementById('pending-summary').innerHTML =
                     (passed !== undefined && passed !== null)
-                        ? `AI verdict: <span class="font-semibold text-indigo-950">${passFailLabel(passed)}</span>${detail} — change above if it looks wrong.`
-                        : '<span class="text-gray-400">No AI verdict staged. Choose Pass or Fail below, or use Switch to AI.</span>';
+                        ? `AI verdict: <span class="font-semibold text-indigo-950">${passFailLabel(passed)}</span>${detail}` +
+                          (locked ? ' — decided by the camera.' : ' — change above if it looks wrong.')
+                        : notCompleted
+                            ? '<span class="font-semibold text-amber-700">Not completed</span> — the camera didn\'t see a real attempt. Run the test again.'
+                            : locked
+                                ? '<span class="text-gray-400">No result yet. Use Switch to AI — the camera decides this test.</span>'
+                                : '<span class="text-gray-400">No AI verdict staged. Choose Pass or Fail below, or use Switch to AI.</span>';
                 return;
             }
 
@@ -594,9 +606,12 @@
                 const input = document.getElementById('override-input');
                 if (IS_PASS_FAIL) {
                     if (input.value !== '0' && input.value !== '1') {
-                        showSaveMessage(input.disabled
-                            ? 'No result yet — run the test first; the camera decides it.'
-                            : 'Choose Pass or Fail before saving.', false);
+                        showSaveMessage(
+                            (pendingResult && pendingResult.rating === 'Not completed')
+                                ? 'Not completed — nothing to save. Run the test again.'
+                            : input.disabled
+                                ? 'No result yet — run the test first; the camera decides it.'
+                                : 'Choose Pass or Fail before saving.', false);
                         return;
                     }
                     if (!pendingResult) {

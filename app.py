@@ -518,14 +518,12 @@ TESTS = {
             "Hand, wrist and arm strength. Seated, the 1 lb (0.5 kg) dumbbell starts "
             "on the midpoint of the thigh; the participant flexes the elbow to 45\u00b0 "
             "or less, holds it there for 2 seconds, then lowers it back to the thigh "
-            "under control. One trial \u2014 the item is PASSED if one correct reverse "
-            "curl is performed. The app tracks the elbow angle, the hold and the "
-            "return; the coach judges that the descent is slower than gravity."
+            "under control. One trial, decided by the camera: a correct curl is a "
+            "PASS, a real attempt that falls short is a FAIL. Practise before "
+            "pressing Start. The coach still watches that the descent is slower "
+            "than gravity."
         ),
         "controls": [
-            ("PASS",  "Record the trial as passed"),
-            ("FAIL",  "Record the trial as failed"),
-            ("ARM",   "Force the working arm (auto by default)"),
             ("RESET", "Start the trial over"),
         ],
         "tip": (
@@ -534,10 +532,9 @@ TESTS = {
             "straight-on front view foreshortens the elbow angle and good curls "
             "will read as short."
         ),
-        # No pre-launch params: the working arm is detected automatically and
-        # can be pinned from the LEFT ARM / RIGHT ARM buttons once the coach
-        # can actually see the feed. (/api/tests/reverse_curl/launch still
-        # accepts an "arm" field for scripted launches.)
+        # No params and no arm buttons: the camera works out which arm is
+        # curling by itself. (/api/launch/reverse_curl still accepts an "arm"
+        # field for scripted launches.)
         "params": [],
         "unit":   "pass/fail",
         "live_feed":   True,

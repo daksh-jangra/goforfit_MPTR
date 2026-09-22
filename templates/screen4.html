@@ -463,25 +463,20 @@
               actionUrl:  '/api/reverse_curl/action',
               browserCamera: true,
               frameUrl:   '/api/reverse_curl/frame',
+              // The phone stands facing the seated participant, screen toward
+              // the coach — the back camera. Falls back to whatever a laptop has.
+              preferBackCamera: true,
               // Nothing to calibrate: the resting elbow angle is picked up
               // automatically once the participant sits still with the weight
               // on the thigh.
+              // The camera decides everything — the verdict AND which arm is
+              // working — so the only control is starting over.
               buttons: [
-                  { id: 'pass',  label: 'PASS',  action: 'pass',  color: 'bg-emerald-600' },
-                  { id: 'fail',  label: 'FAIL',  action: 'fail',  color: 'bg-rose-600' },
-                  { id: 'arm_l', label: 'LEFT ARM',  action: 'arm', value: 'left',  color: 'bg-slate-600' },
-                  { id: 'arm_r', label: 'RIGHT ARM', action: 'arm', value: 'right', color: 'bg-slate-600' },
                   { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-amber-600' },
               ],
               showCalibOverlay(state) { return false; },
               buttonDisabled(btnId, state) {
-                  if (!state.running) return true;
-                  // Forcing an arm restarts the trial, so it is closed off
-                  // once a verdict exists — RESET first, deliberately.
-                  if (btnId === 'arm_l' || btnId === 'arm_r') return !!state.resolved;
-                  if (btnId === 'pass') return state.state === 'PASSED';
-                  if (btnId === 'fail') return state.state === 'FAILED';
-                  return false;
+                  return !state.running;
               },
               renderStatus(state) {
                   const lines = [`State: ${state.state}`];
@@ -509,8 +504,7 @@
                       lines.push(`Descent: ${state.descent_deg_s}\u00b0/s \u2014 coach judges control`);
                   }
                   if (state.resolved) {
-                      lines.push(`RESULT: ${state.passed ? 'PASS' : 'FAIL'}` +
-                                 (state.verdict_by === 'coach' ? ' (called by the coach)' : ''));
+                      lines.push(`RESULT: ${state.passed ? 'PASS' : 'FAIL'}`);
                   }
                   if (state.status_msg) lines.push(state.status_msg);
                   return lines;

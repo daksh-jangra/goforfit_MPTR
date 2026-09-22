@@ -1923,9 +1923,9 @@ class ReverseCurlEngine(BaseWebEngine):
 
     Nothing to calibrate — the resting elbow angle is picked up automatically
     once the participant sits still with the weight on the thigh, so the coach
-    only has to press Start. PASS / FAIL buttons let the coach overrule the
-    detector either way, which matters because the manual allows exactly one
-    trial and the human is the final word on it.
+    only has to press Start. The camera decides PASS and FAIL by itself and
+    nobody can overrule it; stopping before any real attempt leaves the trial
+    NOT COMPLETED, which screen3 will not save.
 
     All the geometry and the state machine live in reverse_curl.py — this
     class only replaces the desktop cv2.imshow/waitKey loop, the same way
@@ -1944,9 +1944,12 @@ class ReverseCurlEngine(BaseWebEngine):
 
         self.landmarker = None
         self.tracker = rc_mod.ReverseCurlTracker(up_angle=up_angle, hold_s=hold_s)
-        self.selector = rc_mod.ArmSelector(forced=arm)
-        self.smooth = rc_mod.MedianSmoother(rc_mod.SMOOTH_FRAMES)
+        # requested_arm is the PERSON's side, as the coach chose it; the
+        # selector works in MediaPipe's naming. See _to_person().
         self.requested_arm = arm
+        self.selector = rc_mod.ArmSelector(forced=self._to_landmark(arm))
+        self.smooth = rc_mod.MedianSmoother(rc_mod.SMOOTH_FRAMES)
+        self.result_arm = None     # the person's side the verdict was about
 
         self.angle_deg = None
         self.pose_detected = False
@@ -1973,17 +1976,45 @@ class ReverseCurlEngine(BaseWebEngine):
         return True
 
     def set_facing(self, facing):
-        """Mirroring swaps left and right, so an auto-picked arm would be
-        reported under the wrong name. The angle itself is unaffected (it is
-        an interior angle), so an attempt in progress is left alone — only the
-        naming is re-derived, by releasing the auto lock."""
+        """Switching lens is a different view of the participant and flips the
+        mirror, which swaps which MediaPipe side is the working arm. A rest
+        baseline or an arm lock taken through the old lens describes nothing
+        in the new one, so an undecided trial starts over. A decided one keeps
+        its verdict — result_arm still names the right arm."""
         was = self.mirror_preview
         super().set_facing(facing)
-        if was != self.mirror_preview and self.requested_arm == rc_mod.ARM_AUTO:
-            with self._lock:
-                if not self.tracker.resolved and self.tracker.state in (
-                        rc_mod.State.READY, rc_mod.State.SET):
-                    self.selector.reset()
+        if was == self.mirror_preview:
+            return
+        with self._lock:
+            self.selector = rc_mod.ArmSelector(forced=self._to_landmark(self.requested_arm))
+            self.smooth.reset()
+            if not self.tracker.resolved:
+                self.tracker.reset()
+
+    # MediaPipe names each side from the picture it is handed. Front-camera
+    # frames are mirrored BEFORE inference (so the feed reads like a mirror),
+    # which makes MediaPipe call the person's right arm "left". Everything
+    # inside — the selector, the landmark indices — stays in MediaPipe's
+    # naming; these convert at the edge, so the arm shown and saved — and one
+    # pinned at launch — always means the person's own arm. (Wall toss corrects
+    # its handedness for the same reason.)
+    @staticmethod
+    def _swap(arm):
+        return {rc_mod.ARM_LEFT: rc_mod.ARM_RIGHT,
+                rc_mod.ARM_RIGHT: rc_mod.ARM_LEFT}.get(arm, arm)
+
+    def _to_person(self, arm):
+        return self._swap(arm) if self.mirror_preview else arm
+
+    def _to_landmark(self, arm):
+        return self._swap(arm) if self.mirror_preview else arm
+
+    def _person_arm(self):
+        """The arm to show and save. Once the trial is decided this is the
+        arm the verdict was about, even if the lens changes afterwards."""
+        if self.tracker.resolved and self.result_arm is not None:
+            return self.result_arm
+        return self._to_person(self.selector.arm)
 
     def _load_models(self):
         _ensure_pose_model(_MODEL_REVERSE_CURL)
@@ -2011,7 +2042,7 @@ class ReverseCurlEngine(BaseWebEngine):
         tr = self.tracker
         return {
             "state": tr.state.name,
-            "arm": self.selector.arm,
+            "arm": self._person_arm(),
             "arm_locked": self.selector.locked,
             "requested_arm": self.requested_arm,
             "pose_detected": self.pose_detected,
@@ -2035,47 +2066,15 @@ class ReverseCurlEngine(BaseWebEngine):
         }
 
     # ── actions (screen4 buttons) ───────────────────────────────────────
-    def action_pass(self, value=None):
-        """The coach saw a correct curl the detector didn't resolve."""
-        with self._lock:
-            outcome = self.tracker.mark_pass()
-            if outcome is None:
-                return {"ok": False, "error": "Trial already marked PASS"}
-            self._maybe_stage_locked(force=True)
-            return {"ok": True, "passed": True}
-
-    def action_fail(self, value=None):
-        """The coach ends the single trial without a correct curl."""
-        with self._lock:
-            outcome = self.tracker.mark_fail()
-            if outcome is None:
-                return {"ok": False, "error": "Trial already marked FAIL"}
-            self._maybe_stage_locked(force=True)
-            return {"ok": True, "passed": False}
-
-    def action_arm(self, value=None):
-        """Force the working arm (or go back to auto). Only before a verdict —
-        switching arms afterwards would relabel a result already staged."""
-        arm = (value or "").strip().lower() if isinstance(value, str) else None
-        if arm not in (rc_mod.ARM_AUTO, rc_mod.ARM_LEFT, rc_mod.ARM_RIGHT):
-            return {"ok": False, "error": "Arm must be auto, left or right"}
-        with self._lock:
-            if self.tracker.resolved:
-                return {"ok": False, "error": "Trial already decided — press RESET first"}
-            self.requested_arm = arm
-            self.selector = rc_mod.ArmSelector(forced=arm)
-            self.smooth.reset()
-            # The baseline belongs to the old arm; start the trial over rather
-            # than measure the new arm against the other one's rest angle.
-            self.tracker.reset()
-            return {"ok": True, "arm": arm}
-
     def action_reset(self, value=None):
         with self._lock:
             self.tracker.reset()
-            self.selector.reset()
+            # Rebuilt, not reset: a forced arm must be re-translated for the
+            # lens in use now, not the one it was chosen under.
+            self.selector = rc_mod.ArmSelector(forced=self._to_landmark(self.requested_arm))
             self.smooth.reset()
             self.angle_deg = None
+            self.result_arm = None
             self.last_save = None
             self._staged = False
             return {"ok": True}
@@ -2084,9 +2083,6 @@ class ReverseCurlEngine(BaseWebEngine):
         """Generic dispatcher, so app.py can forward screen4's {action, value}
         payload straight through the way the other engines do."""
         handler = {
-            "pass":  self.action_pass,
-            "fail":  self.action_fail,
-            "arm":   self.action_arm,
             "reset": self.action_reset,
         }.get(name)
         if handler is None:
@@ -2094,25 +2090,33 @@ class ReverseCurlEngine(BaseWebEngine):
         return handler(value)
 
     # ── staging ─────────────────────────────────────────────────────────
-    def _maybe_stage_locked(self, force=False):
-        """Stage the verdict once the trial resolves. Called with self._lock
-        held."""
-        if not (self.tracker.resolved or force):
+    def _maybe_stage_locked(self):
+        """Stage the camera's verdict once the trial resolves. Called with
+        self._lock held."""
+        if not self.tracker.resolved:
             return
         res = self.tracker.result()
         self.last_save = "Pass" if res["passed"] else "Fail"
-        self._safe_stage(res["passed"], self.selector.arm, res["peak_angle_deg"],
+        self.result_arm = self._to_person(self.selector.arm)
+        self._safe_stage(res["passed"], self.result_arm, res["peak_angle_deg"],
                          res["hold_s"], self.last_save)
 
     def _stage_on_stop(self):
-        """Stopped mid-test: send screen3 what the trial actually achieved
-        rather than nothing. An unresolved trial stages as NOT passed, with
-        the best flexion and hold reached, so the coach can see how close it
-        came and correct the verdict on the review screen."""
+        """Stopped before the camera reached a verdict. That is NOT a fail —
+        no real attempt was seen, most often because the camera couldn't see
+        the arm — so it stages as NOT COMPLETED (passed=None), which screen3
+        shows but refuses to save. The test has to be run again."""
         with self._lock:
             if self._staged:
                 return
-            self._maybe_stage_locked(force=True)
+            if self.tracker.resolved:
+                self._maybe_stage_locked()
+                return
+            res = self.tracker.result()
+            self.result_arm = self._to_person(self.selector.arm)
+            self.last_save = "Not completed"
+            self._safe_stage(None, self.result_arm, res["peak_angle_deg"],
+                             res["hold_s"], self.last_save)
 
     # ── loop ────────────────────────────────────────────────────────────
     def _run_loop(self):
@@ -2178,7 +2182,7 @@ class ReverseCurlEngine(BaseWebEngine):
                         self._maybe_stage_locked()
                     # Drawn inside the lock: the HUD reads tracker fields that
                     # a PASS/FAIL/RESET action could change mid-draw.
-                    rc_mod.draw_hud(frame, self.tracker, arm=self.selector.arm,
+                    rc_mod.draw_hud(frame, self.tracker, arm=self._person_arm(),
                                     angle=angle, arm_pts=arm_pts)
                 self._publish(frame)
         except Exception as e:
