@@ -121,8 +121,24 @@ HOLD_S       = 2.0    # "held in this position for 2 seconds"
 # is genuinely still AND open — never at the moment a threshold is crossed, or
 # the baseline lands mid-movement and every attempt under-measures.
 REST_MIN_DEG    = 70.0   # elbow must be at least this open to count as "at rest"
+REST_MAX_DEG    = 130.0  # ...and no more open than this. The start position is the
+                         # weight on the mid-thigh (~90-100 deg in the manual's
+                         # figure); an arm hanging at the side reads 150-180. If a
+                         # hanging arm were accepted as "rest", moving the hand onto
+                         # the thigh would look like a lift, and hanging it again
+                         # like a failed attempt — a FAIL with no curl at all.
 REST_BAND_DEG   = 8.0    # spread allowed inside the settle window
 REST_SETTLE_S   = 0.5    # how long it must sit still before the baseline is taken
+# The two above only pick the FIRST resting reading, while the participant is
+# just sitting there. Every later "it's resting now" call — updating a rest
+# reading, or deciding the weight was set down somewhere else — needs the arm
+# SETTLED: under 4 deg for a full second. 8 deg in 0.5 s let anything slower
+# than 16 deg/s pass as still, so a slow lift dragged the rest angle down with
+# it and a slow, controlled lowering could count as "back down" too early. A
+# hand resting on the thigh easily meets 4 deg/1 s; a lift or a lowering,
+# however slow, doesn't.
+SETTLED_BAND_DEG = 4.0
+SETTLED_S        = 1.0
 
 MOVE_DELTA_DEG  = 12.0   # flexion below the baseline that starts WATCHING a lift
 ATTEMPT_MIN_DEG = 30.0   # flexion below the baseline that makes it a real try.
@@ -134,6 +150,10 @@ RETURN_TOL_DEG  = 15.0   # back within this of the baseline = weight on the thig
 HOLD_RELEASE_DEG = 6.0   # angle may drift this far above UP_ANGLE without
                          # breaking the hold — one jittery frame at 46 deg must
                          # not reset a good 2-second hold
+HOLD_WOBBLE_S   = 0.30   # the angle may sit above UP_ANGLE (inside the release
+                         # band) this long before the hold breaks. Absorbs a shaky
+                         # frame or two; without a time limit, touching 45 once and
+                         # then "holding" at 50 passed.
 DROPOUT_GRACE_S = 0.35   # tracking may vanish this long mid-hold before the
                          # hold is voided (glare, motion blur, the arm crossing
                          # the torso). Longer than one dropped frame, shorter
@@ -200,10 +220,19 @@ def vis(lms, *idxs, thr=MIN_VIS):
     return all(lms[i].visibility >= thr for i in idxs)
 
 
+def in_frame(lms, *idxs):
+    """MediaPipe still returns a "confident" guess for joints outside the
+    picture (normalised coordinates below 0 or above 1). An arm below the
+    bottom edge then produces a made-up angle, so only joints actually in the
+    picture count."""
+    return all(0.0 <= lms[i].x <= 1.0 and 0.0 <= lms[i].y <= 1.0 for i in idxs)
+
+
 def elbow_angle(lms, arm, w, h):
-    """Interior elbow angle for one arm, or None if the joints aren't clear."""
+    """Interior elbow angle for one arm, or None if the joints aren't clear
+    or aren't in the picture."""
     idxs = ARM_IDX[arm]
-    if not vis(lms, *idxs):
+    if not vis(lms, *idxs) or not in_frame(lms, *idxs):
         return None
     s, e, wr = (lm_px(lms, i, w, h) for i in idxs)
     return calc_angle(s, e, wr)
@@ -276,8 +305,11 @@ class ReverseCurlTracker:
         self.status_msg = "Rest the weight on the thigh and hold still"
         self._settle = deque()        # (t, angle) while finding the baseline
         self._hold_start = None
+        self._above_since = None      # when the hold last drifted above the target
         self._lower_start = None
+        self._return = deque()        # (t, angle) while waiting for the weight to settle
         self._dropout_start = None
+        self._last_frame_t = None
         self._now = None
 
     # ── per-frame update ─────────────────────────────────────────────────
@@ -290,6 +322,22 @@ class ReverseCurlTracker:
 
         if self.state in (State.PASSED, State.FAILED):
             return None
+
+        # A gap between frames (the phone or network stalled) is time nobody
+        # saw. Mid-hold it must not count toward the 2 s, and a rest reading
+        # must never be built across it. None frames are handled below; this
+        # catches frames that simply stopped arriving.
+        prev_t, self._last_frame_t = self._last_frame_t, now
+        if prev_t is not None and now - prev_t > DROPOUT_GRACE_S:
+            self._settle.clear()
+            self._return.clear()
+            if self.state == State.HOLD:
+                self._note_hold(prev_t)
+                self._hold_start = None
+                self._above_since = None
+                self.hold_elapsed = 0.0
+                self.state = State.LIFTING
+                self.status_msg = "Video paused mid-hold — hold again"
 
         if angle_deg is None:
             return self._on_dropout(now)
@@ -319,6 +367,7 @@ class ReverseCurlTracker:
             if angle <= self.up_angle:
                 self.state = State.HOLD
                 self._hold_start = now
+                self._above_since = None
                 self.hold_elapsed = 0.0
                 self.status_msg = f"Hold for {self.hold_s:.0f} s"
             elif angle >= self.baseline_deg - self.return_tol:
@@ -328,10 +377,19 @@ class ReverseCurlTracker:
 
         if self.state == State.HOLD:
             self.peak_deg = min(self.peak_deg, angle)
-            if angle > self.up_angle + HOLD_RELEASE_DEG:
-                # Hold broken before the 2 s were up.
+            if angle > self.up_angle:
+                if self._above_since is None:
+                    self._above_since = now
+            else:
+                self._above_since = None
+            wobbled_too_long = (self._above_since is not None
+                                and now - self._above_since > HOLD_WOBBLE_S)
+            if angle > self.up_angle + HOLD_RELEASE_DEG or wobbled_too_long:
+                # Hold broken before the 2 s were up: too far above the
+                # target, or above it for longer than a wobble.
                 self._note_hold(now)
                 self._hold_start = None
+                self._above_since = None
                 self.hold_elapsed = 0.0
                 if angle >= self.baseline_deg - self.return_tol:
                     return self._end_attempt(f"Held {self.hold_best_s:.1f} s of "
@@ -346,11 +404,22 @@ class ReverseCurlTracker:
             if self.hold_elapsed >= self.hold_s:
                 self.state = State.LOWERING
                 self._lower_start = now
+                self._return.clear()
                 self.status_msg = "Hold complete — lower the weight to the thigh"
             return None
 
         if self.state == State.LOWERING:
+            # The hold is done; only the return is left. Back near where it
+            # started counts at once. The weight may also be set down on a
+            # different spot of the thigh — that counts once the elbow is in
+            # the resting range and SETTLED (see SETTLED_S), so passing through
+            # the range on the way down — even slowly — doesn't end it early. (Only the
+            # PASS side is relaxed: a struggling lift on the way UP is judged
+            # against the start as before, so it is never failed early.)
             if angle >= self.baseline_deg - self.return_tol:
+                return self._pass(now, angle)
+            if self._still_in_rest_range(self._return, angle, now,
+                                         SETTLED_BAND_DEG, SETTLED_S):
                 return self._pass(now, angle)
             return None
 
@@ -388,22 +457,63 @@ class ReverseCurlTracker:
                 self.status_msg = (f"Open the elbow past {self.rest_min:.0f} deg "
                                    f"— rest the weight on the thigh")
             return
-        self._settle.append((now, angle))
-        # Keep one sample from just outside the window so the span can
-        # actually reach settle_s (trimming to exactly settle_s caps it just
-        # below, and the capture never fires).
-        while len(self._settle) > 2 and (now - self._settle[1][0]) >= self.settle_s:
-            self._settle.popleft()
-        if len(self._settle) < 2:
+        if angle > REST_MAX_DEG:
+            # Arm hanging at the side — or, filmed from the FRONT, a forearm
+            # resting along the thigh points at the lens and reads nearly
+            # straight (the manual's own front-view photo reads 168 deg).
+            # Either way this isn't a usable resting angle; say which to fix.
+            self._settle.clear()
+            if not refresh:
+                self.status_msg = "Arm looks straight — rest the weight on the thigh, film side-on"
             return
-        vals = [a for _, a in self._settle]
-        span = self._settle[-1][0] - self._settle[0][0]
-        if span >= self.settle_s and (max(vals) - min(vals)) <= self.rest_band:
+        band, settle_s = ((SETTLED_BAND_DEG, SETTLED_S) if refresh
+                          else (self.rest_band, self.settle_s))
+        if self._still_in_rest_range(self._settle, angle, now, band, settle_s):
+            vals = [a for _, a in self._settle]
             self.baseline_deg = float(np.median(vals))
             if not refresh:
                 self.state = State.SET
                 self.status_msg = (f"Rest angle {self.baseline_deg:.0f} deg "
                                    f"— lift to {self.up_angle:.0f} deg")
+
+    def _still_in_rest_range(self, buf, angle, now, band, settle_s):
+        """Feed one angle into a stillness window. True once the elbow has sat
+        inside the resting range (hand on the thigh), within `band`, for
+        `settle_s`. Leaving the range empties the window."""
+        if not (self.rest_min <= angle <= REST_MAX_DEG):
+            buf.clear()
+            return False
+        buf.append((now, angle))
+        # Keep one sample from just outside the window so the span can
+        # actually reach settle_s (trimming to exactly settle_s caps it just
+        # below, and it never fires).
+        while len(buf) > 2 and (now - buf[1][0]) >= settle_s:
+            buf.popleft()
+        if len(buf) < 2:
+            return False
+        vals = [a for _, a in buf]
+        return (buf[-1][0] - buf[0][0] >= settle_s
+                and max(vals) - min(vals) <= band)
+
+    def adopt_baseline(self, deg):
+        """The working arm changed before the lift began — take that arm's
+        own resting angle. A rest reading belongs to ONE arm: measuring the
+        other arm against it misreads every movement (a curl from the thigh
+        can look like it never came back down). No usable reading for the new
+        arm: start the rest search over."""
+        if self.state not in (State.READY, State.SET):
+            return
+        self._settle.clear()
+        self.peak_deg = None
+        if deg is None or not (self.rest_min <= deg <= REST_MAX_DEG):
+            self.baseline_deg = None
+            self.state = State.READY
+            self.status_msg = "Rest the weight on the thigh and hold still"
+            return
+        self.baseline_deg = float(deg)
+        self.state = State.SET
+        self.status_msg = (f"Rest angle {self.baseline_deg:.0f} deg "
+                           f"— lift to {self.up_angle:.0f} deg")
 
     def _note_hold(self, when):
         if self._hold_start is not None:
@@ -414,12 +524,7 @@ class ReverseCurlTracker:
         lift was big enough to be a real try, that was the one trial and it
         FAILS — returns the result. Otherwise it was a fidget: forget it and
         stay ready — returns None."""
-        # Reaching the target zone is always a real try, even for someone who
-        # rests at a low angle and so has less than ATTEMPT_MIN_DEG to give.
-        real_try = (self.peak_deg is not None
-                    and (self.peak_deg <= self.baseline_deg - ATTEMPT_MIN_DEG
-                         or self.peak_deg <= self.up_angle))
-        if not real_try:
+        if not self._is_real_try():
             self.peak_deg = None
             self._hold_start = None
             self.hold_elapsed = 0.0
@@ -427,6 +532,17 @@ class ReverseCurlTracker:
             self.state = State.SET
             self.status_msg = f"Ready — lift to {self.up_angle:.0f} deg"
             return None
+        return self._fail(msg)
+
+    def _is_real_try(self):
+        """Did the current lift go far enough to be THE trial? Reaching the
+        target zone always counts, even for someone who rests at a low angle
+        and so has less than ATTEMPT_MIN_DEG to give."""
+        return (self.peak_deg is not None and self.baseline_deg is not None
+                and (self.peak_deg <= self.baseline_deg - ATTEMPT_MIN_DEG
+                     or self.peak_deg <= self.up_angle))
+
+    def _fail(self, msg):
         self.attempts.append({
             "peak_angle_deg": round(self.peak_deg, 1),
             "hold_s": round(self.hold_best_s, 2),
@@ -434,12 +550,40 @@ class ReverseCurlTracker:
             "outcome": "fail",
         })
         self._hold_start = None
+        self._above_since = None
         self.hold_elapsed = 0.0
         self.passed = False
         self.verdict_by = "auto"
         self.state = State.FAILED
         self.status_msg = f"FAIL — {msg}"
         return self.result()
+
+    def finish(self):
+        """The test was stopped before the camera reached a verdict. The
+        manual allows ONE trial and passes only a correct curl, so:
+
+          * a real attempt was under way             -> FAIL (the trial happened)
+          * the hold was done and the weight is back
+            in the resting range, just not settled
+            long enough to be confirmed yet          -> PASS (the curl happened)
+          * no real attempt was seen                 -> None: NOT COMPLETED —
+            usually the camera couldn't see the arm; not the student's fail
+
+        Returns the result dict, or None for not completed. Already decided:
+        returns that verdict unchanged."""
+        if self.resolved:
+            return self.result()
+        now = self._now if self._now is not None else time.time()
+        if (self.state == State.LOWERING and self.angle_deg is not None
+                and self.rest_min <= self.angle_deg <= REST_MAX_DEG):
+            return self._pass(now, self.angle_deg)
+        if self.state in (State.LIFTING, State.HOLD, State.LOWERING) and self._is_real_try():
+            if self.state == State.HOLD:
+                self._note_hold(now)
+            if self.state == State.LOWERING:
+                return self._fail("stopped with the weight still up")
+            return self._fail("stopped mid-attempt (one trial only)")
+        return None
 
     def _pass(self, now, angle):
         if self._lower_start is not None and now > self._lower_start and self.peak_deg is not None:
@@ -495,18 +639,23 @@ class ArmSelector:
     """Decides which arm is doing the test.
 
     The manual lets the participant use their "preferred arm", so the app has
-    to work it out. Each arm gets a running estimate of its own resting angle;
-    the working arm is whichever has flexed furthest BELOW its own rest. A
-    hysteresis margin stops the choice flickering while both arms sit still
-    (they often rest at different angles, and a selector that flipped between
-    them would feed the tracker a jumping baseline that never settles).
+    to work it out. Each arm gets its own resting angle; the working arm is
+    whichever has flexed furthest BELOW its own rest. A hysteresis margin
+    stops the choice flickering while both arms sit still (they often rest at
+    different angles, and a selector that flipped between them would feed the
+    tracker a jumping baseline that never settles).
+
+    An arm's resting angle is recorded ONLY while that arm is still, inside
+    the resting range — the same rule the tracker uses. Taking every in-range
+    frame instead let the "rest" drift down with a slow lift, so a slow curl
+    never looked like movement: the camera kept watching the idle arm, and
+    the rest angle it handed the tracker came out ~15 deg too low.
 
     Once a real lift starts the choice LOCKS, so the other hand moving — to
     steady the chair, say — cannot steal the test mid-curl.
     """
 
     SWITCH_MARGIN_DEG = 8.0
-    REST_WINDOW = 15          # frames kept for each arm's rest estimate
 
     def __init__(self, forced=ARM_AUTO, lock_delta=MOVE_DELTA_DEG):
         self.forced = forced if forced in (ARM_LEFT, ARM_RIGHT) else None
@@ -516,26 +665,48 @@ class ArmSelector:
     def reset(self):
         self.arm = self.forced
         self.locked = self.forced is not None
-        self._rest = {ARM_LEFT: deque(maxlen=self.REST_WINDOW),
-                      ARM_RIGHT: deque(maxlen=self.REST_WINDOW)}
+        self._still = {ARM_LEFT: deque(), ARM_RIGHT: deque()}   # (t, deg)
+        self._rest = {ARM_LEFT: None, ARM_RIGHT: None}          # last still reading
 
-    def _rest_est(self, arm):
-        buf = self._rest[arm]
-        return float(np.median(buf)) if buf else None
+    def _track_rest(self, arm, v, now):
+        """Update this arm's resting angle from a still, in-range stretch."""
+        buf = self._still[arm]
+        if v is None or not (REST_MIN_DEG <= v <= REST_MAX_DEG):
+            buf.clear()
+            return
+        # First reading: the easy rule. After that the arm must be SETTLED to
+        # move its reading, so a slow lift can't drag "rest" down with it.
+        band, settle_s = ((REST_BAND_DEG, REST_SETTLE_S) if self._rest[arm] is None
+                          else (SETTLED_BAND_DEG, SETTLED_S))
+        buf.append((now, v))
+        while len(buf) > 2 and (now - buf[1][0]) >= settle_s:
+            buf.popleft()
+        vals = [x for _, x in buf]
+        if (len(buf) >= 2 and buf[-1][0] - buf[0][0] >= settle_s
+                and max(vals) - min(vals) <= band):
+            self._rest[arm] = float(np.median(vals))
 
-    def update(self, angles):
+    def rest_of(self, arm):
+        """This arm's own resting angle, or None if it hasn't rested yet."""
+        return self._rest.get(arm)
+
+    def lock(self):
+        """Pin the current choice — the lift has begun on this arm."""
+        if self.arm is not None:
+            self.locked = True
+
+    def update(self, angles, now=None):
         """angles: {ARM_LEFT: deg|None, ARM_RIGHT: deg|None} -> chosen arm|None"""
         if self.locked:
             return self.arm
+        now = time.time() if now is None else now
 
         for a in (ARM_LEFT, ARM_RIGHT):
-            v = angles.get(a)
-            if v is not None and v >= REST_MIN_DEG:
-                self._rest[a].append(v)   # only open elbows describe "rest"
+            self._track_rest(a, angles.get(a), now)
 
         deltas = {}
         for a in (ARM_LEFT, ARM_RIGHT):
-            v, r = angles.get(a), self._rest_est(a)
+            v, r = angles.get(a), self._rest[a]
             if v is not None and r is not None:
                 deltas[a] = r - v         # positive = flexed below its rest
 
@@ -549,7 +720,9 @@ class ArmSelector:
             return self.arm
 
         best = max(deltas, key=deltas.get)
-        if self.arm is None:
+        if self.arm is None or self._rest[self.arm] is None:
+            # The current pick has never rested on the thigh (e.g. it hangs at
+            # the side) — prefer an arm that has.
             self.arm = best
         elif best != self.arm:
             other = deltas.get(self.arm, 0.0)
@@ -559,6 +732,34 @@ class ArmSelector:
         if self.arm in deltas and deltas[self.arm] >= self.lock_delta:
             self.locked = True
         return self.arm
+
+
+def step_arm(selector, tracker, smooth, raw, prev_arm, now=None):
+    """One frame of the pipeline: pick the working arm, smooth its angle and
+    feed the verdict. Shared by the web engine and the desktop loop so the
+    two can't drift apart. `raw` is {ARM_LEFT: deg|None, ARM_RIGHT: deg|None}
+    (both None when nobody is detected). Returns (arm, angle, outcome).
+
+    Two rules live here because they need the selector and the tracker
+    together: when the choice of arm changes before the lift, the tracker
+    takes the NEW arm's own rest angle; and once the tracker sees a lift, the
+    choice locks, so the arm can't change mid-attempt."""
+    now = time.time() if now is None else now
+    arm = selector.update(raw, now=now)
+    if arm != prev_arm and arm is not None:
+        smooth.reset()
+        if prev_arm is not None:
+            tracker.adopt_baseline(selector.rest_of(arm))
+    value = raw.get(arm) if arm is not None else None
+    if value is None:
+        smooth.reset()       # don't let stale frames creep back on re-detect
+        angle = None
+    else:
+        angle = smooth.push(value)
+    outcome = tracker.update(angle, now=now)
+    if tracker.state not in (State.READY, State.SET):
+        selector.lock()
+    return arm, angle, outcome
 
 
 # ── HUD ──────────────────────────────────────────────────────────────────────────
@@ -705,6 +906,7 @@ def main():
     selector = ArmSelector(forced=args.arm)
     smooth = MedianSmoother(args.smooth)
     staged = False
+    prev_arm = None
     stream_start = time.time()
     last_ts = -1
 
@@ -737,9 +939,9 @@ def main():
             last_ts = ts
             results = landmarker.detect_for_video(mp_image, ts)
 
-            angle = None
-            arm = selector.arm
             arm_pts = None
+            raw = {ARM_LEFT: None, ARM_RIGHT: None}
+            lms = None
 
             if results.pose_landmarks:
                 lms = results.pose_landmarks[0]
@@ -751,18 +953,11 @@ def main():
                                  (200, 200, 200), 2, cv2.LINE_AA)
 
                 raw = {a: elbow_angle(lms, a, fw, fh) for a in (ARM_LEFT, ARM_RIGHT)}
-                arm = selector.update(raw)
-                if arm is not None and raw.get(arm) is not None:
-                    angle = smooth.push(raw[arm])
-                    arm_pts = [lm_px(lms, i, fw, fh) for i in ARM_IDX[arm]]
-                else:
-                    # Arm lost: drop the history so the angle doesn't creep
-                    # back from stale frames when it is re-detected.
-                    smooth.reset()
-            else:
-                smooth.reset()
 
-            outcome = tracker.update(angle)
+            arm, angle, outcome = step_arm(selector, tracker, smooth, raw, prev_arm)
+            prev_arm = arm
+            if angle is not None and lms is not None:
+                arm_pts = [lm_px(lms, i, fw, fh) for i in ARM_IDX[arm]]
             if outcome is not None and not staged and args.session_id:
                 _stage_reverse_curl(args.session_id, outcome, arm)
                 staged = True
@@ -781,11 +976,15 @@ def main():
                 tracker.reset()
                 selector.reset()
                 smooth.reset()
+                prev_arm = None
                 staged = False
 
     cap.release()
     cv2.destroyAllWindows()
 
+    outcome = tracker.finish()          # same STOP rule as the web engine
+    if outcome is not None and not staged and args.session_id:
+        _stage_reverse_curl(args.session_id, outcome, selector.arm)
     res = tracker.result()
     print("\n── Reverse Curl ─────────────────────────────")
     verdict = ("PASS" if res["passed"] else "FAIL") if tracker.resolved else "NOT COMPLETED"
