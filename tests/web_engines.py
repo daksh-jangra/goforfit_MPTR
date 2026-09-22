@@ -1924,8 +1924,9 @@ class ReverseCurlEngine(BaseWebEngine):
     Nothing to calibrate — the resting elbow angle is picked up automatically
     once the participant sits still with the weight on the thigh, so the coach
     only has to press Start. The camera decides PASS and FAIL by itself and
-    nobody can overrule it; stopping before any real attempt leaves the trial
-    NOT COMPLETED, which screen3 will not save.
+    nobody can overrule it. Stopping mid-attempt is a FAIL (one trial);
+    stopping before any real attempt leaves it NOT COMPLETED, which screen3
+    will not save.
 
     All the geometry and the state machine live in reverse_curl.py — this
     class only replaces the desktop cv2.imshow/waitKey loop, the same way
@@ -1949,6 +1950,7 @@ class ReverseCurlEngine(BaseWebEngine):
         self.requested_arm = arm
         self.selector = rc_mod.ArmSelector(forced=self._to_landmark(arm))
         self.smooth = rc_mod.MedianSmoother(rc_mod.SMOOTH_FRAMES)
+        self._tracked_arm = None   # arm the tracker was last fed (MediaPipe naming)
         self.result_arm = None     # the person's side the verdict was about
 
         self.angle_deg = None
@@ -1987,6 +1989,7 @@ class ReverseCurlEngine(BaseWebEngine):
             return
         with self._lock:
             self.selector = rc_mod.ArmSelector(forced=self._to_landmark(self.requested_arm))
+            self._tracked_arm = None
             self.smooth.reset()
             if not self.tracker.resolved:
                 self.tracker.reset()
@@ -2072,6 +2075,7 @@ class ReverseCurlEngine(BaseWebEngine):
             # Rebuilt, not reset: a forced arm must be re-translated for the
             # lens in use now, not the one it was chosen under.
             self.selector = rc_mod.ArmSelector(forced=self._to_landmark(self.requested_arm))
+            self._tracked_arm = None
             self.smooth.reset()
             self.angle_deg = None
             self.result_arm = None
@@ -2102,14 +2106,16 @@ class ReverseCurlEngine(BaseWebEngine):
                          res["hold_s"], self.last_save)
 
     def _stage_on_stop(self):
-        """Stopped before the camera reached a verdict. That is NOT a fail —
-        no real attempt was seen, most often because the camera couldn't see
-        the arm — so it stages as NOT COMPLETED (passed=None), which screen3
-        shows but refuses to save. The test has to be run again."""
+        """Stopped before the camera reached a verdict. tracker.finish()
+        applies the manual's one-trial rule: a real attempt under way is a
+        FAIL, a completed hold with the weight already back down is a PASS.
+        If no real attempt was seen it stages NOT COMPLETED (passed=None) —
+        most often the camera couldn't see the arm — which screen3 shows but
+        refuses to save, so the test is run again."""
         with self._lock:
             if self._staged:
                 return
-            if self.tracker.resolved:
+            if self.tracker.finish() is not None:
                 self._maybe_stage_locked()
                 return
             res = self.tracker.result()
@@ -2149,8 +2155,9 @@ class ReverseCurlEngine(BaseWebEngine):
                 last_ts = ts
                 results = self.landmarker.detect_for_video(mp_image, ts)
 
-                angle = None
                 arm_pts = None
+                lms = None
+                raw = {rc_mod.ARM_LEFT: None, rc_mod.ARM_RIGHT: None}
                 pose_detected = bool(results.pose_landmarks)
 
                 if pose_detected:
@@ -2163,21 +2170,18 @@ class ReverseCurlEngine(BaseWebEngine):
 
                     raw = {a: rc_mod.elbow_angle(lms, a, fw, fh)
                            for a in (rc_mod.ARM_LEFT, rc_mod.ARM_RIGHT)}
-                    arm = self.selector.update(raw)
-                    if arm is not None and raw.get(arm) is not None:
-                        angle = self.smooth.push(raw[arm])
-                        arm_pts = [rc_mod.lm_px(lms, i, fw, fh) for i in rc_mod.ARM_IDX[arm]]
-                    else:
-                        # Arm lost: drop the history so the angle doesn't creep
-                        # back from stale frames when it is re-detected.
-                        self.smooth.reset()
-                else:
-                    self.smooth.reset()
 
                 with self._lock:
+                    # Arm choice, smoothing and verdict in one shared step
+                    # (rc_mod.step_arm), under the lock: RESET and a lens
+                    # change replace the selector from other threads.
+                    arm, angle, outcome = rc_mod.step_arm(
+                        self.selector, self.tracker, self.smooth, raw, self._tracked_arm)
+                    self._tracked_arm = arm
+                    if angle is not None and lms is not None:
+                        arm_pts = [rc_mod.lm_px(lms, i, fw, fh) for i in rc_mod.ARM_IDX[arm]]
                     self.angle_deg = angle
                     self.pose_detected = pose_detected
-                    outcome = self.tracker.update(angle)
                     if outcome is not None:
                         self._maybe_stage_locked()
                     # Drawn inside the lock: the HUD reads tracker fields that

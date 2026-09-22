@@ -215,6 +215,57 @@ def test_no_manual_verdicts():
         "manual PASS/FAIL came back"
 
 
+# ── STOP before the camera has decided (one trial, per the manual) ───────────
+def test_stop_after_a_real_attempt_is_a_fail():
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 75.0), (2.0, 60.0)], 20)  # lifted 35 deg, still going
+    res = tr.finish()
+    assert tr.state is rc.State.FAILED and res and res["passed"] is False, tr.state
+
+
+def test_stop_mid_hold_is_a_fail():
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (1.0, UP)], 20)    # holding, 1 s of 2
+    tr.finish()
+    assert tr.state is rc.State.FAILED, tr.state
+
+
+def test_stop_with_no_real_attempt_is_not_completed():
+    for seq in ([(1.0, REST)],                              # resting, never lifted
+                [(1.0, REST), (0.5, 80.0)],                 # a 15 deg twitch in progress
+                [(2.0, 170.0)],                             # never got to rest (film side-on)
+                [(2.0, None)]):                             # arm never seen
+        tr = rc.ReverseCurlTracker()
+        feed(tr, seq, 20)
+        assert tr.finish() is None and not tr.resolved, (seq, tr.state)
+
+
+def test_stop_just_after_setting_the_weight_down_is_a_pass():
+    # Hold done; the weight is back on the thigh at 78 but hasn't been still
+    # for the full second the camera waits for. The curl happened: PASS.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (2.4, UP), (0.3, 60.0), (0.3, 78.0)], 20)
+    assert tr.state is rc.State.LOWERING, tr.state
+    res = tr.finish()
+    assert tr.state is rc.State.PASSED and res["passed"], tr.state
+
+
+def test_stop_with_the_weight_still_up_after_the_hold_is_a_fail():
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (2.4, UP), (1.0, 55.0)], 20)
+    tr.finish()
+    assert tr.state is rc.State.FAILED, tr.state
+
+
+def test_stop_after_a_verdict_changes_nothing():
+    tr = rc.ReverseCurlTracker()
+    feed(tr, good_curl(), 20)
+    assert tr.finish()["passed"] and tr.state is rc.State.PASSED
+    tr2 = rc.ReverseCurlTracker()
+    feed(tr2, [(1.0, REST), (0.3, 75.0), (2.5, 58.0), (0.5, REST)], 20)
+    assert tr2.finish()["passed"] is False and tr2.state is rc.State.FAILED
+
+
 # ── reset ────────────────────────────────────────────────────────────────────
 
 
@@ -227,22 +278,22 @@ def test_reset_clears_everything():
 
 # ── which arm is doing the test ──────────────────────────────────────────────
 def test_arm_choice_is_stable_then_locks_onto_the_curling_arm():
-    sel = rc.ArmSelector()
-    for _ in range(20):
-        sel.update({L: 80.0, R: 100.0})   # both resting, at different angles
+    sel, clock = rc.ArmSelector(), [0.0]
+    def upd(left, right, n=1):            # 20 fps
+        for _ in range(n):
+            sel.update({L: left, R: right}, now=clock[0]); clock[0] += 0.05
+    upd(80.0, 100.0, 20)                  # both resting, at different angles
     first = sel.arm
-    for _ in range(20):
-        sel.update({L: 80.0, R: 100.0})
+    upd(80.0, 100.0, 20)
     assert sel.arm == first, "choice flickered while both arms rested"
     assert not sel.locked, "locked without a lift"
 
     for angle in (95, 85, 70, 60):        # the right arm curls
-        sel.update({L: 80.0, R: float(angle)})
+        upd(80.0, float(angle))
     assert sel.arm == R, f"did not follow the curling arm: {sel.arm}"
     assert sel.locked, "did not lock once the lift was real"
 
-    for _ in range(30):                   # the other hand now moves a lot
-        sel.update({L: 40.0, R: 60.0})
+    upd(40.0, 60.0, 30)                   # the other hand now moves a lot
     assert sel.arm == R, "the idle hand stole the test"
 
 
@@ -261,6 +312,184 @@ def test_arm_can_be_forced_and_survives_missing_landmarks():
     sel3.update({L: 95.0, R: 95.0})
     sel3.reset()
     assert sel3.arm is None and not sel3.locked, "reset left the lock in place"
+
+
+# ── the resting position ─────────────────────────────────────────────────────
+def test_hanging_arm_is_never_taken_as_rest():
+    # Arm hanging at the side, weight onto the thigh, arm hanging again, and
+    # no curl at all. Taking the hanging arm (170) as "rest" made the hand
+    # moving onto the thigh look like a lift — and this sequence a FAIL.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, 170.0), (2.0, REST), (1.0, 170.0)], 20)
+    assert tr.state is rc.State.SET, f"no curl, yet state {tr.state}"
+    assert abs(tr.baseline_deg - REST) < 2, f"rest {tr.baseline_deg}, want the thigh ~{REST}"
+
+
+def test_hanging_first_then_a_perfect_curl_passes():
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, 170.0)], 20)
+    feed(tr, good_curl(), 20, t0=t)
+    assert tr.state is rc.State.PASSED, f"state {tr.state}"
+
+
+# ── the hold ─────────────────────────────────────────────────────────────────
+def test_hold_must_stay_at_the_target_not_just_touch_it():
+    # Touching 45 once and then sitting at 50 used to count as the hold.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.2, 70.0), (0.05, 45.0), (2.3, 50.0), (0.3, 70.0), (0.6, REST)], 20)
+    assert not tr.passed, "a hold at 50 deg passed a 45 deg target"
+
+
+def test_short_wobble_keeps_the_hold_but_a_long_one_breaks_it():
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, REST), (0.3, 70.0), (0.9, UP)], 20)
+    t, _ = feed(tr, [(0.25, UP + 8)], 20, t0=t)          # 0.25 s at 48 deg
+    assert tr.state is rc.State.HOLD, f"a brief wobble broke the hold: {tr.state}"
+    t, _ = feed(tr, [(0.5, UP + 8)], 20, t0=t)           # now 0.75 s above
+    assert tr.state is rc.State.LIFTING, f"a long drift above the target kept the hold: {tr.state}"
+
+
+def test_video_pause_mid_hold_is_not_counted():
+    # Frames simply stop (phone or network stall) — no update() calls at all.
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, REST), (0.3, 70.0), (0.5, UP)], 20)
+    feed(tr, [(0.1, UP)], 20, t0=t + 1.5)
+    assert tr.state is rc.State.HOLD and tr.hold_elapsed < 0.5, \
+        f"unseen time was credited: {tr.state}, {tr.hold_elapsed:.2f} s"
+
+
+def test_a_slow_but_steady_phone_still_passes():
+    # ~4 fps leaves 0.25 s between frames: under the pause limit.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, good_curl(), 4)
+    assert tr.state is rc.State.PASSED, f"state {tr.state} at 4 fps"
+
+
+# ── back down ────────────────────────────────────────────────────────────────
+def test_weight_set_down_on_a_different_spot_still_passes():
+    # Rest was 95; the weight goes back down at 78 — still on the thigh.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (2.4, UP), (0.3, 60.0), (3.0, 78.0)], 20)
+    assert tr.state is rc.State.PASSED, f"state {tr.state}"
+
+
+def test_hold_done_but_arm_stays_up_does_not_pass():
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (2.4, UP), (3.0, 60.0)], 20)
+    assert tr.state is rc.State.LOWERING, f"passed without coming back down: {tr.state}"
+
+
+def test_a_struggling_lift_is_not_failed_early():
+    # Wobbling between 64 and 72 on the way UP is still the lift, not a
+    # "return to the thigh" — the relaxed return applies only after the hold.
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, REST), (0.3, 75.0)], 20)
+    for _ in range(6):
+        t, _ = feed(tr, [(0.25, 64.0), (0.25, 72.0)], 20, t0=t)
+    assert tr.state is rc.State.LIFTING, f"a struggling lift was ended: {tr.state}"
+    feed(tr, [(2.4, UP), (0.3, 70.0), (0.6, REST)], 20, t0=t)
+    assert tr.state is rc.State.PASSED, f"state {tr.state}"
+
+
+# ── which arm, and what the camera can see ───────────────────────────────────
+def _pipeline(frames, fps=20):
+    """Drive rc.step_arm exactly as the engine does. frames: (sec, L, R)."""
+    sel, tr, sm = rc.ArmSelector(), rc.ReverseCurlTracker(), rc.MedianSmoother()
+    prev, t = None, 0.0
+    for dur, left, right in frames:
+        for _ in range(max(1, int(round(dur * fps)))):
+            prev, _, _ = rc.step_arm(sel, tr, sm, {L: left, R: right}, prev, now=t)
+            t += 1.0 / fps
+    return sel, tr
+
+
+def test_rest_angle_follows_the_arm_that_curls():
+    # The other arm hangs at the side; the working arm rests on the thigh
+    # and curls. The rest reading must be the working arm's own.
+    sel, tr = _pipeline([(1.0, 170.0, REST), (0.1, 170.0, 90.0), (0.1, 170.0, 80.0),
+                         (0.1, 170.0, 70.0), (0.1, 170.0, 55.0), (2.4, 170.0, UP),
+                         (0.3, 170.0, 70.0), (1.0, 170.0, REST)])
+    assert sel.arm == R and tr.state is rc.State.PASSED, (sel.arm, tr.state)
+
+
+def test_rest_angle_switches_with_the_arm():
+    # Both hands rest on the thighs, at different angles (left 125, right 85).
+    # The camera starts on the left; the right arm then fidgets to 65 and back.
+    # Measured against the LEFT arm's rest, that fidget looks like a big lift
+    # that never comes back down; against the right arm's own rest it is 20
+    # deg — ignored. Then a proper curl with the right arm passes.
+    sel, tr = _pipeline([(1.0, 125.0, 85.0), (0.2, 125.0, 75.0), (0.3, 125.0, 65.0),
+                         (1.0, 125.0, 85.0)])
+    assert tr.state is rc.State.SET, f"a 20 deg fidget wasn't ignored: {tr.state}"
+    assert abs(tr.baseline_deg - 85.0) < 3, f"rest {tr.baseline_deg}, want the right arm's ~85"
+
+
+def test_arm_choice_locks_once_the_lift_starts():
+    sel, tr = _pipeline([(1.0, REST, REST), (0.1, REST, 80.0), (0.1, REST, 65.0)])
+    assert sel.locked and sel.arm == R, (sel.locked, sel.arm)
+    sel2, tr2 = _pipeline([(1.0, REST, REST), (0.1, REST, 80.0), (0.1, REST, 65.0),
+                           (0.3, 30.0, 60.0)])         # the other hand now moves a lot
+    assert sel2.arm == R, f"the idle hand took over mid-lift: {sel2.arm}"
+
+
+def test_slow_lift_is_not_stolen_by_the_other_hand():
+    # A slow lift: the right arm creeps from 95 to 80 over 1.5 s. The tracker
+    # sees the lift start at ~83; the arm chooser, whose own rest reading
+    # drifts down with the slow movement, would lock later. If the other hand
+    # moves a lot in that gap it must not take over the attempt in progress.
+    creep = [(1.5 / 16, REST, REST - i) for i in range(16)]
+    sel, tr = _pipeline([(1.0, REST, REST)] + creep + [(0.5, 60.0, 80.0)])
+    assert tr.state is rc.State.LIFTING, f"state {tr.state}"
+    assert sel.arm == R, f"the other hand took over a lift in progress: {sel.arm}"
+    assert abs(tr.baseline_deg - REST) < 2, f"rest drifted with the slow lift: {tr.baseline_deg}"
+
+
+def _creep(frm, to, deg_per_s, fps=20):
+    """A steady slow movement, one frame at a time: [(sec, angle), ...]."""
+    step = deg_per_s / fps * (1 if to > frm else -1)
+    out, a = [], frm
+    while (a < to) if to > frm else (a > to):
+        out.append((1.0 / fps, a)); a += step
+    return out
+
+
+def test_slow_curl_keeps_its_true_rest_angle():
+    # ~10 deg/s — slow and controlled. The rest reading must stay at the
+    # thigh (95), not creep down with the arm while it is still in range.
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, REST)] + _creep(REST, 70.0, 10), 20)
+    assert abs(tr.baseline_deg - REST) < 2, f"rest drifted to {tr.baseline_deg}"
+    feed(tr, _creep(70.0, UP, 10) + [(2.4, UP), (0.3, 70.0), (0.6, REST)], 20, t0=t)
+    assert tr.state is rc.State.PASSED, f"state {tr.state}"
+
+
+def test_slow_struggling_student_is_not_failed_for_sinking_back_a_little():
+    # Creeps up to 60, can't go further, sinks back to 75 — still well off
+    # the thigh (95). With a drifted rest angle (~72) that read as "back
+    # down" and FAILED. Against the true rest it is still the lift.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST)] + _creep(REST, 60.0, 10) + [(1.0, 60.0)] + _creep(60.0, 75.0, 10)
+         + [(1.0, 75.0)], 20)
+    assert tr.state is rc.State.LIFTING, f"sinking back to 75 ended the trial: {tr.state}"
+
+
+def test_slow_lowering_does_not_pass_before_the_weight_is_down():
+    # A careful ~8 deg/s lowering passes through the resting range for a
+    # while; it must not be taken as "set down" while still moving.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, REST), (0.3, 70.0), (2.4, UP)] + _creep(UP, 79.0, 8), 20)
+    assert tr.state is rc.State.LOWERING, f"passed mid-lowering: {tr.state}"
+
+
+def test_joints_outside_the_picture_are_ignored():
+    import types
+    lms = [types.SimpleNamespace(x=0.5, y=0.5, visibility=0.0) for _ in range(33)]
+    def arm_at(elbow_y):
+        for i, (x, y) in {12: (0.40, 0.60), 14: (0.42, elbow_y), 16: (0.47, 0.70)}.items():
+            lms[i] = types.SimpleNamespace(x=x, y=y, visibility=0.9)
+        return rc.elbow_angle(lms, R, 640, 480)
+    assert arm_at(1.30) is None, "an elbow below the picture produced an angle"
+    assert arm_at(0.85) is not None, "an arm inside the picture was rejected"
 
 
 # ── standalone runner (so this works without pytest) ─────────────────────────
