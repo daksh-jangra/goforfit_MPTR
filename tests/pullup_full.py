@@ -273,10 +273,10 @@ def _autosave_full_pull_up(session_id, reps, duration_sec):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/full_pull_up",
+            "http://localhost:8080/api/stage/full_pull_up",
             json={"session_id": session_id, "reps": reps, "duration_sec": duration_sec},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] full_pull_up staged for review -> reps={reps}  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

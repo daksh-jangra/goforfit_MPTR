@@ -546,7 +546,7 @@ def _stage_trunk_lift(session_id, lift_cm, trials, stick_cm, rating=None):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/trunk_lift",
+            "http://localhost:8080/api/stage/trunk_lift",
             json={
                 "session_id": session_id,
                 "lift_cm":    lift_cm,
@@ -556,7 +556,7 @@ def _stage_trunk_lift(session_id, lift_cm, trials, stick_cm, rating=None):
                 "rating":     rating,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] trunk_lift staged for review → {lift_cm} cm  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

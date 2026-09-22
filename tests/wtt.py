@@ -116,7 +116,7 @@ def _autosave_wall_toss(session_id, catches, ball_colour=None):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/wall_toss",
+            "http://localhost:8080/api/stage/wall_toss",
             json={
                 "session_id":  session_id,
                 "catches":     catches,
@@ -124,7 +124,7 @@ def _autosave_wall_toss(session_id, catches, ball_colour=None):
                 "ball_colour": ball_colour,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] wall_toss staged for review → catches={catches}  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

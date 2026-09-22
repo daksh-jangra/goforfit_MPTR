@@ -651,7 +651,7 @@ def _stage_reverse_curl(session_id, result, arm, rating=None):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/reverse_curl",
+            "http://localhost:8080/api/stage/reverse_curl",
             json={
                 "session_id":     session_id,
                 "passed":         bool(result.get("passed")),
@@ -661,7 +661,7 @@ def _stage_reverse_curl(session_id, result, arm, rating=None):
                 "rating":         rating,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] reverse_curl staged for review → "
               f"{'PASS' if result.get('passed') else 'FAIL'}  session={session_id}")
     except Exception as e:

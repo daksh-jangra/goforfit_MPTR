@@ -177,10 +177,10 @@ def _autosave_curl_up(session_id, reps):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/curl_up",
+            "http://localhost:8080/api/stage/curl_up",
             json={"session_id": session_id, "reps": reps, "duration_sec": 30},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] curl_up staged for review → reps={reps}  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")
