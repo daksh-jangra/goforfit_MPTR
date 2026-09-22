@@ -961,12 +961,23 @@
               video.srcObject = null;
               return { ok: false, error: 'Camera opened but delivered no video — try flipping again.' };
           }
-          // Record which physical lens we actually got, and sync camFacing to
-          // the real facingMode so the server mirrors correctly.
+          // Record which physical lens we actually got, and work out which way
+          // it faces so the server mirrors correctly. Phones report facingMode;
+          // most laptop/desktop webcams report nothing. A lens that doesn't say
+          // is judged by its label, and failing that is treated as FRONT: every
+          // phone identifies its back camera, so an unidentified lens is a
+          // webcam looking at the participant. Without this, tests that prefer
+          // the back camera (wall toss, reverse curl) kept that preference on a
+          // laptop and showed a photo-style, un-mirrored preview.
           try {
-              const st = camStream.getVideoTracks()[0].getSettings();
+              const track = camStream.getVideoTracks()[0];
+              const st = track.getSettings();
               if (st.deviceId) currentDeviceId = st.deviceId;
-              if (st.facingMode === 'user' || st.facingMode === 'environment') camFacing = st.facingMode;
+              if (st.facingMode === 'user' || st.facingMode === 'environment') {
+                  camFacing = st.facingMode;
+              } else {
+                  camFacing = guessFacingFromLabel(track.label) || 'user';
+              }
           } catch (e) {}
           maybeShowFlipButton();
           const ctx = canvas.getContext('2d');
