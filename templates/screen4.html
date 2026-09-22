@@ -525,6 +525,77 @@
                       : null;
               },
           },
+          shoulder_stretch: {
+              feedUrl:    '/api/shoulder_stretch/feed',
+              stateUrl:   '/api/shoulder_stretch/state',
+              actionUrl:  '/api/shoulder_stretch/action',
+              browserCamera: true,
+              frameUrl:   '/api/shoulder_stretch/frame',
+              // The camera films the participant from BEHIND (the hands meet
+              // between the shoulder blades), so on a phone this is the back
+              // lens — which is also the un-mirrored one, and mirroring would
+              // swap the RIGHT/LEFT trial label.
+              preferBackCamera: true,
+              // Nothing to calibrate: the fingertip gap is measured against the
+              // participant's own palm length, so the threshold self-calibrates
+              // per person and per distance from the camera.
+              buttons: [
+                  { id: 'side_l', label: 'LEFT ARM',  action: 'side', value: 'left',  color: 'bg-slate-600' },
+                  { id: 'side_r', label: 'RIGHT ARM', action: 'side', value: 'right', color: 'bg-slate-600' },
+                  { id: 'side_a', label: 'AUTO SIDE', action: 'side', value: 'auto',  color: 'bg-slate-500' },
+                  { id: 'reset',  label: 'RESET',     action: 'reset', color: 'bg-amber-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (!state.running) return true;
+                  // Pinning the side only relabels the trial (banked contact is
+                  // kept), and it is closed off once a verdict exists so a staged
+                  // result can't be relabelled — RESET first, deliberately. There
+                  // is no PASS/FAIL button: the engine decides this test, and the
+                  // coach confirms the staged verdict on the review screen.
+                  if (btnId === 'side_l' || btnId === 'side_r' || btnId === 'side_a')
+                      return !!state.resolved;
+                  return false;
+              },
+              renderStatus(state) {
+                  const lines = [`State: ${state.state}`];
+                  // The engine locks onto the participant only while exactly one
+                  // body is in frame; until then nothing is measured.
+                  if (state.locked === false) lines.push('Only the student in frame to start');
+                  const sideTxt = state.side
+                      ? `${state.side} arm over the shoulder${state.side_locked ? ' (locked)' : ''}`
+                      : 'working out which arm is over the shoulder';
+                  lines.push(`Side: ${sideTxt}`);
+                  if (state.gap_ratio !== null && state.gap_ratio !== undefined) {
+                      // The gap is measured in palm lengths, not centimetres —
+                      // saying so stops the number being read as a distance.
+                      lines.push(`Gap: ${state.gap_ratio} palm (touch ≤ ${state.threshold_ratio})`);
+                  } else if (!state.pose_detected) {
+                      lines.push('No participant detected');
+                  } else {
+                      lines.push('Hands not both visible — film from behind, hands between the shoulder blades');
+                  }
+                  lines.push(`Touch: ${state.touch_frames} / ${state.required_frames} frames` +
+                             (state.touch_pct > 0 ? `  (${state.touch_pct}%)` : ''));
+                  if (state.best_gap_ratio !== null && state.best_gap_ratio !== undefined) {
+                      lines.push(`Closest so far: ${state.best_gap_ratio} palm`);
+                  }
+                  if (state.resolved) {
+                      lines.push(`RESULT: ${state.passed ? 'PASS' : 'FAIL'}`);
+                  }
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              syncFields(state) {
+                  // Only sync a decided trial — an in-progress one is not a
+                  // verdict, and screen3 would show it as a staged Fail.
+                  // Same shape as the confirmed BMI/Wingspan sync: one numeric
+                  // <camel>Score and nothing else (1 = pass, 0 = fail). A readable
+                  // Result string or the side goes back in only once the Laravel
+                  // owner confirms the dashboard reads those keys.
+                  return state.resolved ? { shoulderStretchScore: state.passed ? 1 : 0 } : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1154,6 +1225,7 @@
               wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp', full_pull_up:'FullPullUp',
               wall_toss:'WallToss', sit_reach:'SitReach', trunk_lift:'TrunkLift',
               reverse_curl:'ReverseCurl',
+              shoulder_stretch:'ShoulderStretch',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };

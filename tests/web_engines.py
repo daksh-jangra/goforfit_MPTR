@@ -19,6 +19,7 @@ SECTIONS IN THIS FILE
   4. SitReachEngine      wraps snr.py             (sit & reach)
   4B. TrunkLiftEngine    wraps trunk_lift.py      (trunk lift height)
   4C. ReverseCurlEngine  wraps reverse_curl.py    (reverse curl pass/fail)
+  4D. ShoulderStretchEngine  wraps shoulder_stretch.py  (shoulder stretch pass/fail)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -2187,6 +2188,384 @@ class ReverseCurlEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4D — SHOULDER STRETCH   (wraps shoulder_stretch.py)
+# ════════════════════════════════════════════════════════════════════════
+import shoulder_stretch as ss_mod  # noqa: E402
+
+_MODEL_SHOULDER_POSE = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+_MODEL_SHOULDER_HAND = os.path.join(_TESTS_DIR, "hand_landmarker.task")
+
+
+class ShoulderStretchEngine(BaseWebEngine):
+    """Live Brockport shoulder-stretch engine (figure 5.27). One trial,
+    pass/fail: one arm reaches over the shoulder and down the back, the other
+    comes up the back, and the item PASSES if the fingertips touch.
+
+    The camera goes BEHIND the participant — the hands meet between the
+    shoulder blades, so there is nothing to see from the front. Frames are
+    POSTed from the browser to /api/shoulder_stretch/frame, the same as trunk
+    lift and reverse curl, so no server webcam is opened.
+
+    Unlike reverse curl there are no PASS / FAIL buttons: the engine decides
+    this test. The contact metric (minimum fingertip-pair distance over the
+    hands' own palm length) is measured and self-calibrating, so the only
+    controls are the LEFT / RIGHT side pin and RESET. Stopping the test closes
+    the single trial — an untouched one stages as a FAIL carrying the closest
+    gap it reached, so screen3 can see how near it came.
+
+    This engine owns TWO MediaPipe detectors (pose + hands), the way
+    wingspan_web_engine.py does. All the geometry, the ownership gate and the
+    state machine live in shoulder_stretch.py — this class only replaces the
+    desktop cv2.imshow/waitKey loop."""
+
+    def __init__(self, session_id=None, on_stage=None, side=ss_mod.SIDE_AUTO,
+                 pass_ratio=ss_mod.PASS_RATIO, touch_frames=ss_mod.TOUCH_FRAMES,
+                 camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera, like reverse curl.
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.hand_det = None
+        self.tracker = ss_mod.ShoulderStretchTracker(pass_ratio=pass_ratio,
+                                                     touch_frames=touch_frames)
+        # The ONE side selector. It is created here and only ever changed in
+        # place (pin / reset) — never replaced — and it is the single source
+        # of "side" for the UI, the tracker and the staged row (C5).
+        self.selector = ss_mod.SideSelector(forced=side)
+        # HUD-only smoother: the tracker is fed the RAW ratio (M9).
+        self.smooth = ss_mod.MedianSmoother(ss_mod.SMOOTH_FRAMES)
+        # Whose body the trial is measured against: seeds only when exactly
+        # one body is in frame (the student alone at the start), then follows
+        # that body — a coach stepping in is never measured (C1/C2/M8).
+        self.participant_lock = ss_mod.ParticipantLock()
+        self.requested_side = side
+
+        self.gap_ratio = None       # latest smoothed ratio, in palm lengths
+        self.pose_detected = False
+        self.hands_detected = 0      # raw hands the detector returned
+        self.hands_measurable = False  # both hands owned AND big enough to measure
+        self.last_save = None
+
+    # ── camera plumbing (identical contract to ReverseCurlEngine) ───────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """This test is NEVER mirrored, whichever camera sends the frames: it
+        films the participant's BACK, not a selfie, and the side is read from
+        where the raised elbow is in the picture (right arm = right of the
+        picture from behind). Selfie-mirroring the laptop/front camera used to
+        swap LEFT and RIGHT."""
+        super().set_facing(facing)
+        self.mirror_preview = False
+
+    # ── models ──────────────────────────────────────────────────────────
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_SHOULDER_POSE)
+        # _ensure_pose_model's default URL is the pose model, so the hand
+        # model is fetched by passing shoulder_stretch's own URL for it. Both
+        # .task files already ship in tests/; this only matters on a fresh
+        # checkout. (wingspan2.ensure_models would do it too, but it calls
+        # sys.exit(1) on failure, which would take the server down.)
+        _ensure_pose_model(_MODEL_SHOULDER_HAND,
+                           url=ss_mod.MODEL_URLS["hand_landmarker.task"])
+
+        pose_options = ss_mod.PoseLandmarkerOptions(
+            base_options=ss_mod.BaseOptions(model_asset_path=_MODEL_SHOULDER_POSE),
+            running_mode=ss_mod.VisionRunningMode.VIDEO,
+            # 2, not 1: with num_poses=1 MediaPipe locks onto whichever body
+            # it likes (measured: the coach on 98-100% of two-person frames).
+            # ParticipantLock picks the participant out of these.
+            num_poses=ss_mod.NUM_POSES,
+            # 0.45, following wingspan2.build_pose_detector's production
+            # values — NOT reverse_curl's 0.55. Seen from behind with the arms
+            # folded up the back, 0.55 drops the pose on good frames. Do not
+            # "fix" this back to 0.55 by analogy with the other pass/fail test.
+            min_pose_detection_confidence=0.45,
+            min_pose_presence_confidence=0.45,
+            min_tracking_confidence=0.45,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = ss_mod.PoseLandmarker.create_from_options(pose_options)
+
+        hand_options = ss_mod.HandLandmarkerOptions(
+            base_options=ss_mod.BaseOptions(model_asset_path=_MODEL_SHOULDER_HAND),
+            running_mode=ss_mod.VisionRunningMode.VIDEO,
+            num_hands=2,
+            # wingspan2.build_hand_detector's production values.
+            min_hand_detection_confidence=0.55,
+            min_hand_presence_confidence=0.45,
+            min_tracking_confidence=0.45,
+        )
+        self.hand_det = ss_mod.HandLandmarker.create_from_options(hand_options)
+
+    def _release_models(self):
+        # Runs on the reaper thread after a timed-out stop() as well, so each
+        # handle is guarded and nulled separately.
+        for name in ("landmarker", "hand_det"):
+            det = getattr(self, name, None)
+            if det is not None:
+                try:
+                    det.close()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        return {
+            "state": tr.state.name,
+            "side": self.selector.side,
+            "side_locked": self.selector.locked,
+            "side_pinned": self.selector.pinned,
+            "requested_side": self.requested_side,
+            # False until a lone body has been seen; screen4 shows "Only the
+            # student in frame to start" while it is False.
+            "locked": self.participant_lock.locked,
+            "pose_detected": self.pose_detected,
+            # hands_detected is what the detector returned; hands_measurable
+            # is whether those hands passed the ownership gate and were big
+            # enough in frame to measure. Dropouts are normal in this pose, so
+            # screen4 shows the difference rather than a bare "no hands".
+            "hands_detected": self.hands_detected,
+            "hands_measurable": self.hands_measurable,
+            # Named gap_ratio (not "ratio") to match best_gap_ratio and the
+            # column the row is saved under — screen4 renders both together.
+            "gap_ratio": round(self.gap_ratio, 3) if self.gap_ratio is not None else None,
+            "best_gap_ratio": (round(tr.best_gap_ratio, 3)
+                               if tr.best_gap_ratio is not None else None),
+            "threshold_ratio": tr.pass_ratio,
+            "touch_frames": tr.touch_count,
+            "required_frames": tr.touch_frames,
+            "touch_pct": int(round(tr.touch_progress() * 100)),
+            "frames_seen": tr.frames_seen,
+            "resolved": tr.resolved,
+            "passed": bool(tr.passed) if tr.resolved else None,
+            "verdict_by": tr.verdict_by,
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_side(self, value=None):
+        """Force the trial's side — the arm reaching OVER the shoulder — or go
+        back to auto. Only before a verdict: switching afterwards would
+        relabel a result that has already been staged."""
+        side = (value or "").strip().lower() if isinstance(value, str) else None
+        if side not in (ss_mod.SIDE_AUTO, ss_mod.SIDE_LEFT, ss_mod.SIDE_RIGHT):
+            return {"ok": False, "error": "Side must be auto, left or right"}
+        with self._lock:
+            if self.tracker.resolved:
+                return {"ok": False, "error": "Trial already decided — press RESET first"}
+            self.requested_side = side
+            # Pin IN PLACE (auto un-pins) so the UI, the tracker and the
+            # staged row all read the same selector (C5). The tracker's copy
+            # is written through now, so an END/STOP before the next frame
+            # still stages the pinned side.
+            self.selector.pin(side)
+            self.tracker.side = self.selector.side
+            # Deliberately NOT resetting the tracker here, unlike reverse
+            # curl's action_arm. That one restarts the trial because the rest
+            # baseline belongs to the old arm; here the side is only a LABEL —
+            # the fingertip-gap ratio is the same measurement whichever arm is
+            # on top — so throwing away banked contact would punish the coach
+            # for correcting the name mid-trial.
+            return {"ok": True, "side": side}
+
+    def action_end(self, value=None):
+        """Close the single trial now (the desktop script's E key). This is
+        NOT a coach verdict — the result is whatever the measurement earned,
+        so an untouched trial ends as a FAIL carrying its closest gap. Stop
+        does the same thing via _stage_on_stop; this lets the coach end the
+        trial without tearing the feed down."""
+        with self._lock:
+            if self.tracker.resolved:
+                return {"ok": False, "error": "Trial already decided — press RESET first"}
+            self._maybe_stage_locked(force=True)
+            return {"ok": True, "passed": bool(self.tracker.passed)}
+
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.selector.reset()
+            self.smooth.reset()
+            self.participant_lock.reset()
+            self.gap_ratio = None
+            self.hands_detected = 0
+            self.hands_measurable = False
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        """Generic dispatcher, so app.py can forward screen4's {action, value}
+        payload straight through the way the other engines do. There is no
+        pass/fail action: the engine decides this test. `end` closes the trial
+        on whatever it measured; stopping the test does the same."""
+        handler = {
+            "side":  self.action_side,
+            # `arm` accepted as an alias so a screen4 button block copied from
+            # reverse curl still pins the side instead of 400-ing.
+            "arm":   self.action_side,
+            "end":   self.action_end,
+            "reset": self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self, force=False):
+        """Stage the verdict once the trial resolves. Called with self._lock
+        held. `force` closes an unresolved trial first, so what gets staged is
+        always a real verdict rather than a half-finished state."""
+        if not self.tracker.resolved:
+            if not force:
+                return
+            self.tracker.end_trial()
+        # The selector is the only source of "side": copy it onto the tracker
+        # so result(), the HUD, the UI and the staged row can't disagree — a
+        # pin or un-pin made since the last frame would otherwise be lost (C5).
+        # Voting stops at the verdict, so this is the side AT the verdict.
+        self.tracker.side = self.selector.side
+        res = self.tracker.result()
+        self.last_save = "Pass" if res["passed"] else "Fail"
+        # Positional contract with app.py's _stage(passed, side,
+        # best_gap_ratio, rating) closure — keep the two in lockstep.
+        self._safe_stage(res["passed"], res["side"],
+                         res.get("best_gap_ratio"), self.last_save)
+
+    def _stage_on_stop(self):
+        """Stopped mid-test: send screen3 what the trial actually achieved
+        rather than nothing. An unresolved trial stages as NOT passed, with
+        the closest fingertip gap reached, so the coach can see how close it
+        came — and so the 0.20 threshold can be retuned later from rows that
+        include the near misses, not just the passes."""
+        with self._lock:
+            if self._staged:
+                return
+            self._maybe_stage_locked(force=True)
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                # Frames come from the browser; a 1s timeout keeps stop()
+                # responsive when the phone stops sending.
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # live in the same pixel space. With the back camera
+                # (facing='environment') this is a no-op, which is the
+                # intended setup for a shot taken from behind.
+                # Never mirrored (see set_facing): the side is read from the
+                # picture as filmed from behind.
+                fh, fw = frame.shape[:2]
+                mp_image = ss_mod.mp.Image(
+                    image_format=ss_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                # One image, both graphs, the SAME timestamp — each keeps its
+                # own strictly-increasing check in VIDEO mode.
+                results = self.landmarker.detect_for_video(mp_image, ts)
+                h_result = self.hand_det.detect_for_video(mp_image, ts)
+
+                now = time.time()
+                ratio = None        # RAW per-frame ratio -> the tracker
+                shown = None        # smoothed ratio -> HUD / gap_ratio only
+                tip_pts = None
+                vote = None
+                hand_lms_list = h_result.hand_landmarks or []
+                hands_detected = len(hand_lms_list)
+
+                # Whose body: matched to the participant lock (seeded only on
+                # a lone body), or the last one for up to BODY_HOLD_S when the
+                # pose detector returns nobody — hands are often found on
+                # frames where the pose is not (M7). Under self._lock because
+                # RESET clears the lock from the request thread.
+                with self._lock:
+                    fresh = self.participant_lock.update(
+                        results.pose_landmarks, fw, fh, now)
+                    body = self.participant_lock.body_for(now)
+                pose_detected = body is not None
+
+                if body is not None:
+                    for i, j in ss_mod._POSE_CONNECTIONS:
+                        if body[i].visibility >= 0.45 and body[j].visibility >= 0.45:
+                            p1 = (int(body[i].x * fw), int(body[i].y * fh))
+                            p2 = (int(body[j].x * fw), int(body[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+                    if hand_lms_list:
+                        ss_mod.draw_hand_skeleton(frame, hand_lms_list)
+                    reading = ss_mod.frame_gap_ratio(hand_lms_list, body, fw, fh)
+                    # Side votes only while the stretch itself is in view (a
+                    # valid reading), and only from a body matched on THIS
+                    # frame — warming up or facing the camera must not name it.
+                    if fresh is not None and reading is not None:
+                        vote = ss_mod.detect_side(fresh, fw, fh)
+                    if reading is not None:
+                        ratio = reading.ratio
+                        shown = self.smooth.push(reading.ratio, now)
+                        tip_pts = (reading.point_a, reading.point_b)
+                # No smooth.reset() on an unmeasurable frame (M9): dropouts are
+                # normal from behind, and the smoother's samples expire by age.
+
+                with self._lock:
+                    self.gap_ratio = shown
+                    self.pose_detected = pose_detected
+                    self.hands_detected = hands_detected
+                    self.hands_measurable = ratio is not None
+                    if not self.tracker.resolved:   # side frozen at the verdict
+                        self.selector.update(vote)
+                    side = self.selector.side
+                    outcome = self.tracker.update(ratio, now=now, side=side)
+                    if outcome is not None:
+                        self._maybe_stage_locked()
+                    # Drawn inside the lock: the HUD reads tracker fields that
+                    # a SIDE/RESET action could change mid-draw.
+                    ss_mod.draw_hud(frame, self.tracker, side=side,
+                                    ratio=shown, tip_pts=tip_pts)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -2205,6 +2584,7 @@ __all__ = [
     "SitReachEngine",
     "TrunkLiftEngine",
     "ReverseCurlEngine",
+    "ShoulderStretchEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]
