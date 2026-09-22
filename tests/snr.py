@@ -360,7 +360,7 @@ def _stage_sit_reach(session_id, reach_cm, leg_cm, rating=None):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/sit_reach",
+            "http://localhost:8080/api/stage/sit_reach",
             json={
                 "session_id": session_id,
                 "reach_cm":   reach_cm,
@@ -368,7 +368,7 @@ def _stage_sit_reach(session_id, reach_cm, leg_cm, rating=None):
                 "rating":     rating,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] sit_reach staged for review → reach={reach_cm} cm  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

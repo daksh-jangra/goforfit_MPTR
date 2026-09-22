@@ -751,10 +751,10 @@ def stage_dash_50m_results(session_id, lap_times):
             for t, lane_id in lap_times
         ]
         requests.post(
-            "http://localhost:5000/api/stage/dash_50m",
+            "http://localhost:8080/api/stage/dash_50m",
             json={"session_id": session_id, "laps": laps_payload},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"[Main] dash_50m staged for review  session={session_id}  "
               f"lanes={[l['lane'] for l in laps_payload]}")
     except Exception as e:

@@ -681,10 +681,10 @@ def _autosave_wingspan(session_id, wingspan_cm):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/wingspan",
+            "http://localhost:8080/api/stage/wingspan",
             json={"session_id": session_id, "wingspan_cm": wingspan_cm},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] wingspan staged for review → {wingspan_cm} cm  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

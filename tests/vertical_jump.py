@@ -7,7 +7,7 @@ from mediapipe.tasks.python import vision
 import argparse
 import requests
 
-STAGE_URL = "http://localhost:5000/api/stage/vertical_jump"
+STAGE_URL = "http://localhost:8080/api/stage/vertical_jump"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -28,7 +28,7 @@ def stage_result(session_id, attempts_cm, standing_reach_cm):
         "attempts": [round(a, 2) for a in attempts_cm],
     }
     try:
-        requests.post(STAGE_URL, json=payload, timeout=3)
+        requests.post(STAGE_URL, json=payload, timeout=3).raise_for_status()
     except Exception as exc:
         print(f"[WARN] Could not stage result: {exc}")
 

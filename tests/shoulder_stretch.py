@@ -1081,7 +1081,7 @@ def _stage_shoulder_stretch(session_id, result, side, rating=None):
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/shoulder_stretch",
+            "http://localhost:8080/api/stage/shoulder_stretch",
             json={
                 "session_id":     session_id,
                 "passed":         bool(result.get("passed")),
@@ -1090,7 +1090,7 @@ def _stage_shoulder_stretch(session_id, result, side, rating=None):
                 "rating":         rating,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] shoulder_stretch staged for review → "
               f"{'PASS' if result.get('passed') else 'FAIL'}  session={session_id}")
     except Exception as e:

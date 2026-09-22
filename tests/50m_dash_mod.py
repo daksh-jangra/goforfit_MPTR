@@ -474,10 +474,10 @@ def _autosave_dash_50m(session_id, laps):
             for n, split, cumulative in laps
         ]
         requests.post(
-            "http://localhost:5000/api/stage/dash_50m",
+            "http://localhost:8080/api/stage/dash_50m",
             json={"session_id": session_id, "laps": lap_list},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] dash_50m staged for review  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed: {e}")

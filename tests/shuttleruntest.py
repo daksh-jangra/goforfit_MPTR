@@ -650,10 +650,10 @@ def stage_shuttle_run_results(session_id: Optional[int], manager: StudentManager
             print("[DB] No finished lanes to stage.")
             return
         requests.post(
-            "http://localhost:5000/api/stage/shuttle_run",
+            "http://localhost:8080/api/stage/shuttle_run",
             json={"session_id": session_id, "laps": laps_payload},
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"[DB] shuttle_run staged for review  session={session_id}  "
               f"lanes={[l['lane'] for l in laps_payload]}")
     except Exception as e:

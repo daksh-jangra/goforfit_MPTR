@@ -293,7 +293,7 @@ def _autosave_bmi(session_id, height_cm, weight_kg=None, calibration_used=False)
     try:
         import requests
         requests.post(
-            "http://localhost:5000/api/stage/bmi",
+            "http://localhost:8080/api/stage/bmi",
             json={
                 "session_id":       session_id,
                 "height_cm":        height_cm,
@@ -301,7 +301,7 @@ def _autosave_bmi(session_id, height_cm, weight_kg=None, calibration_used=False)
                 "calibration_used": calibration_used,
             },
             timeout=2,
-        )
+        ).raise_for_status()
         print(f"  [DB] BMI staged for review → height={height_cm} cm  session={session_id}")
     except Exception as e:
         print(f"  [DB] Stage failed (server not running?): {e}")

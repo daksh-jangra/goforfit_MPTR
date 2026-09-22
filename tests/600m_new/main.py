@@ -60,7 +60,7 @@ try:
 except ImportError:  # pragma: no cover - staging is best-effort only
     requests = None
 
-API_BASE_URL = os.environ.get("GOFORFIT_API_URL", "http://localhost:5000")
+API_BASE_URL = os.environ.get("GOFORFIT_API_URL", "http://localhost:8080")
 
 SPACE_KEY = 32
 ESC_KEY = 27
@@ -97,7 +97,7 @@ def _stage_results(lane_manager: "LaneManager", session_id) -> None:
         payload = {"laps": laps}
         if session_id is not None:
             payload["session_id"] = session_id
-        requests.post(f"{API_BASE_URL}/api/stage/run_600m", json=payload, timeout=1.5)
+        requests.post(f"{API_BASE_URL}/api/stage/run_600m", json=payload, timeout=1.5).raise_for_status()
     except Exception as exc:
         print(f"WARNING: could not stage 600m results ({exc})", file=sys.stderr)
 
