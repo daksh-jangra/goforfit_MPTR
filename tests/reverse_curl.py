@@ -39,10 +39,11 @@ What the app scores vs. what the coach judges
 
   NOT SCORED (the tester's job, per the manual):
     * "the elbow extension on the downward movement must be slower than
-      gravitational pull" — the descent rate is measured and shown on the
-      HUD in deg/s as information, but it never decides the pass. Judging
+      gravitational pull". Not measured or shown at all: judging
       "controlled" against a free-fall model would add a silent failure
-      mode for something the coach is already watching from arm's length.
+      mode, and a speed read-out misled more than it helped (it timed from
+      the end of the 2 s hold, so a longer hold made a fast drop look slow).
+      The coach is watching from arm's length.
     * forearm pronation, fingers wrapped around the weight, seated posture.
 
 The camera decides — nobody presses PASS or FAIL
@@ -299,14 +300,12 @@ class ReverseCurlTracker:
         self.hold_elapsed = 0.0       # seconds held at/under the target so far
         self.hold_best_s = 0.0        # longest hold seen in this trial
         self.attempts = []            # one dict per completed attempt
-        self.descent_deg_s = None     # measured on the way down, never scored
         self.passed = False
         self.verdict_by = None        # "auto" once decided — no manual verdicts
         self.status_msg = "Rest the weight on the thigh and hold still"
         self._settle = deque()        # (t, angle) while finding the baseline
         self._hold_start = None
         self._above_since = None      # when the hold last drifted above the target
-        self._lower_start = None
         self._return = deque()        # (t, angle) while waiting for the weight to settle
         self._dropout_start = None
         self._last_frame_t = None
@@ -403,7 +402,6 @@ class ReverseCurlTracker:
             self.hold_best_s = max(self.hold_best_s, self.hold_elapsed)
             if self.hold_elapsed >= self.hold_s:
                 self.state = State.LOWERING
-                self._lower_start = now
                 self._return.clear()
                 self.status_msg = "Hold complete — lower the weight to the thigh"
             return None
@@ -586,10 +584,6 @@ class ReverseCurlTracker:
         return None
 
     def _pass(self, now, angle):
-        if self._lower_start is not None and now > self._lower_start and self.peak_deg is not None:
-            # Information only — the manual gives "slower than gravitational
-            # pull" to the tester, so this number is shown, never enforced.
-            self.descent_deg_s = round((angle - self.peak_deg) / (now - self._lower_start), 1)
         self.attempts.append({
             "peak_angle_deg": round(self.peak_deg, 1) if self.peak_deg is not None else None,
             "hold_s": round(self.hold_best_s, 2),
@@ -629,7 +623,6 @@ class ReverseCurlTracker:
             "hold_s": round(self.hold_best_s, 2),
             "target_angle_deg": self.up_angle,
             "required_hold_s": self.hold_s,
-            "descent_deg_s": self.descent_deg_s,
             "attempts": len(self.attempts),
             "verdict_by": self.verdict_by,
         }
@@ -825,9 +818,6 @@ def draw_hud(frame, tracker, arm=None, angle=None, arm_pts=None):
         line("Elbow: not tracked", C_BAD)
     line(f"Hold: {tracker.hold_elapsed:.1f} / {tracker.hold_s:.0f} s"
          f"   (best {tracker.hold_best_s:.1f} s)")
-    if tracker.descent_deg_s is not None:
-        # Information only — see the module docstring.
-        line(f"Descent: {tracker.descent_deg_s:.0f} deg/s (coach judges)", C_WARN, 0.52, 22)
 
     if tracker.status_msg:
         msg = _hud_text(tracker.status_msg)
@@ -992,8 +982,6 @@ def main():
     print(f"  Arm          : {selector.arm or '--'}")
     print(f"  Best flexion : {res['peak_angle_deg']} deg (target <= {res['target_angle_deg']:.0f})")
     print(f"  Longest hold : {res['hold_s']} s (required {res['required_hold_s']:.0f})")
-    if res["descent_deg_s"] is not None:
-        print(f"  Descent      : {res['descent_deg_s']} deg/s  (coach judges control)")
     print(f"  Attempts     : {res['attempts']}")
 
 

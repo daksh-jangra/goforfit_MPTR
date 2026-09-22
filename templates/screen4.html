@@ -498,11 +498,6 @@
                       lines.push(`Best flexion: ${state.peak_angle_deg}\u00b0` +
                                  (state.attempts ? `  \u2014 ${state.attempts} attempt(s)` : ''));
                   }
-                  if (state.descent_deg_s !== null && state.descent_deg_s !== undefined) {
-                      // The manual gives "slower than gravitational pull" to the
-                      // tester, so this is shown but never scored.
-                      lines.push(`Descent: ${state.descent_deg_s}\u00b0/s \u2014 coach judges control`);
-                  }
                   if (state.resolved) {
                       lines.push(`RESULT: ${state.passed ? 'PASS' : 'FAIL'}`);
                   }
