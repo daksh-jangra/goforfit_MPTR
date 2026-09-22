@@ -2057,9 +2057,6 @@ class ReverseCurlEngine(BaseWebEngine):
             "required_hold_s": tr.hold_s,
             "hold_pct": int(round(tr.hold_progress() * 100)),
             "peak_angle_deg": tr.best_peak_deg,
-            # Shown on screen4 as information only — the manual gives the
-            # "slower than gravity" judgement to the tester, not the app.
-            "descent_deg_s": tr.descent_deg_s,
             "attempts": len(tr.attempts),
             "resolved": tr.resolved,
             "passed": bool(tr.passed) if tr.resolved else None,
