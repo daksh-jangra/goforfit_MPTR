@@ -97,26 +97,45 @@ def test_no_baseline_while_the_elbow_is_already_bent():
     assert tr.baseline_deg is None, f"baseline {tr.baseline_deg} taken from a bent arm"
 
 
-def test_lift_short_of_the_target_does_not_pass():
+def test_real_attempt_short_of_the_target_fails_by_itself():
+    # 95 -> 58 deg is a clear lift (37 deg of bend) that never reaches 45.
     tr = rc.ReverseCurlTracker()
-    feed(tr, [(1.0, REST), (0.3, 75.0), (2.5, 58.0), (0.5, REST)], 20)
+    _, emitted = feed(tr, [(1.0, REST), (0.3, 75.0), (2.5, 58.0), (0.5, REST)], 20)
+    assert tr.state is rc.State.FAILED, f"state {tr.state}, want FAILED"
     assert not tr.passed, "58 deg counted as reaching 45"
-    assert len(tr.attempts) == 1 and tr.attempts[0]["outcome"] == "short"
-    assert tr.state is rc.State.SET, f"did not re-arm, state {tr.state}"
+    assert tr.verdict_by == "auto", tr.verdict_by
+    assert len(emitted) == 1 and emitted[0][1]["passed"] is False, emitted
 
 
-def test_hold_shorter_than_two_seconds_does_not_pass():
+def test_hold_shorter_than_two_seconds_fails_by_itself():
     tr = rc.ReverseCurlTracker()
     feed(tr, [(1.0, REST), (0.3, 70.0), (1.2, UP), (0.4, 70.0), (0.6, REST)], 20)
-    assert not tr.passed, "a 1.2 s hold passed a 2 s requirement"
+    assert tr.state is rc.State.FAILED, f"a 1.2 s hold ended in {tr.state}"
     assert 1.0 < tr.hold_best_s < 1.45, f"hold measured {tr.hold_best_s}"
 
 
-def test_below_rest_is_not_the_same_as_reaching_the_target():
-    # 70 deg is well below the 95 deg rest angle but nowhere near 45.
+def test_small_movement_is_ignored_not_failed():
+    # 95 -> 70 deg is only 25 deg of bend: shifting in the chair, not a try.
     tr = rc.ReverseCurlTracker()
     feed(tr, [(1.0, REST), (3.0, 70.0), (0.6, REST)], 20)
-    assert not tr.passed, "movement alone counted as a curl"
+    assert tr.state is rc.State.SET, f"a fidget ended the trial: {tr.state}"
+    assert not tr.passed and not tr.attempts, "a fidget was recorded as an attempt"
+
+
+def test_fidget_then_a_correct_curl_still_passes():
+    tr = rc.ReverseCurlTracker()
+    t, _ = feed(tr, [(1.0, REST), (0.5, 72.0), (0.6, REST)], 20)
+    feed(tr, good_curl()[1:], 20, t0=t)
+    assert tr.state is rc.State.PASSED, f"the fidget spoiled the trial: {tr.state}"
+
+
+def test_reaching_the_target_is_always_a_real_try():
+    # Someone resting at 72 deg has only 27 deg to give before 45, less than
+    # ATTEMPT_MIN_DEG — but reaching 44 is plainly an attempt, and a short
+    # hold there must FAIL rather than be waved off as a fidget.
+    tr = rc.ReverseCurlTracker()
+    feed(tr, [(1.0, 72.0), (0.3, 55.0), (1.0, 44.0), (0.3, 60.0), (0.6, 72.0)], 20)
+    assert tr.state is rc.State.FAILED, f"state {tr.state}, want FAILED"
 
 
 def test_no_pass_without_returning_the_weight_to_the_thigh():
@@ -175,18 +194,28 @@ def test_one_frame_above_the_target_keeps_the_hold():
     assert tr.state is rc.State.HOLD, f"a 48 deg blip reset the hold: {tr.state}"
 
 
-# ── coach overrides and reset ────────────────────────────────────────────────
-def test_coach_can_call_pass_and_fail():
+# ── one trial, decided by the camera ─────────────────────────────────────────
+def test_verdict_is_final_one_trial_only():
+    # A FAIL is not undone by a good curl afterwards...
     tr = rc.ReverseCurlTracker()
-    feed(tr, [(1.0, REST), (0.3, 70.0), (0.5, UP)], 20)
-    res = tr.mark_pass()
-    assert tr.state is rc.State.PASSED and res["passed"]
-    assert res["verdict_by"] == "coach", res
-
+    t, _ = feed(tr, [(1.0, REST), (0.3, 75.0), (2.5, 58.0), (0.5, REST)], 20)
+    _, emitted = feed(tr, good_curl()[1:], 20, t0=t)
+    assert tr.state is rc.State.FAILED and not emitted, "a second try changed a FAIL"
+    # ...and a PASS is not undone by anything that follows.
     tr2 = rc.ReverseCurlTracker()
-    feed(tr2, [(1.0, REST)], 20)
-    res2 = tr2.mark_fail()
-    assert tr2.state is rc.State.FAILED and not res2["passed"]
+    t, _ = feed(tr2, good_curl(), 20)
+    _, emitted = feed(tr2, [(0.3, 75.0), (2.5, 58.0), (0.5, REST)], 20, t0=t)
+    assert tr2.state is rc.State.PASSED and not emitted, "later movement changed a PASS"
+
+
+def test_no_manual_verdicts():
+    # Owner decision: when the camera decides pass/fail, nobody overrides it.
+    tr = rc.ReverseCurlTracker()
+    assert not hasattr(tr, "mark_pass") and not hasattr(tr, "mark_fail"), \
+        "manual PASS/FAIL came back"
+
+
+# ── reset ────────────────────────────────────────────────────────────────────
 
 
 def test_reset_clears_everything():

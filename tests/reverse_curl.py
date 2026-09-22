@@ -45,6 +45,21 @@ What the app scores vs. what the coach judges
       mode for something the coach is already watching from arm's length.
     * forearm pronation, fingers wrapped around the weight, seated posture.
 
+The camera decides — nobody presses PASS or FAIL
+--------------------------------------------------------------------
+  ONE trial, as the manual says, and the verdict is automatic:
+
+    PASS  a complete correct curl (target, 2 s hold, back to the thigh)
+    FAIL  a REAL attempt that falls short: the weight clearly left the thigh
+          (the elbow bent at least ATTEMPT_MIN_DEG below its rest angle) and
+          came back down without reaching the target or holding 2 s
+
+  A smaller movement — shifting in the chair, adjusting the grip — is not an
+  attempt and is ignored, so a fidget can never fail a student. Stopping the
+  test before any real attempt leaves it NOT COMPLETED, which is not a fail:
+  a camera or setup problem must never be recorded against the participant.
+  The manual permits practice curls, so they happen BEFORE the test starts.
+
 Which arm
 --------------------------------------------------------------------
   The manual says "preferred arm", which the participant chooses. ARM_AUTO
@@ -60,10 +75,7 @@ Usage
   python reverse_curl.py --up-angle 50    # loosen the 45 deg target
   python reverse_curl.py --debug
 
-  Keys : SPACE = mark the current attempt as a PASS (the coach saw a good
-                 curl the detector missed)
-         F     = mark the trial FAILED
-         R     = reset the whole test
+  Keys : R     = reset the whole test
          Q     = quit and print the summary
 
 Camera placement
@@ -112,7 +124,12 @@ REST_MIN_DEG    = 70.0   # elbow must be at least this open to count as "at rest
 REST_BAND_DEG   = 8.0    # spread allowed inside the settle window
 REST_SETTLE_S   = 0.5    # how long it must sit still before the baseline is taken
 
-MOVE_DELTA_DEG  = 12.0   # flexion below the baseline that starts an attempt
+MOVE_DELTA_DEG  = 12.0   # flexion below the baseline that starts WATCHING a lift
+ATTEMPT_MIN_DEG = 30.0   # flexion below the baseline that makes it a real try.
+                         # A lift that came back down short of this was a
+                         # fidget and is ignored; one that got this far and
+                         # still fell short is the trial, and it FAILS. From a
+                         # ~95 deg rest this is ~65 deg, a third of the way up.
 RETURN_TOL_DEG  = 15.0   # back within this of the baseline = weight on the thigh
 HOLD_RELEASE_DEG = 6.0   # angle may drift this far above UP_ANGLE without
                          # breaking the hold — one jittery frame at 46 deg must
@@ -162,7 +179,7 @@ class State(Enum):
     HOLD    = auto()   # at or past UP_ANGLE_DEG, the 2 s timer is running
     LOWERING = auto()  # hold satisfied, waiting for the weight to reach the thigh
     PASSED  = auto()   # a complete correct reverse curl
-    FAILED  = auto()   # the coach called it (the app never fails it on its own)
+    FAILED  = auto()   # a real attempt fell short — the one trial is used
 
 
 # ── small helpers ────────────────────────────────────────────────────────────────
@@ -222,10 +239,10 @@ class ReverseCurlTracker:
         2. it stays there for HOLD_S seconds
         3. the weight comes back down to the thigh
 
-    The app never fails a trial by itself — an attempt that stops short just
-    returns to SET so the participant can try again, and the coach presses F
-    (or the FAIL button) when they decide the trial is over. That keeps the
-    single-trial rule a human decision instead of a timeout nobody tuned.
+    One trial, decided by the camera. A real attempt that falls short FAILS
+    it; a movement too small to be an attempt (see ATTEMPT_MIN_DEG) is
+    ignored and the participant simply stays ready. Once PASSED or FAILED
+    the verdict is final until reset() — later movement changes nothing.
 
     Everything is driven through update(), so the whole state machine can be
     exercised with synthetic angle sequences — no camera required.
@@ -255,7 +272,7 @@ class ReverseCurlTracker:
         self.attempts = []            # one dict per completed attempt
         self.descent_deg_s = None     # measured on the way down, never scored
         self.passed = False
-        self.verdict_by = None        # "auto" | "coach"
+        self.verdict_by = None        # "auto" once decided — no manual verdicts
         self.status_msg = "Rest the weight on the thigh and hold still"
         self._settle = deque()        # (t, angle) while finding the baseline
         self._hold_start = None
@@ -305,8 +322,8 @@ class ReverseCurlTracker:
                 self.hold_elapsed = 0.0
                 self.status_msg = f"Hold for {self.hold_s:.0f} s"
             elif angle >= self.baseline_deg - self.return_tol:
-                self._end_attempt(f"Came back down at {self.peak_deg:.0f} deg "
-                                  f"— target is {self.up_angle:.0f} deg")
+                return self._end_attempt(f"Came back down at {self.peak_deg:.0f} deg "
+                                         f"— target is {self.up_angle:.0f} deg")
             return None
 
         if self.state == State.HOLD:
@@ -317,8 +334,8 @@ class ReverseCurlTracker:
                 self._hold_start = None
                 self.hold_elapsed = 0.0
                 if angle >= self.baseline_deg - self.return_tol:
-                    self._end_attempt(f"Held {self.hold_best_s:.1f} s of "
-                                      f"{self.hold_s:.0f} s before lowering")
+                    return self._end_attempt(f"Held {self.hold_best_s:.1f} s of "
+                                             f"{self.hold_s:.0f} s before lowering")
                 else:
                     self.state = State.LIFTING
                     self.status_msg = "Lost the hold — back to the target"
@@ -334,7 +351,7 @@ class ReverseCurlTracker:
 
         if self.state == State.LOWERING:
             if angle >= self.baseline_deg - self.return_tol:
-                return self._pass(now, angle, by="auto")
+                return self._pass(now, angle)
             return None
 
         return None
@@ -393,20 +410,38 @@ class ReverseCurlTracker:
             self.hold_best_s = max(self.hold_best_s, when - self._hold_start)
 
     def _end_attempt(self, msg):
-        """An attempt stopped short. Record it and re-arm for another."""
+        """The weight came back to the thigh without a correct curl. If the
+        lift was big enough to be a real try, that was the one trial and it
+        FAILS — returns the result. Otherwise it was a fidget: forget it and
+        stay ready — returns None."""
+        # Reaching the target zone is always a real try, even for someone who
+        # rests at a low angle and so has less than ATTEMPT_MIN_DEG to give.
+        real_try = (self.peak_deg is not None
+                    and (self.peak_deg <= self.baseline_deg - ATTEMPT_MIN_DEG
+                         or self.peak_deg <= self.up_angle))
+        if not real_try:
+            self.peak_deg = None
+            self._hold_start = None
+            self.hold_elapsed = 0.0
+            self.hold_best_s = 0.0
+            self.state = State.SET
+            self.status_msg = f"Ready — lift to {self.up_angle:.0f} deg"
+            return None
         self.attempts.append({
-            "peak_angle_deg": round(self.peak_deg, 1) if self.peak_deg is not None else None,
+            "peak_angle_deg": round(self.peak_deg, 1),
             "hold_s": round(self.hold_best_s, 2),
-            "reached_target": bool(self.peak_deg is not None and self.peak_deg <= self.up_angle),
-            "outcome": "short",
+            "reached_target": bool(self.peak_deg <= self.up_angle),
+            "outcome": "fail",
         })
-        self.peak_deg = None
         self._hold_start = None
         self.hold_elapsed = 0.0
-        self.state = State.SET
-        self.status_msg = msg
+        self.passed = False
+        self.verdict_by = "auto"
+        self.state = State.FAILED
+        self.status_msg = f"FAIL — {msg}"
+        return self.result()
 
-    def _pass(self, now, angle, by="auto"):
+    def _pass(self, now, angle):
         if self._lower_start is not None and now > self._lower_start and self.peak_deg is not None:
             # Information only — the manual gives "slower than gravitational
             # pull" to the tester, so this number is shown, never enforced.
@@ -418,38 +453,9 @@ class ReverseCurlTracker:
             "outcome": "pass",
         })
         self.passed = True
-        self.verdict_by = by
+        self.verdict_by = "auto"
         self.state = State.PASSED
         self.status_msg = "PASS — correct reverse curl"
-        return self.result()
-
-    # ── coach overrides ──────────────────────────────────────────────────
-    def mark_pass(self):
-        """The coach saw a correct curl the detector didn't resolve."""
-        if self.state == State.PASSED:
-            return None
-        self._note_hold(self._now if self._now is not None else time.time())
-        self.attempts.append({
-            "peak_angle_deg": round(self.peak_deg, 1) if self.peak_deg is not None else None,
-            "hold_s": round(self.hold_best_s, 2),
-            "reached_target": bool(self.peak_deg is not None and self.peak_deg <= self.up_angle),
-            "outcome": "pass",
-        })
-        self.passed = True
-        self.verdict_by = "coach"
-        self.state = State.PASSED
-        self.status_msg = "PASS — called by the coach"
-        return self.result()
-
-    def mark_fail(self):
-        """The coach ends the single trial without a correct curl."""
-        if self.state == State.FAILED:
-            return None
-        self._note_hold(self._now if self._now is not None else time.time())
-        self.passed = False
-        self.verdict_by = "coach"
-        self.state = State.FAILED
-        self.status_msg = "FAIL — called by the coach"
         return self.result()
 
     # ── read-only views ──────────────────────────────────────────────────
@@ -562,6 +568,14 @@ def draw_panel(img, x1, y1, x2, y2, colour=C_DARK, alpha=0.65):
     cv2.addWeighted(ov, alpha, img, 1 - alpha, 0, img)
 
 
+def _hud_text(txt):
+    """cv2.putText only draws ASCII: anything else is rendered as "???".
+    Status messages keep their proper punctuation for screen4's HTML status
+    line and are flattened here, at the one place that draws them."""
+    txt = txt.replace("\u2014", "-").replace("\u2013", "-").replace("\u00b0", " deg")
+    return txt.encode("ascii", "replace").decode("ascii")
+
+
 def draw_hud(frame, tracker, arm=None, angle=None, arm_pts=None):
     """Draw the live state onto the frame. Called with the engine's lock held,
     so it only reads the tracker."""
@@ -615,8 +629,9 @@ def draw_hud(frame, tracker, arm=None, angle=None, arm_pts=None):
         line(f"Descent: {tracker.descent_deg_s:.0f} deg/s (coach judges)", C_WARN, 0.52, 22)
 
     if tracker.status_msg:
-        draw_panel(frame, 12, h - 54, min(w - 12, 12 + 13 * len(tracker.status_msg) + 24), h - 12)
-        cv2.putText(frame, tracker.status_msg, (24, h - 26),
+        msg = _hud_text(tracker.status_msg)
+        draw_panel(frame, 12, h - 54, min(w - 12, 12 + 13 * len(msg) + 24), h - 12)
+        cv2.putText(frame, msg, (24, h - 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.58, C_TEXT, 2, cv2.LINE_AA)
 
     if tracker.resolved:
@@ -684,7 +699,7 @@ def main():
           f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
     print(f"[INFO] Seated, weight on the mid-thigh. Lift to <= {args.up_angle:.0f} deg, "
           f"hold {args.hold_s:.0f} s, lower to the thigh.")
-    print("[INFO] SPACE = call it a PASS  |  F = call it a FAIL  |  R = reset  |  Q = quit\n")
+    print("[INFO] The camera decides PASS / FAIL.  R = reset  |  Q = quit\n")
 
     tracker = ReverseCurlTracker(up_angle=args.up_angle, hold_s=args.hold_s)
     selector = ArmSelector(forced=args.arm)
@@ -762,16 +777,6 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            elif key == ord(" "):
-                outcome = tracker.mark_pass()
-                if outcome is not None and not staged and args.session_id:
-                    _stage_reverse_curl(args.session_id, outcome, arm)
-                    staged = True
-            elif key == ord("f"):
-                outcome = tracker.mark_fail()
-                if outcome is not None and not staged and args.session_id:
-                    _stage_reverse_curl(args.session_id, outcome, arm)
-                    staged = True
             elif key == ord("r"):
                 tracker.reset()
                 selector.reset()
@@ -783,7 +788,8 @@ def main():
 
     res = tracker.result()
     print("\n── Reverse Curl ─────────────────────────────")
-    print(f"  Result       : {'PASS' if res['passed'] else 'FAIL / not completed'}")
+    verdict = ("PASS" if res["passed"] else "FAIL") if tracker.resolved else "NOT COMPLETED"
+    print(f"  Result       : {verdict}")
     print(f"  Arm          : {selector.arm or '--'}")
     print(f"  Best flexion : {res['peak_angle_deg']} deg (target <= {res['target_angle_deg']:.0f})")
     print(f"  Longest hold : {res['hold_s']} s (required {res['required_hold_s']:.0f})")
