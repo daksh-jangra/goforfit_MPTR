@@ -177,6 +177,19 @@
                 </select>
                 <p id="override-msg" class="text-xs text-amber-700 mt-1.5 text-center hidden"></p>
             </div>
+            {% elif test.id == 'shoulder_stretch' %}
+            <!-- One trial, pass/fail (Brockport fig. 5.27). The camera decides
+                 this test, so the verdict is shown read-only: the coach can
+                 confirm and save it but not change it. -->
+            <div class="max-w-md mx-auto w-full">
+                <select id="override-input" disabled
+                        class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-gray-100 cursor-not-allowed">
+                    <option value="">Select result</option>
+                    <option value="1">Pass</option>
+                    <option value="0">Fail</option>
+                </select>
+                <p id="override-msg" class="text-xs text-amber-700 mt-1.5 text-center hidden"></p>
+            </div>
             {% else %}
             <div class="max-w-md mx-auto w-full">
                 <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
@@ -385,6 +398,7 @@
             sit_reach:   'reach_cm',
             trunk_lift:  'lift_cm',
             reverse_curl: 'passed',
+            shoulder_stretch: 'passed',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
             vertical_jump: 'jump_cm',
@@ -400,6 +414,7 @@
             sit_reach:   'cm',
             trunk_lift:  'cm',
             reverse_curl: '',
+            shoulder_stretch: '',
             bmi:         'cm',
             wingspan:    'cm',
             vertical_jump: 'cm',
@@ -410,7 +425,7 @@
         // control is a Pass/Fail select and Fail is stored as 0 — so the
         // "must be a positive number" guards used for every measured test
         // would make a Fail impossible to save. These branches skip them.
-        const PASS_FAIL_TESTS = new Set(['reverse_curl']);
+        const PASS_FAIL_TESTS = new Set(['reverse_curl', 'shoulder_stretch']);
         const IS_PASS_FAIL = PASS_FAIL_TESTS.has(testId);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
 
@@ -486,6 +501,12 @@
                     extra.push(`best flexion ${pendingResult.peak_angle_deg}\u00b0`);
                 if (pendingResult.hold_s !== undefined && pendingResult.hold_s !== null)
                     extra.push(`held ${pendingResult.hold_s}s`);
+                // Shoulder stretch stages `side` (the arm reaching over the
+                // shoulder) and `best_gap_ratio` (closest fingertip gap, as a
+                // multiple of palm length) instead of arm/flexion/hold.
+                if (pendingResult.side) extra.push(`${pendingResult.side} arm`);
+                if (pendingResult.best_gap_ratio !== undefined && pendingResult.best_gap_ratio !== null)
+                    extra.push(`closest gap ${pendingResult.best_gap_ratio} palm`);
                 const detail = extra.length ? ` (${extra.join(', ')})` : '';
                 document.getElementById('pending-summary').innerHTML =
                     (passed !== undefined && passed !== null)
@@ -573,7 +594,9 @@
                 const input = document.getElementById('override-input');
                 if (IS_PASS_FAIL) {
                     if (input.value !== '0' && input.value !== '1') {
-                        showSaveMessage('Choose Pass or Fail before saving.', false);
+                        showSaveMessage(input.disabled
+                            ? 'No result yet — run the test first; the camera decides it.'
+                            : 'Choose Pass or Fail before saving.', false);
                         return;
                     }
                     if (!pendingResult) {
