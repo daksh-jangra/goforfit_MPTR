@@ -510,12 +510,11 @@
                   return lines;
               },
               syncFields(state) {
-                  // Only sync a decided trial — an in-progress one is not a
-                  // verdict, and screen3 would show it as a staged Fail.
+                  // Only a decided trial is synced. Exactly the BMI/Wingspan
+                  // payload shape and nothing extra — those are the only tests
+                  // confirmed to land on the dashboard. 1 = pass, 0 = fail.
                   return state.resolved
-                      ? { reverseCurlScore: state.passed ? 1 : 0,
-                          reverseCurlResult: state.passed ? 'Pass' : 'Fail',
-                          arm: state.arm }
+                      ? { reverseCurlScore: state.passed ? 1 : 0 }
                       : null;
               },
           },
