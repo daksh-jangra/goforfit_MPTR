@@ -1049,13 +1049,18 @@ class PullUpEngine(BaseWebEngine):
                 if newly_stopped:
                     self._safe_stage(count, round(elapsed, 1))
 
-                # The modified pull-up's HUD reports whether they're hanging on
-                # the bar yet; the full pull-up's doesn't take that argument, and
-                # its counter keeps the flag private, so this stays empty there.
+                # Each HUD takes one extra argument the other's doesn't: the
+                # modified pull-up reports whether they're hanging on the bar
+                # yet, the full pull-up how far the shoulders are above the
+                # elbows. Each counter only carries its own, so the other stays
+                # absent rather than being passed an argument it can't take.
                 extra = {}
                 hung = getattr(self.counter, "hung", None)
                 if hung is not None:
                     extra["hung"] = hung
+                lift = getattr(self.counter, "lift", None)
+                if lift is not None:
+                    extra["lift"] = lift
                 self._hud.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
                                   body_visible, test_started, stopped=stopped,
                                   browser_mode=True, **extra)
@@ -1075,8 +1080,8 @@ import pullup_full as pullup_full_mod  # noqa: E402
 class FullPullUpEngine(PullUpEngine):
     """Live (full-hang) pull-up counter. Same browser-camera plumbing, START /
     RESET flow and staging as the modified pull-up; only the scoring differs:
-    reps run full hang -> chin over bar -> full hang, and the test ends by
-    itself when the participant drops off the bar (pullup_full raises
+    reps run full hang -> shoulders above the elbows -> full hang, and the test
+    ends by itself when the participant drops off the bar (pullup_full raises
     `stopped`). Rep scoring and HUD are reused from pullup_full.py."""
 
     _hud = pullup_full_mod
@@ -1086,10 +1091,10 @@ class FullPullUpEngine(PullUpEngine):
         self.counter = pullup_full_mod.FullPullUpCounter()
 
     def _score_pose(self, lms, w, h, test_started):
-        visible, angle, chin, bar, shoulder = pullup_full_mod.pose_sample(lms, w, h)
+        visible, sample = pullup_full_mod.pose_sample(lms, w, h)
         if visible:
             with self._lock:
-                self.counter.update(angle, chin, bar, shoulder, counting=test_started)
+                self.counter.update(sample, counting=test_started)
         return visible
 
 
