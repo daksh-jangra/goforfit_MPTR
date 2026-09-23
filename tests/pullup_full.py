@@ -86,7 +86,8 @@ LIFT_BUFFER_LEN     = 3      # shoulder-above-elbow height
 # One frame's worth of pose, as the counter wants it. Every height is 0..1 of
 # the frame height, bigger = lower on screen; `arm` is the upper arm's length
 # in those same units, which is what makes the on-bar margin scale with the
-# person and the camera distance.
+# person and the camera distance. `chin` is None when the face isn't visible —
+# it is shown to the coach, not scored, so a frame without it still counts.
 Sample = namedtuple("Sample", "angle chin bar shoulder elbow arm")
 
 
@@ -114,8 +115,9 @@ class FullPullUpCounter:
         self.count = 0
         self.phase = "start"
         self.angle = 0.0
-        self.gap = 0.0           # how far the chin still is below the bar (+ = below);
-                                 # shown to the coach, scores nothing
+        self.gap = None          # how far the chin still is below the bar (+ = below),
+                                 # None when the face isn't visible; shown to the
+                                 # coach, scores nothing
         self.lift = 0.0          # how far the shoulders are above the elbows (+ = above)
         self.reached = False     # shoulders cleared the elbows in the rep in progress
         self.stopped = False     # ended by dropping off the bar
@@ -144,8 +146,14 @@ class FullPullUpCounter:
 
         self.angle_buf.append(s.angle)
         self.angle = float(np.median(self.angle_buf))
-        self.chin_buf.append(s.chin)
-        self.gap = float(np.median(self.chin_buf)) - s.bar
+        if s.chin is None:
+            # Face out of view: nothing to report, and stale frames would
+            # report a gap from wherever the head was last seen.
+            self.chin_buf.clear()
+            self.gap = None
+        else:
+            self.chin_buf.append(s.chin)
+            self.gap = float(np.median(self.chin_buf)) - s.bar
         # Positive once the shoulders are higher on screen than the elbows.
         # Medianed like the rest: a rep is awarded off this number, so one
         # glitched landmark frame must not be able to hand out a rep.
@@ -251,7 +259,7 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
         # Chin-to-bar is shown for the coach only — the rep is scored on the
         # shoulders clearing the elbows.
         chin_note = (f"  |  chin {abs(gap)*100:.1f}% {'below' if gap > 0 else 'above'} bar"
-                     if gap else "")
+                     if gap else "")   # gap is None when the face isn't visible
         cv2.putText(frame, f"Elbow Angle: {angle:.1f} deg{chin_note}", (20,h-48),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_WHITE, 1, cv2.LINE_AA)
         if reached:
@@ -263,7 +271,7 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
         cv2.putText(frame, f"{lift_txt}  {arrow}".strip(),
                     (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, cc, 2, cv2.LINE_AA)
     else:
-        cv2.putText(frame, "Head, arms and bar must all be in frame",
+        cv2.putText(frame, "One whole arm and the bar must be in frame",
                     (20,h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, C_YELLOW, 2, cv2.LINE_AA)
 
     # Ended by dropping off the bar
@@ -297,19 +305,26 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
 
 
 def pose_sample(lms, w, h):
-    """(visible, Sample) for one pose, or (False, None) when the face or the
-    near arm isn't clear enough to score. Angles and lengths are taken in
-    pixels — normalised coords would skew them on a non-square frame — and the
-    arm length is converted back to frame-height units, which is what the
-    Sample's heights are in."""
+    """(visible, Sample) for one pose, or (False, None) when the near arm isn't
+    clear enough to score. Angles and lengths are taken in pixels — normalised
+    coords would skew them on a non-square frame — and the arm length is
+    converted back to frame-height units, which is what the Sample's heights
+    are in.
+
+    The face is NOT required. A rep is the shoulders clearing the elbows, so
+    shoulder, elbow and wrist are the whole of it; demanding the face as well
+    would stall the count whenever the head turns away, hair falls across it,
+    or the chin tucks at the top. It only decides whether the chin reading can
+    be shown."""
     (s_i, e_i, wr_i), near_vis = near_arm(lms)
-    face_ok = all(lms[IDX[k]].visibility > 0.5 for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
-    if not (near_vis > 0.5 and face_ok):
+    if near_vis <= 0.5:
         return False, None
+    face_ok = all(lms[IDX[k]].visibility > 0.5 for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
     shoulder_px, elbow_px = lm_px(lms, s_i, w, h), lm_px(lms, e_i, w, h)
     angle = calc_angle(shoulder_px, elbow_px, lm_px(lms, wr_i, w, h))
     arm = float(np.linalg.norm(shoulder_px - elbow_px)) / h
-    return True, Sample(angle=angle, chin=chin_y(lms), bar=bar_y(lms, wr_i),
+    return True, Sample(angle=angle, chin=chin_y(lms) if face_ok else None,
+                        bar=bar_y(lms, wr_i),
                         shoulder=lms[s_i].y, elbow=lms[e_i].y, arm=arm)
 
 
@@ -422,7 +437,8 @@ def run(source):
                         "rep"         : counter.count,
                         "elbow_deg"   : round(counter.angle, 2),
                         "lift_pct"    : round(counter.lift * 100, 2),
-                        "chin_gap_pct": round(counter.gap * 100, 2),
+                        "chin_gap_pct": (round(counter.gap * 100, 2)
+                                         if counter.gap is not None else None),
                         "timestamp_s" : round(elapsed, 3),
                     })
                 if counter.stopped and not announced:
