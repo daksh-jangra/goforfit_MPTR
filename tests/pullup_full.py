@@ -7,15 +7,19 @@ is above the bar, then lowers back to the full-hang starting position,
 repeating as many times as possible. The body must not swing, the knees must
 not bend and the legs must not kick. Score = number of correct pull-ups.
 
-A rep is scored on THE SHOULDERS RISING ABOVE THE ELBOWS, then the arms
-straightening again. That is the same event the protocol describes, read off
-the two landmarks that are easiest to see: in the manual's own up-position
-photo (figure 5.15b) the shoulders sit 0.23 of the frame height above the
-elbows, and in the down-position photo (5.15a) they are 0.14-0.19 below, so
-the two positions are far apart and hard to confuse. Chin height has to be
-estimated from the face — there is no chin landmark — and a head tipped back
-at the top moves that estimate, so the chin-to-bar gap is shown to the coach
-but decides nothing.
+A rep needs BOTH the chin above the bar and THE SHOULDERS ABOVE THE ELBOWS,
+then the arms straightening again. The chin is the protocol's own criterion.
+The shoulders-over-elbows check is the second opinion: the chin has to be
+estimated from the face (there is no chin landmark) and a head tipped back at
+the top moves that estimate, whereas shoulder and elbow are real landmarks
+sitting far apart — measured over a demonstration video's six pulls the chin
+cleared the bar by 0.031-0.069 of the frame height while the shoulders cleared
+the elbows by 0.049-0.121, so the elbow check has the wider margin and a
+drifting chin estimate cannot award a rep on its own.
+
+Shoulders above the HANDS was measured and rejected as the strict rule: it
+fails three of those six pulls by a trained adult, and in the manual's own
+up-position photo (figure 5.15b) the shoulders sit 0.009 below the hands.
 
 The manual doesn't say how the test ends. Here it ends when the participant
 lets go of the bar (auto-detected), or when the coach taps STOP.
@@ -52,9 +56,9 @@ from pullup import (
 # ──────────────────────────────────────────────
 # CONFIGURATION
 # ──────────────────────────────────────────────
-# A rep is a full-hang -> shoulders-above-elbows -> full-hang cycle. Unlike
-# the modified pull-up (where the arm never re-straightens between reps), this
-# protocol explicitly returns to a straight-arm hang.
+# A rep is a full-hang -> chin-over-bar-and-shoulders-over-elbows -> full-hang
+# cycle. Unlike the modified pull-up (where the arm never re-straightens
+# between reps), this protocol explicitly returns to a straight-arm hang.
 # 140 rather than a textbook "straight" 170: the manual's own down-position
 # photo measures 142 deg on one arm and 152 on the other, so a stricter number
 # would reject the hang the protocol itself illustrates.
@@ -76,6 +80,20 @@ DROP_SEC            = 0.5
 # anything happened to the participant. Same limit as the modified pull-up.
 SAMPLE_GAP_SEC      = 0.5
 
+# Which way the participant faces, from the shoulders: MediaPipe numbers them
+# by the PERSON's left and right, so facing the camera puts their left shoulder
+# on the image's right (positive) and facing away swaps them (negative). The
+# face landmarks are no help — MediaPipe reports a nose and a mouth with full
+# confidence for the back of a head, and the chin estimate built on them looks
+# just as confident, which is exactly the silent failure this catches.
+# Measured over a demonstration video: -0.23 to -0.32 filmed from behind and
+# +0.23 to +0.30 face-on, while a side-on close-up sat near -0.09 and dipped to
+# -0.13. Side views must not trip it — side-on is the clearest angle for
+# judging chin against bar — so the threshold sits below that dip, and the
+# median runs over half a second so a brief swing can't raise it either.
+BACK_VIEW_X         = -0.18
+FACING_BUFFER_LEN   = 15     # ~0.5 s: the warning shouldn't flicker
+
 # 3-frame medians — see pullup.py: survives landmark jitter while a brisk rep
 # still reaches the angle threshold at ~10 fps.
 ANGLE_BUFFER_LEN    = 3
@@ -86,9 +104,9 @@ LIFT_BUFFER_LEN     = 3      # shoulder-above-elbow height
 # One frame's worth of pose, as the counter wants it. Every height is 0..1 of
 # the frame height, bigger = lower on screen; `arm` is the upper arm's length
 # in those same units, which is what makes the on-bar margin scale with the
-# person and the camera distance. `chin` is None when the face isn't visible —
-# it is shown to the coach, not scored, so a frame without it still counts.
-Sample = namedtuple("Sample", "angle chin bar shoulder elbow arm")
+# person and the camera distance. `chin` is None when the face isn't visible.
+# `facing` is negative when the camera is behind the participant.
+Sample = namedtuple("Sample", "angle chin bar shoulder elbow arm facing")
 
 
 # ──────────────────────────────────────────────
@@ -100,10 +118,10 @@ class FullPullUpCounter:
     and the browser engine so both score a rep identically.
 
     Phases: "start" (waiting for the first straight-arm hang) -> "extended"
-    (hanging, pull up) -> "up" (shoulders above the elbows, lower to a full
-    hang) -> ... Starting in "start" rather than "extended" means a
-    participant who jumps up to the bar already pulled up doesn't get a free
-    rep — every rep begins from a full hang.
+    (hanging, pull up) -> "up" (chin over the bar AND shoulders over the
+    elbows, lower to a full hang) -> ... Starting in "start" rather than
+    "extended" means a participant who jumps up to the bar already pulled up
+    doesn't get a free rep — every rep begins from a full hang.
 
     `stopped` goes True once the participant drops off the bar.
     """
@@ -119,11 +137,14 @@ class FullPullUpCounter:
                                  # None when the face isn't visible; shown to the
                                  # coach, scores nothing
         self.lift = 0.0          # how far the shoulders are above the elbows (+ = above)
-        self.reached = False     # shoulders cleared the elbows in the rep in progress
+        self.chin_ok = False     # chin is over the bar right now
+        self.reached = False     # both conditions met in the rep in progress
         self.stopped = False     # ended by dropping off the bar
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
         self.chin_buf = deque(maxlen=CHIN_BUFFER_LEN)
         self.lift_buf = deque(maxlen=LIFT_BUFFER_LEN)
+        self.facing_buf = deque(maxlen=FACING_BUFFER_LEN)
+        self.back_view = False   # camera is behind the participant
         self._hung = False       # seen hanging since counting began
         self._off_since = None   # when the wrists went below the shoulders
         self._last_seen = None   # when a frame last reached the counter
@@ -148,7 +169,9 @@ class FullPullUpCounter:
         self.angle = float(np.median(self.angle_buf))
         if s.chin is None:
             # Face out of view: nothing to report, and stale frames would
-            # report a gap from wherever the head was last seen.
+            # report a gap from wherever the head was last seen. No rep can be
+            # credited while this lasts — the chin is half the rule — but the
+            # count is kept and the test runs on.
             self.chin_buf.clear()
             self.gap = None
         else:
@@ -159,6 +182,11 @@ class FullPullUpCounter:
         # glitched landmark frame must not be able to hand out a rep.
         self.lift_buf.append(s.elbow - s.shoulder)
         self.lift = float(np.median(self.lift_buf))
+        # Warning only: filmed from behind the chin reading is a guess about a
+        # head we can't see, but blocking the count on a view test that misfires
+        # would cost a real rep, and the coach can just move the phone.
+        self.facing_buf.append(s.facing)
+        self.back_view = float(np.median(self.facing_buf)) < BACK_VIEW_X
 
         if not counting or self.stopped:
             self.reached = False
@@ -213,13 +241,17 @@ class FullPullUpCounter:
             return False
 
         if self.phase == "extended":
-            # The pull counts once the shoulders come up past the elbows.
-            if self.lift > 0:
+            # The pull registers only when BOTH hold on the same frame: the
+            # protocol's chin over the bar, and the shoulders over the elbows
+            # agreeing with it. An unreadable chin is not a pass.
+            self.chin_ok = self.gap is not None and self.gap <= 0
+            if self.chin_ok and self.lift > 0:
                 self.phase = "up"
                 self.reached = True
             return False
 
-        # phase == "up": the rep lands when the arms straighten out again.
+        # phase == "up": both conditions were met, so the rep lands when the
+        # arms straighten out again.
         if self.angle >= ELBOW_EXTEND_ANGLE:
             self.phase = "extended"
             self.reached = False
@@ -233,7 +265,7 @@ class FullPullUpCounter:
 # ──────────────────────────────────────────────
 
 def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_started,
-            stopped=False, browser_mode=False, lift=None):
+            stopped=False, browser_mode=False, lift=None, back_view=False):
     h, w = frame.shape[:2]
 
     # Count
@@ -256,16 +288,19 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
             arrow, pc = "^ PULL UP", C_ORANGE
         else:
             arrow, pc = "v FULL HANG", C_GREEN
-        # Chin-to-bar is shown for the coach only — the rep is scored on the
-        # shoulders clearing the elbows.
-        chin_note = (f"  |  chin {abs(gap)*100:.1f}% {'below' if gap > 0 else 'above'} bar"
-                     if gap else "")   # gap is None when the face isn't visible
+        # Both halves of the rule get a line: which one is missing is the
+        # first thing a coach asks when a rep doesn't count.
+        chin_note = ("  |  chin not visible" if gap is None else
+                     f"  |  chin {abs(gap)*100:.1f}% {'below' if gap > 0 else 'above'} bar")
         cv2.putText(frame, f"Elbow Angle: {angle:.1f} deg{chin_note}", (20,h-48),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_WHITE, 1, cv2.LINE_AA)
         if reached:
-            lift_txt, cc = "SHOULDERS OVER ELBOWS", C_GREEN
+            lift_txt, cc = "CHIN OVER BAR + SHOULDERS OVER ELBOWS", C_GREEN
         elif lift is not None:
-            lift_txt, cc = f"Shoulders {abs(lift)*100:.1f}% below elbows", pc
+            lift_txt = ("Shoulders over elbows - chin still short"
+                        if lift > 0 else
+                        f"Shoulders {abs(lift)*100:.1f}% below elbows")
+            cc = pc
         else:
             lift_txt, cc = "", pc
         cv2.putText(frame, f"{lift_txt}  {arrow}".strip(),
@@ -273,6 +308,13 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
     else:
         cv2.putText(frame, "One whole arm and the bar must be in frame",
                     (20,h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, C_YELLOW, 2, cv2.LINE_AA)
+
+    # Filmed from behind: the chin reading is then a guess about a head the
+    # camera can't see, and nothing else on screen would say so.
+    if back_view and visible and not stopped:
+        draw_panel(frame, 10, h-135, 620, h-85, colour=(0, 60, 120), alpha=0.8)
+        cv2.putText(frame, "CAMERA IS BEHIND - move it to the front or side",
+                    (22, h-102), cv2.FONT_HERSHEY_SIMPLEX, 0.7, C_YELLOW, 2, cv2.LINE_AA)
 
     # Ended by dropping off the bar
     if stopped:
@@ -311,11 +353,15 @@ def pose_sample(lms, w, h):
     converted back to frame-height units, which is what the Sample's heights
     are in.
 
-    The face is NOT required. A rep is the shoulders clearing the elbows, so
-    shoulder, elbow and wrist are the whole of it; demanding the face as well
-    would stall the count whenever the head turns away, hair falls across it,
-    or the chin tucks at the top. It only decides whether the chin reading can
-    be shown."""
+    A frame without a readable face still arrives, carrying chin=None: the arm
+    keeps being tracked and the test runs on, but no rep can be credited while
+    the chin — half the rule — can't be seen.
+
+    Mirroring needs no special handling: a mirror doesn't turn anyone around,
+    and MediaPipe labels the shoulders by the person it infers, so `facing`
+    comes out the same on a flipped frame (measured: -0.226 against -0.225).
+    An earlier version negated it for the browser's selfie camera, which
+    inverted a correct reading."""
     (s_i, e_i, wr_i), near_vis = near_arm(lms)
     if near_vis <= 0.5:
         return False, None
@@ -323,9 +369,11 @@ def pose_sample(lms, w, h):
     shoulder_px, elbow_px = lm_px(lms, s_i, w, h), lm_px(lms, e_i, w, h)
     angle = calc_angle(shoulder_px, elbow_px, lm_px(lms, wr_i, w, h))
     arm = float(np.linalg.norm(shoulder_px - elbow_px)) / h
+    facing = lms[IDX["L_SHOULDER"]].x - lms[IDX["R_SHOULDER"]].x
     return True, Sample(angle=angle, chin=chin_y(lms) if face_ok else None,
                         bar=bar_y(lms, wr_i),
-                        shoulder=lms[s_i].y, elbow=lms[e_i].y, arm=arm)
+                        shoulder=lms[s_i].y, elbow=lms[e_i].y, arm=arm,
+                        facing=facing)
 
 
 # ──────────────────────────────────────────────
@@ -449,7 +497,8 @@ def run(source):
 
         draw_ui(frame, counter.count, counter.phase, counter.angle, elapsed,
                 counter.gap, counter.reached, body_visible, test_started,
-                stopped=counter.stopped, lift=counter.lift)
+                stopped=counter.stopped, lift=counter.lift,
+                back_view=counter.back_view)
         cv2.imshow(WIN, frame)
 
         key = cv2.waitKey(1) & 0xFF

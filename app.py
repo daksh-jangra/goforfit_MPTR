@@ -279,12 +279,11 @@ TESTS = {
         "description": (
             "Counts pull-ups from a straight-arm hang. The participant hangs from the "
             "bar with an overhand grip, pulls up until the chin is above the bar, then "
-            "lowers back to a full hang. A rep counts once the shoulders come above the "
-            "elbows and the arms straighten again before the next pull — the same "
-            "position, read off two landmarks the camera sees clearly, where the chin "
-            "has to be estimated from the face. The chin-to-bar gap is shown on screen "
-            "for the coach. The test ends by itself when the participant drops off the "
-            "bar."
+            "lowers back to a full hang. A rep counts only when the chin clears the bar "
+            "AND the shoulders come above the elbows, and the arms straighten again "
+            "before the next pull. The chin is the protocol's rule; the shoulders are "
+            "the second opinion, since the chin has to be estimated from the face. The "
+            "test ends by itself when the participant drops off the bar."
         ),
         "controls": [
             ("SPACE", "Start counting (the 'GO' signal)"),
