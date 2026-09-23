@@ -957,11 +957,15 @@ class PullUpEngine(BaseWebEngine):
         # far arm is occluded and scores low. near_arm() picks whichever arm
         # the camera sees best.
         (s_i, e_i, wr_i), near_vis = pullup_mod.near_arm(lms)
-        # The chin estimate needs the face, and the bar line needs a wrist —
-        # without both there is nothing to score against.
+        # The arm carries the bar line, the elbow angle and the shoulder lift,
+        # so it alone decides whether a frame can be scored. A frame without a
+        # readable face still goes to the counter with chin=None: no rep can be
+        # credited while the chin — half the rule — can't be seen, but the test
+        # runs on instead of the blackout reading as a tracking dropout and
+        # voiding the rep in progress.
         face_ok = all(lms[pullup_mod.IDX[k]].visibility > 0.5
                       for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
-        if not (near_vis > 0.5 and face_ok):
+        if near_vis <= 0.5:
             return False
         shoulder = pullup_mod.lm_px(lms, s_i, w, h)
         elbow = pullup_mod.lm_px(lms, e_i, w, h)
@@ -970,7 +974,7 @@ class PullUpEngine(BaseWebEngine):
         with self._lock:
             self.counter.update(
                 angle,
-                pullup_mod.chin_y(lms),
+                pullup_mod.chin_y(lms) if face_ok else None,
                 pullup_mod.bar_y(lms, wr_i),
                 lms[s_i].y,
                 # Second signal: the chin is projected from the face, so it
