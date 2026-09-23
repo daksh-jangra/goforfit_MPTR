@@ -2239,14 +2239,13 @@ class ShoulderStretchEngine(BaseWebEngine):
         # The ONE side selector. It is created here and only ever changed in
         # place (pin / reset) — never replaced — and it is the single source
         # of "side" for the UI, the tracker and the staged row (C5).
-        self.selector = ss_mod.SideSelector(forced=side)
+        self.selector = ss_mod.SideVoter()
         # HUD-only smoother: the tracker is fed the RAW ratio (M9).
         self.smooth = ss_mod.MedianSmoother(ss_mod.SMOOTH_FRAMES)
         # Whose body the trial is measured against: seeds only when exactly
         # one body is in frame (the student alone at the start), then follows
         # that body — a coach stepping in is never measured (C1/C2/M8).
         self.participant_lock = ss_mod.ParticipantLock()
-        self.requested_side = side
 
         self.gap_ratio = None       # latest smoothed ratio, in palm lengths
         self.pose_detected = False
@@ -2340,10 +2339,14 @@ class ShoulderStretchEngine(BaseWebEngine):
         tr = self.tracker
         return {
             "state": tr.state.name,
+            # The arm over the shoulder RIGHT NOW; it follows the student
+            # when they switch, because BOTH sides must be banked.
             "side": self.selector.side,
-            "side_locked": self.selector.locked,
-            "side_pinned": self.selector.pinned,
-            "requested_side": self.requested_side,
+            "left_done": tr.side_done(ss_mod.SIDE_LEFT),
+            "right_done": tr.side_done(ss_mod.SIDE_RIGHT),
+            "seconds_left": (round(tr.cap_remaining(), 1)
+                             if tr.cap_remaining() is not None else None),
+            "trial_cap_s": tr.cap_s,
             # False until a lone body has been seen; screen4 shows "Only the
             # student in frame to start" while it is False.
             "locked": self.participant_lock.locked,
@@ -2373,29 +2376,13 @@ class ShoulderStretchEngine(BaseWebEngine):
 
     # ── actions (screen4 buttons) ───────────────────────────────────────
     def action_side(self, value=None):
-        """Force the trial's side — the arm reaching OVER the shoulder — or go
-        back to auto. Only before a verdict: switching afterwards would
-        relabel a result that has already been staged."""
-        side = (value or "").strip().lower() if isinstance(value, str) else None
-        if side not in (ss_mod.SIDE_AUTO, ss_mod.SIDE_LEFT, ss_mod.SIDE_RIGHT):
-            return {"ok": False, "error": "Side must be auto, left or right"}
-        with self._lock:
-            if self.tracker.resolved:
-                return {"ok": False, "error": "Trial already decided — press RESET first"}
-            self.requested_side = side
-            # Pin IN PLACE (auto un-pins) so the UI, the tracker and the
-            # staged row all read the same selector (C5). The tracker's copy
-            # is written through now, so an END/STOP before the next frame
-            # still stages the pinned side.
-            self.selector.pin(side)
-            self.tracker.side = self.selector.side
-            # Deliberately NOT resetting the tracker here, unlike reverse
-            # curl's action_arm. That one restarts the trial because the rest
-            # baseline belongs to the old arm; here the side is only a LABEL —
-            # the fingertip-gap ratio is the same measurement whichever arm is
-            # on top — so throwing away banked contact would punish the coach
-            # for correcting the name mid-trial.
-            return {"ok": True, "side": side}
+        """Kept so an old screen4 button (or a saved layout) does not 400 —
+        but there is nothing to pin any more: BOTH sides must be banked
+        inside one trial, so the arm is named per frame from the hands and
+        follows the student when they switch."""
+        return {"ok": False,
+                "error": "This test scores both sides automatically - "
+                         "no side to pin"}
 
     def action_end(self, value=None):
         """Close the single trial now (the desktop script's E key). This is
@@ -2452,13 +2439,14 @@ class ShoulderStretchEngine(BaseWebEngine):
         # so result(), the HUD, the UI and the staged row can't disagree — a
         # pin or un-pin made since the last frame would otherwise be lost (C5).
         # Voting stops at the verdict, so this is the side AT the verdict.
-        self.tracker.side = self.selector.side
         res = self.tracker.result()
         self.last_save = "Pass" if res["passed"] else "Fail"
-        # Positional contract with app.py's _stage(passed, side,
-        # best_gap_ratio, rating) closure — keep the two in lockstep.
-        self._safe_stage(res["passed"], res["side"],
-                         res.get("best_gap_ratio"), self.last_save)
+        # Positional contract with app.py's _stage(passed, left_passed,
+        # right_passed, best_gap_ratio, best_gap_left, best_gap_right, rating)
+        # closure — keep the two in lockstep.
+        self._safe_stage(res["passed"], res["left_passed"], res["right_passed"],
+                         res.get("best_gap_ratio"), res.get("best_gap_left"),
+                         res.get("best_gap_right"), self.last_save)
 
     def _stage_on_stop(self):
         """Stopped mid-test: send screen3 what the trial actually achieved
@@ -2539,8 +2527,12 @@ class ShoulderStretchEngine(BaseWebEngine):
                     # Side votes only while the stretch itself is in view (a
                     # valid reading), and only from a body matched on THIS
                     # frame — warming up or facing the camera must not name it.
-                    if fresh is not None and reading is not None:
-                        vote = ss_mod.detect_side(fresh, fw, fh)
+                    if reading is not None:
+                        # The down-pointing hand came over the shoulder, so it
+                        # names the arm; the elbows are only a fallback.
+                        vote = ss_mod.side_from_hands(hand_lms_list, body, fw, fh)
+                        if vote is None and fresh is not None:
+                            vote = ss_mod.detect_side(fresh, fw, fh)
                     if reading is not None:
                         ratio = reading.ratio
                         shown = self.smooth.push(reading.ratio, now)

@@ -542,7 +542,7 @@ TESTS = {
     "shoulder_stretch": {
         "id":          "shoulder_stretch",
         "title":       "Shoulder Stretch",
-        "subtitle":    "Touch the fingertips behind the back \u2014 one trial, pass/fail",
+        "subtitle":    "Touch the fingertips behind the back \u2014 both sides in 15 s, pass/fail",
         "icon":        "\U0001f932",
         "category":    "Musculoskeletal",
         "script":      "shoulder_stretch.py",
@@ -550,28 +550,27 @@ TESTS = {
             "Upper-body flexibility of the shoulder girdle. One arm reaches over the "
             "shoulder and down the back, the other reaches across and up the back, and "
             "the participant tries to touch the fingertips together between the "
-            "shoulder blades. No equipment. The trial is named for the arm that goes "
-            "OVER the shoulder \u2014 the right arm over the right shoulder is a right "
-            "stretch. One trial \u2014 the item is PASSED if the fingers touch. The app "
-            "measures the fingertip gap against the hand's own size and decides the "
-            "verdict; the coach judges that the reach is a genuine attempt."
+            "shoulder blades. No equipment. BOTH sides must be done \u2014 right arm "
+            "over the right shoulder AND left arm over the left \u2014 inside ONE trial "
+            "of 15 seconds, which starts at the first real attempt (not when the "
+            "camera opens). The item is PASSED only if the fingers touch on BOTH "
+            "sides. The app measures the fingertip gap against the hand's own size, "
+            "names the arm from the hands and decides the verdict; the coach judges "
+            "that the reach is a genuine attempt."
         ),
         "controls": [
-            ("LEFT ARM",  "Pin the left arm as the one reaching over the shoulder"),
-            ("RIGHT ARM", "Pin the right arm as the one reaching over the shoulder"),
-            ("AUTO SIDE", "Go back to detecting the over-the-shoulder arm automatically"),
-            ("RESET",     "Start the trial over"),
+            ("RESET", "Start the trial over (clears both sides and the 15 s clock)"),
         ],
         "tip": (
             "Camera BEHIND the participant at upper-back height, 1.5-2 m away, with "
             "the upper back, both shoulders and BOTH HANDS in frame. This is the only "
             "test in the app shot from behind: the hands meet between the shoulder "
-            "blades, so a front view cannot see them at all and no trial will score."
+            "blades, so a front view cannot see them at all and no trial will score. "
+            "Only the student should be in frame when the test starts \u2014 the camera "
+            "locks onto the one person it sees and will not start with two."
         ),
-        # No pre-launch params: the reaching arm is detected automatically and
-        # can be pinned from the LEFT ARM / RIGHT ARM buttons once the coach
-        # can actually see the feed. (/api/launch/shoulder_stretch still
-        # accepts a "side" field for scripted launches.)
+        # No pre-launch params and no side control: both sides are scored in
+        # one trial and the arm is named per frame from the hands.
         "params": [],
         "unit":   "pass/fail",
         "live_feed":   True,
@@ -801,9 +800,12 @@ class ReverseCurlSave(BaseModel):
 
 class ShoulderStretchSave(BaseModel):
     session_id: Optional[int] = None
-    passed: Optional[bool] = None
-    side: Optional[str] = None
+    passed: Optional[bool] = None          # both sides touched
+    left_passed: Optional[bool] = None
+    right_passed: Optional[bool] = None
     best_gap_ratio: Optional[float] = None
+    best_gap_left: Optional[float] = None
+    best_gap_right: Optional[float] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -1373,24 +1375,21 @@ async def _launch_shoulder_stretch(request: Request):
     body = await _json_body(request)
     session_id = body.get("session_id")
 
-    # The trial is named for the arm that reaches OVER the shoulder, which the
-    # participant picks — so the default is to work it out from which elbow is
-    # actually up. A coach can pin it when the auto choice keeps landing on the
-    # wrong side (a twisted torso can read both elbows as raised).
-    side = (body.get("side") or "auto")
-    side = str(side).strip().lower() or "auto"
-    if side not in ("auto", "left", "right"):
-        return JSONResponse({"ok": False, "error": "Side must be auto, left or right"},
-                            status_code=400)
-
-    def _stage(passed, side_val, best_gap_ratio, rating):
+    # Nothing to configure: BOTH sides are scored inside one trial and the
+    # arm over the shoulder is named per frame from the hands, so there is no
+    # side to choose or pin.
+    def _stage(passed, left_passed, right_passed, best_gap_ratio,
+               best_gap_left, best_gap_right, rating):
         _pending["shoulder_stretch"] = {
-            "session_id": session_id, "passed": passed, "side": side_val,
-            "best_gap_ratio": best_gap_ratio, "rating": rating,
+            "session_id": session_id, "passed": passed,
+            "left_passed": left_passed, "right_passed": right_passed,
+            "best_gap_ratio": best_gap_ratio,
+            "best_gap_left": best_gap_left, "best_gap_right": best_gap_right,
+            "rating": rating,
         }
 
     try:
-        engine = ShoulderStretchEngine(session_id=session_id, on_stage=_stage, side=side)
+        engine = ShoulderStretchEngine(session_id=session_id, on_stage=_stage)
         engine.start()
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
@@ -2566,7 +2565,8 @@ def save_reverse_curl(b: ReverseCurlSave):
 
 @app.post("/api/save/shoulder_stretch")
 def save_shoulder_stretch(b: ShoulderStretchSave):
-    """Fields: session_id, passed, side (opt), best_gap_ratio (opt), rating (opt)"""
+    """Fields: session_id, passed (both sides), left_passed/right_passed (opt),
+    best_gap_ratio / best_gap_left / best_gap_right (opt), rating (opt)"""
     if not b.session_id:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
     if b.passed is None:
@@ -2574,8 +2574,11 @@ def save_shoulder_stretch(b: ShoulderStretchSave):
     row_id = db.save_shoulder_stretch(
         session_id     = b.session_id,
         passed         = b.passed,
-        side           = b.side,
+        left_passed    = b.left_passed,
+        right_passed   = b.right_passed,
         best_gap_ratio = b.best_gap_ratio,
+        best_gap_left  = b.best_gap_left,
+        best_gap_right = b.best_gap_right,
         rating         = b.rating,
     )
     return {"ok": True, "id": row_id}

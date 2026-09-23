@@ -505,11 +505,18 @@
                     extra.push(`best flexion ${pendingResult.peak_angle_deg}\u00b0`);
                 if (pendingResult.hold_s !== undefined && pendingResult.hold_s !== null)
                     extra.push(`held ${pendingResult.hold_s}s`);
-                // Shoulder stretch stages `side` (the arm reaching over the
-                // shoulder) and `best_gap_ratio` (closest fingertip gap, as a
-                // multiple of palm length) instead of arm/flexion/hold.
-                if (pendingResult.side) extra.push(`${pendingResult.side} arm`);
-                if (pendingResult.best_gap_ratio !== undefined && pendingResult.best_gap_ratio !== null)
+                // Shoulder stretch needs BOTH sides, so show each one and the
+                // closest fingertip gap it reached (in palm lengths).
+                const sideBit = (label, done, best) => {
+                    if (done === undefined || done === null) return null;
+                    const gap = (best !== undefined && best !== null) ? `, closest ${best}` : '';
+                    return `${label}: ${done ? 'touched' : 'not done'}${gap}`;
+                };
+                [sideBit('right', pendingResult.right_passed, pendingResult.best_gap_right),
+                 sideBit('left',  pendingResult.left_passed,  pendingResult.best_gap_left)]
+                    .forEach(bit => { if (bit) extra.push(bit); });
+                if (!extra.length && pendingResult.best_gap_ratio !== undefined
+                    && pendingResult.best_gap_ratio !== null)
                     extra.push(`closest gap ${pendingResult.best_gap_ratio} palm`);
                 const detail = extra.length ? ` (${extra.join(', ')})` : '';
                 // A trial stopped before any real attempt stages passed=null

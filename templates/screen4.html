@@ -528,32 +528,33 @@
               // participant's own palm length, so the threshold self-calibrates
               // per person and per distance from the camera.
               buttons: [
-                  { id: 'side_l', label: 'LEFT ARM',  action: 'side', value: 'left',  color: 'bg-slate-600' },
-                  { id: 'side_r', label: 'RIGHT ARM', action: 'side', value: 'right', color: 'bg-slate-600' },
-                  { id: 'side_a', label: 'AUTO SIDE', action: 'side', value: 'auto',  color: 'bg-slate-500' },
+                  // No side buttons: BOTH sides must be banked inside one
+                  // trial, so the arm is named per frame from the hands and
+                  // pinning one side would make the other impossible.
                   { id: 'reset',  label: 'RESET',     action: 'reset', color: 'bg-amber-600' },
               ],
               showCalibOverlay(state) { return false; },
               buttonDisabled(btnId, state) {
-                  if (!state.running) return true;
-                  // Pinning the side only relabels the trial (banked contact is
-                  // kept), and it is closed off once a verdict exists so a staged
-                  // result can't be relabelled — RESET first, deliberately. There
-                  // is no PASS/FAIL button: the engine decides this test, and the
+                  // No PASS/FAIL button: the engine decides this test, and the
                   // coach confirms the staged verdict on the review screen.
-                  if (btnId === 'side_l' || btnId === 'side_r' || btnId === 'side_a')
-                      return !!state.resolved;
-                  return false;
+                  return !state.running;
               },
               renderStatus(state) {
                   const lines = [`State: ${state.state}`];
                   // The engine locks onto the participant only while exactly one
                   // body is in frame; until then nothing is measured.
                   if (state.locked === false) lines.push('Only the student in frame to start');
-                  const sideTxt = state.side
-                      ? `${state.side} arm over the shoulder${state.side_locked ? ' (locked)' : ''}`
-                      : 'working out which arm is over the shoulder';
-                  lines.push(`Side: ${sideTxt}`);
+                  // Both sides are needed, so show what is banked and what is
+                  // left rather than one "current side".
+                  const mark = (done) => done ? '\u2713 done' : 'to do';
+                  lines.push(`Right: ${mark(state.right_done)}   Left: ${mark(state.left_done)}`);
+                  lines.push(`Now: ${state.side ? state.side + ' arm over the shoulder'
+                                                : 'working out which arm is over the shoulder'}`);
+                  if (state.seconds_left !== null && state.seconds_left !== undefined) {
+                      lines.push(`Time left: ${state.seconds_left}s of ${state.trial_cap_s}s`);
+                  } else if (!state.resolved) {
+                      lines.push(`${state.trial_cap_s}s starts at the first attempt`);
+                  }
                   if (state.gap_ratio !== null && state.gap_ratio !== undefined) {
                       // The gap is measured in palm lengths, not centimetres —
                       // saying so stops the number being read as a distance.
@@ -563,13 +564,13 @@
                   } else {
                       lines.push('Hands not both visible — film from behind, hands between the shoulder blades');
                   }
-                  lines.push(`Touch: ${state.touch_frames} / ${state.required_frames} frames` +
+                  lines.push(`Touch (this side): ${state.touch_frames} / ${state.required_frames} frames` +
                              (state.touch_pct > 0 ? `  (${state.touch_pct}%)` : ''));
                   if (state.best_gap_ratio !== null && state.best_gap_ratio !== undefined) {
                       lines.push(`Closest so far: ${state.best_gap_ratio} palm`);
                   }
                   if (state.resolved) {
-                      lines.push(`RESULT: ${state.passed ? 'PASS' : 'FAIL'}`);
+                      lines.push(`RESULT: ${state.passed ? 'PASS (both sides)' : 'FAIL'}`);
                   }
                   if (state.status_msg) lines.push(state.status_msg);
                   return lines;

@@ -202,8 +202,9 @@ CREATE TABLE IF NOT EXISTS reverse_curl (
 );
 
 -- ── Shoulder Stretch Test ─────────────────────────────────────────────────
--- Pass/fail on a single trial (Brockport figure 5.27): the fingertips either
--- touch behind the back or they don't, so `passed` IS the result.
+-- Pass/fail on a single trial (Brockport figure 5.27), scored on BOTH sides:
+-- the student passes only if the fingertips touch with the right arm over AND
+-- with the left arm over, inside one 15 s trial. `passed` IS that result.
 -- best_gap_ratio is the closest the fingertips came during the trial, as a
 -- fraction of the participant's own palm length (self-calibrating, so it is
 -- comparable across students and camera distances). It is recorded on every
@@ -211,9 +212,13 @@ CREATE TABLE IF NOT EXISTS reverse_curl (
 CREATE TABLE IF NOT EXISTS shoulder_stretch (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
-    passed          INTEGER,     -- 1 = fingertips touched, 0 = they did not
-    side            TEXT,        -- 'left' / 'right' — the arm reaching OVER the shoulder
+    passed          INTEGER,     -- 1 = BOTH sides touched, 0 = not
+    left_passed     INTEGER,     -- 1 = fingertips touched, left arm over
+    right_passed    INTEGER,     -- 1 = fingertips touched, right arm over
+    side            TEXT,        -- legacy (single-side trials); unused now
     best_gap_ratio  REAL,        -- smallest fingertip gap / palm length seen (pass <= 0.20)
+    best_gap_left   REAL,        -- same, for the left-arm-over attempt
+    best_gap_right  REAL,        -- same, for the right-arm-over attempt
     rating          TEXT,        -- 'Pass' / 'Fail'
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
@@ -309,10 +314,29 @@ def _bmi_category(bmi: float) -> str:
     else:            return "Obese"
 
 
+# Columns added to tables that already exist on machines which ran an earlier
+# version. CREATE TABLE IF NOT EXISTS never alters an existing table, so a
+# column added later has to be applied by hand — ALTER TABLE ADD COLUMN is
+# cheap and keeps the rows already recorded.
+_ADDED_COLUMNS = {
+    "shoulder_stretch": [
+        ("left_passed",    "INTEGER"),
+        ("right_passed",   "INTEGER"),
+        ("best_gap_left",  "REAL"),
+        ("best_gap_right", "REAL"),
+    ],
+}
+
+
 def init_db():
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then add any newer columns."""
     with _conn() as con:
         con.executescript(_SCHEMA)
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns:
+                if name not in have:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -610,21 +634,29 @@ class GoForFitDB:
         self,
         session_id: int,
         passed: bool,
-        side: str = None,
+        left_passed: bool = None,
+        right_passed: bool = None,
         best_gap_ratio: float = None,
+        best_gap_left: float = None,
+        best_gap_right: float = None,
         rating: str = None,
     ) -> int:
-        """One trial, pass/fail. `rating` defaults to Pass/Fail so the results
-        view shows a word rather than a bare 1/0. `best_gap_ratio` is kept on
-        every row so the pass threshold can be retuned from real data."""
+        """One trial, pass/fail, scored on BOTH sides: `passed` is true only
+        when both arms banked a touch. The per-side flags and closest gaps are
+        kept on every row so the pass threshold can be retuned from real data
+        and so a coach can see which side let the student down."""
         if rating is None:
             rating = "Pass" if passed else "Fail"
         with _conn() as con:
             cur = con.execute(
-                """INSERT INTO shoulder_stretch (session_id, passed, side,
-                                                 best_gap_ratio, rating)
-                   VALUES (?,?,?,?,?)""",
-                (session_id, 1 if passed else 0, side, best_gap_ratio, rating),
+                """INSERT INTO shoulder_stretch (session_id, passed,
+                        left_passed, right_passed, best_gap_ratio,
+                        best_gap_left, best_gap_right, rating)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (session_id, 1 if passed else 0,
+                 None if left_passed is None else int(bool(left_passed)),
+                 None if right_passed is None else int(bool(right_passed)),
+                 best_gap_ratio, best_gap_left, best_gap_right, rating),
             )
             return cur.lastrowid
 

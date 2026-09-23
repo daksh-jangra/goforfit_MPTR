@@ -61,21 +61,18 @@ Which side
 
 Usage
 -----
-  python shoulder_stretch.py                    # auto-pick the side
-  python shoulder_stretch.py --side right
+  python shoulder_stretch.py
   python shoulder_stretch.py --source clip.mp4
   python shoulder_stretch.py --pass-ratio 0.25  # loosen the touch threshold
   python shoulder_stretch.py --debug
 
-  Keys : 1 = pin the LEFT-arm trial   (left arm over the left shoulder)
-         2 = pin the RIGHT-arm trial  (right arm over the right shoulder)
-         0 = back to auto side detection
-         E = end the trial now (records FAIL if no touch was seen)
+  Keys : E = end the trial now (records FAIL unless BOTH sides were done)
          R = reset the whole test
          Q = quit and print the summary
 
-  The side pins are on the number keys because R is RESET in every test in
-  this app and a second meaning for it would be a trap.
+  There is no side pin: BOTH sides must be touched inside one 15 s trial, so
+  the arm is named per frame from the hands and follows the student when
+  they switch. Pinning a side would make the other side impossible to bank.
 
 Camera placement
 ----------------
@@ -177,10 +174,13 @@ PASS_RATIO = 0.20
 #     1 reading/s (a 5 s hold fails ~50 % there). At the 4+ readings/s
 #     measured on the single-person clip at 12 fps it fills in ~1-2 s.
 TOUCH_READINGS      = 5      # K
-TOUCH_WINDOW_S      = 10.0   # T
+TOUCH_WINDOW_S      = 6.0    # T (was 10 s; the whole trial is now 15 s)
 TOUCH_RELEASE_RATIO = 0.24   # a reading between PASS_RATIO and this adds
                              # nothing and clears nothing; above it clears.
-TRIAL_CAP_S         = 20.0   # measured from the first reading <= release
+# BOTH sides must be touched inside ONE 15 s trial, and the clock starts at
+# the first frame that shows the stretch (a real attempt), not at camera start,
+# so getting into position does not eat the trial.
+TRIAL_CAP_S         = 15.0   # from the first reading of the trial
 TOUCH_FRAMES = TOUCH_READINGS   # old name, kept: web_engines and the CLI pass
                                 # touch_frames= and it now means K.
 
@@ -521,6 +521,10 @@ class ParticipantLock:
         return self.last_body if now - self.last_seen_t <= self.hold_s else None
 
 
+def _r3(v):
+    return round(v, 3) if v is not None else None
+
+
 GapReading = namedtuple("GapReading",
                         "ratio gap_px palm_px point_a point_b")
 
@@ -617,6 +621,53 @@ def stretch_hands(hand_pair, w, h, min_dir=HAND_DIR_MIN):
         return False
     d = sorted(hand_down_ness(hl, w, h) for hl in hand_pair[:2])
     return d[0] <= -min_dir and d[1] >= min_dir
+
+
+SIDE_HAND_MARGIN_TD = 0.03   # both cues must clear this much of a torso
+                             # diagonal. Measured on real touches: the
+                             # nearest-shoulder margin ran 0.06-0.18 td and
+                             # the midline offset 0.06-0.08 td.
+
+
+def side_from_hands(hand_pair, body_lms, w, h, margin_td=SIDE_HAND_MARGIN_TD):
+    """Which arm reaches OVER the shoulder, read from the HANDS: the hand
+    pointing DOWN is by definition the one coming over the shoulder, so the
+    trial is named by which shoulder it came from.
+
+    Two independent cues must AGREE, or this says nothing: the down hand's
+    wrist is nearer that shoulder, and it sits on that side of the spine.
+    Both are read from the picture (un-mirrored, filmed from behind), never
+    from MediaPipe's left/right labels.
+
+    This replaces the elbows for naming: from behind the pose often reports
+    both elbows down while one is plainly raised, and on real touch frames
+    the elbow rule named 1 of 3 while this named 3 of 3."""
+    if body_lms is None or len(hand_pair) < 2:
+        return None
+    td = torso_diagonal_px(body_lms, w, h)
+    if td is None:
+        return None
+    down = max(hand_pair[:2], key=lambda hl: hand_down_ness(hl, w, h))
+    if hand_down_ness(down, w, h) < HAND_DIR_MIN:
+        return None
+    wrist = np.array([down[HAND_WRIST_IDX].x * w, down[HAND_WRIST_IDX].y * h],
+                     dtype=np.float32)
+    # Image-left / image-right shoulder: from behind these ARE the
+    # participant's left and right (fig 5.27, "right shoulder").
+    sh_l, sh_r = sorted((lm_px(body_lms, IDX_L_SHOULDER, w, h),
+                         lm_px(body_lms, IDX_R_SHOULDER, w, h)),
+                        key=lambda p: p[0])
+    d_l, d_r = px_dist(wrist, sh_l) / td, px_dist(wrist, sh_r) / td
+    if abs(d_l - d_r) < margin_td:
+        return None
+    by_shoulder = SIDE_RIGHT if d_r < d_l else SIDE_LEFT
+
+    offset = (wrist[0] - shoulder_mid_px(body_lms, w, h)[0]) / td
+    if abs(offset) < margin_td:
+        return None
+    by_spine = SIDE_RIGHT if offset > 0 else SIDE_LEFT
+
+    return by_shoulder if by_shoulder == by_spine else None
 
 
 def frame_gap_ratio(hand_lms_list, body_lms, w, h):
@@ -730,41 +781,49 @@ class MedianSmoother:
 class ShoulderStretchTracker:
     """Turns a stream of fingertip-gap ratios into a pass/fail verdict.
 
-    One trial, as the manual specifies. A PASS needs K (touch_frames)
-    qualifying readings (ratio <= pass_ratio) inside a rolling window of
-    window_s seconds:
-      * readings older than window_s expire — four touches a minute apart are
-        not a sustained touch (the old counter had no window and ratcheted to
-        PASS on a 1-inch miss);
-      * a reading above release_ratio is the hands coming apart and clears
-        the window; one between pass_ratio and release_ratio adds nothing and
-        clears nothing (jitter on a hand seen from behind);
-      * a dropout (None) never clears the window — hands vanishing behind the
-        back is normal here, and expiry already handles staleness.
-    The trial is capped at cap_s from the first reading <= release_ratio (not
-    from camera start, so setup time does not eat the trial); reaching the cap
-    is an automatic FAIL. See the constants block for the Monte-Carlo numbers.
+    ONE trial, and BOTH sides must be touched inside it: the student reaches
+    right-arm-over and left-arm-over, and passes only if the fingertips touch
+    on BOTH (FITNESSGRAM's rule, chosen over the Brockport PDF's single side).
 
-    The minimum is RECORDED (best_gap_ratio) so the threshold can be retuned
-    later from real data, but it never decides the verdict.
+    Each side needs K (touch_frames) qualifying readings (ratio <= pass_ratio)
+    inside a rolling window of window_s seconds:
+      * readings older than window_s expire — touches a minute apart are not
+        a sustained touch (the old counter had no window and ratcheted);
+      * a reading above release_ratio is the hands coming apart and clears
+        that side's window; one between pass_ratio and release_ratio adds
+        nothing and clears nothing (jitter on a hand seen from behind);
+      * a dropout (None) never clears anything — hands vanishing behind the
+        back is normal here, and expiry already handles staleness;
+      * a qualifying reading whose SIDE is unknown is banked for neither
+        side: it cannot be credited to an arm that hasn't been named.
+
+    The whole trial is capped at cap_s from the FIRST reading — the first
+    frame showing the stretch, so getting into position does not eat the
+    clock. Reaching the cap resolves the trial on what was achieved: a PASS
+    only if both sides were done.
+
+    The minimum gap is RECORDED per side (best_gap_ratio, and left/right) so
+    the threshold can be retuned later from real data, but it never decides
+    the verdict.
 
     The engine decides this test. There is no coach PASS/FAIL override —
-    end_trial() simply closes the single trial, and the verdict it reports is
-    whatever the measurement earned, so verdict_by is always "auto".
+    end_trial() closes the trial on whatever it measured, so verdict_by is
+    always "auto".
 
-    Everything is driven through update(), which takes a plain float or None
-    and an injectable clock, so the whole state machine can be exercised with
-    synthetic sequences — no camera, no MediaPipe objects.
+    Everything is driven through update(), which takes a plain float or None,
+    a side or None, and an injectable clock, so the whole state machine can
+    be exercised with synthetic sequences — no camera, no MediaPipe objects.
     """
+
+    SIDES = (SIDE_LEFT, SIDE_RIGHT)
 
     def __init__(self, pass_ratio=PASS_RATIO, touch_frames=TOUCH_READINGS,
                  release_ratio=TOUCH_RELEASE_RATIO, window_s=TOUCH_WINDOW_S,
                  cap_s=TRIAL_CAP_S, grace_s=None):
-        # grace_s is accepted and ignored: the dropout grace is gone (a
-        # dropout no longer resets anything), the kwarg only keeps old
-        # callers from breaking.
+        # grace_s is accepted and ignored: a dropout no longer resets
+        # anything, the kwarg only keeps old callers from breaking.
         self.pass_ratio = float(pass_ratio)
-        self.touch_frames = int(touch_frames)          # K
+        self.touch_frames = int(touch_frames)          # K, per side
         self.release_ratio = float(release_ratio)
         self.window_s = float(window_s)                # T
         self.cap_s = None if cap_s is None else float(cap_s)
@@ -774,74 +833,109 @@ class ShoulderStretchTracker:
     def reset(self):
         self.state = State.READY
         self.ratio = None             # latest raw ratio fed in
-        self.best_gap_ratio = None    # minimum seen this trial — a RECORD
-        self.side = None              # last side seen/pinned, frozen at resolve
-        self.frames_seen = 0          # measurable frames in this trial
-        self.qualifying_total = 0     # every reading <= pass_ratio this trial
+        self.side = None              # side of the latest reading
+        self.best_gap_ratio = None    # best of either side — a RECORD
+        self.best_by_side = {s: None for s in self.SIDES}
+        self.done = set()             # sides whose touch is banked
+        self.frames_seen = 0
+        self.qualifying_total = 0
         self.passed = False
         self.verdict_by = "auto"      # the engine decides this test, always
         self.ended_by = None          # "pass" | "cap" | "coach"
-        self.status_msg = ("Camera behind the participant — reach over one "
+        self.status_msg = ("Camera behind the participant - reach over one "
                            "shoulder and up the back with the other hand")
-        self._qual = deque()          # timestamps of qualifying readings
+        self._qual = {s: deque() for s in self.SIDES}
         self._cap_start = None
         self._now = None
 
     @property
     def touch_count(self):
-        """Qualifying readings currently inside the window."""
-        return len(self._qual)
+        """Qualifying readings in the window for the side being worked on."""
+        return max(len(q) for q in self._qual.values())
+
+    def side_done(self, side):
+        return side in self.done
 
     # ── per-frame update ─────────────────────────────────────────────────
     def update(self, ratio, now=None, side=None):
-        """Feed one frame's RAW fingertip-gap ratio, or None when the frame
-        couldn't be measured. Returns the result dict on the frame the trial
-        resolves, else None."""
+        """Feed one frame's RAW fingertip-gap ratio (or None when the frame
+        couldn't be measured) and the side it belongs to (or None when the
+        arm couldn't be named). Returns the result dict on the frame the
+        trial resolves, else None."""
         now = time.time() if now is None else now
         self._now = now
 
         if self.state in (State.PASSED, State.FAILED):
-            return None             # side included: frozen at the verdict
+            return None
         if side is not None:
             self.side = side
 
         self._expire(now)
 
         if ratio is None:
-            if not self._qual and self.state == State.TOUCHING:
+            if not any(self._qual.values()) and self.state == State.TOUCHING:
                 self.state = State.READY
-                self.status_msg = "Hands not visible — hold the position in view"
+                self.status_msg = "Hands not visible - hold the position in view"
             return self._check_cap(now)
 
         self.ratio = float(ratio)
         self.frames_seen += 1
         if self.best_gap_ratio is None or self.ratio < self.best_gap_ratio:
             self.best_gap_ratio = self.ratio
-        if self._cap_start is None and self.ratio <= self.release_ratio:
+        if self._cap_start is None:
+            # The clock starts at the first frame showing the stretch.
             self._cap_start = now
+        if side in self.SIDES:
+            prev = self.best_by_side[side]
+            if prev is None or self.ratio < prev:
+                self.best_by_side[side] = self.ratio
 
         if self.ratio <= self.pass_ratio:
-            self._qual.append(now)
             self.qualifying_total += 1
-            if len(self._qual) >= self.touch_frames:
-                return self._pass(now)
+            if side not in self.SIDES:
+                self.state = State.TOUCHING
+                self.status_msg = "Touching - hold still so the arm can be named"
+                return self._check_cap(now)
+            if side not in self.done:
+                self._qual[side].append(now)
+                if len(self._qual[side]) >= self.touch_frames:
+                    self.done.add(side)
+                    self._qual[side].clear()
+                    if len(self.done) == len(self.SIDES):
+                        return self._pass(now)
+                    other = SIDE_RIGHT if side == SIDE_LEFT else SIDE_LEFT
+                    self.state = State.REACHING
+                    self.status_msg = (f"{side.capitalize()} side done - "
+                                       f"now the {other} arm over the shoulder")
+                    return self._check_cap(now)
             self.state = State.TOUCHING
-            self.status_msg = (f"Fingers touching — hold it "
-                               f"({len(self._qual)}/{self.touch_frames})")
+            self.status_msg = (f"Fingers touching ({side}) - hold it "
+                               f"({len(self._qual[side])}/{self.touch_frames})")
         elif self.ratio <= self.release_ratio:
             if self.state != State.TOUCHING:
                 self.state = State.REACHING
-                self.status_msg = "Almost — bring the fingertips together"
+                self.status_msg = "Almost - bring the fingertips together"
         else:
-            self._qual.clear()
+            if side in self.SIDES:
+                self._qual[side].clear()
+            else:
+                for q in self._qual.values():
+                    q.clear()
             self.state = State.REACHING
-            self.status_msg = "Reach further — the fingertips are still apart"
+            self.status_msg = self._todo_msg()
         return self._check_cap(now)
 
     # ── internals ────────────────────────────────────────────────────────
+    def _todo_msg(self):
+        left = [s for s in self.SIDES if s not in self.done]
+        if len(left) == len(self.SIDES):
+            return "Reach further - the fingertips are still apart"
+        return f"Now the {left[0]} arm over the shoulder"
+
     def _expire(self, now):
-        while self._qual and now - self._qual[0] > self.window_s:
-            self._qual.popleft()
+        for q in self._qual.values():
+            while q and now - q[0] > self.window_s:
+                q.popleft()
 
     def _check_cap(self, now):
         if (self.cap_s is not None and self._cap_start is not None
@@ -854,38 +948,45 @@ class ShoulderStretchTracker:
         self.verdict_by = "auto"
         self.ended_by = "pass"
         self.state = State.PASSED
-        self.status_msg = "PASS — fingertips touched"
+        self.status_msg = "PASS - fingertips touched on both sides"
         return self.result()
 
     def end_trial(self, now=None, by="coach"):
-        """Close the single trial. This is not a coach verdict: the result is
-        whatever the measurement earned, which for an unresolved trial is a
-        FAIL with the closest gap it reached, so the review screen can see how
-        close it came. by="cap" is the engine's own time limit. Returns the
-        result dict, or None if already resolved."""
+        """Close the trial. This is not a coach verdict: the result is what
+        the measurement earned — a PASS only if BOTH sides were banked."""
         if self.resolved:
             return None
         self._now = time.time() if now is None else now
-        self.passed = False
+        self.passed = len(self.done) == len(self.SIDES)
         self.verdict_by = "auto"
-        self.ended_by = by
-        self.state = State.FAILED
-        self.status_msg = ("FAIL — time limit" if by == "cap"
-                           else "FAIL — the fingertips did not touch")
+        self.ended_by = "pass" if self.passed else by
+        self.state = State.PASSED if self.passed else State.FAILED
+        if self.passed:
+            self.status_msg = "PASS - fingertips touched on both sides"
+        elif not self.done:
+            self.status_msg = ("FAIL - time limit" if by == "cap"
+                               else "FAIL - the fingertips did not touch")
+        else:
+            got = ", ".join(sorted(self.done))
+            self.status_msg = f"FAIL - only the {got} side was completed"
         return self.result()
 
     # ── read-only views ──────────────────────────────────────────────────
     def touch_progress(self):
-        """0..1 — how much of the sustained touch is banked in the window.
-        Drives the HUD bar, which the participant must FILL (hold the touch)."""
+        """0..1 across the WHOLE test: each banked side is half, and the side
+        being worked on fills the rest of its half."""
         if self.state == State.PASSED:
             return 1.0
         if self.touch_frames <= 0:
             return 0.0
-        return min(1.0, len(self._qual) / self.touch_frames)
+        per = 1.0 / len(self.SIDES)
+        got = len(self.done) * per
+        working = max((len(q) for s, q in self._qual.items()
+                       if s not in self.done), default=0)
+        return min(1.0, got + per * working / self.touch_frames)
 
     def cap_remaining(self, now=None):
-        """Seconds left before the trial cap, or None if it hasn't started."""
+        """Seconds left in the trial, or None before it starts."""
         if self.cap_s is None or self._cap_start is None or self.resolved:
             return None
         now = (self._now if now is None else now)
@@ -899,94 +1000,57 @@ class ShoulderStretchTracker:
 
     def result(self):
         return {
-            "passed": bool(self.passed),
-            "side": self.side,
-            # The trial minimum, recorded so the PASS_RATIO threshold can be
-            # retuned later from real student data. It is NOT what decided
-            # the verdict — the K-in-T window is.
-            "best_gap_ratio": (round(self.best_gap_ratio, 3)
-                               if self.best_gap_ratio is not None else None),
+            "passed": bool(self.passed),          # both sides touched
+            "left_passed": SIDE_LEFT in self.done,
+            "right_passed": SIDE_RIGHT in self.done,
+            # Trial minimum per side, recorded so PASS_RATIO can be retuned
+            # later from real student data. NOT what decided the verdict.
+            "best_gap_left": _r3(self.best_by_side[SIDE_LEFT]),
+            "best_gap_right": _r3(self.best_by_side[SIDE_RIGHT]),
+            "best_gap_ratio": _r3(self.best_gap_ratio),
             "threshold_ratio": self.pass_ratio,
-            "touch_frames": len(self._qual),          # in the window at the end
-            "required_frames": self.touch_frames,     # K
+            "required_frames": self.touch_frames,     # K, per side
             "window_s": self.window_s,                # T
+            "trial_cap_s": self.cap_s,
             "qualifying_readings_total": self.qualifying_total,
             "ended_by": self.ended_by,
             "verdict_by": self.verdict_by,
         }
 
 
-class SideSelector:
-    """Decides which arm is reaching over the shoulder.
+class SideVoter:
+    """Which arm is over the shoulder RIGHT NOW.
 
-    detect_side() already refuses to answer on an ambiguous frame, so this
-    class only has to turn a stream of per-frame votes into one stable
-    answer: a short window of votes, the majority wins, and the choice LOCKS
-    once one side has won decisively (6 of the last 9 clean votes). Locking matters because the elbows move
-    while the participant works the hands together, and a label that flipped
-    mid-trial would stage the result under the wrong side.
+    Both sides must be done inside one trial, so this deliberately does NOT
+    lock: the answer has to follow the student when they switch arms. It is
+    a short rolling majority over the frames that actually named a side,
+    which rides out the odd mis-read without freezing the label.
 
-    A pinned side (SIDE_LEFT / SIDE_RIGHT from the coach) is a permanently
-    locked selector; an auto lock can still be re-voted (see update()).
-    """
+    There is no coach pin any more: pinning one side would make the other
+    side impossible to bank."""
 
-    VOTE_WINDOW = 9
-    LOCK_VOTES  = 6      # of VOTE_WINDOW. A 6/9 majority is well clear of the
-                         # coin-flip a twisted torso produces, and is reached
-                         # in under a second at any usable frame rate.
+    VOTE_WINDOW = 5
 
-    def __init__(self, forced=SIDE_AUTO):
-        self.forced = forced if forced in (SIDE_LEFT, SIDE_RIGHT) else None
+    def __init__(self):
         self.reset()
 
     def reset(self):
-        self.side = self.forced
-        self.locked = self.forced is not None
+        self.side = None
         self._votes = deque(maxlen=self.VOTE_WINDOW)
 
-    @property
-    def pinned(self):
-        return self.forced is not None
-
-    def pin(self, side):
-        """The coach's pin (left/right), or SIDE_AUTO to go back to voting.
-        Changes THIS object in place, so whoever holds it (engine, HUD,
-        staging) sees the change."""
-        self.forced = side if side in (SIDE_LEFT, SIDE_RIGHT) else None
-        self.reset()
-
     def update(self, side):
-        """side: SIDE_LEFT | SIDE_RIGHT | None (this frame says nothing)
-        -> the chosen side, or None while nothing is decided yet.
-
-        A pin is permanent. An AUTO lock is not: a decisive window (LOCK_VOTES
-        of the last VOTE_WINDOW clean votes) for the other side re-locks it,
-        so a wrong early lock can be voted out — but noise that alternates
-        L/R can never reach 6 of 9 and never flips it."""
-        if self.pinned:
-            return self.side
-
+        """side: SIDE_LEFT | SIDE_RIGHT | None (this frame names nothing)."""
         if side is not None:
             self._votes.append(side)
         if not self._votes:
             return self.side
-
-        counts = {s: sum(1 for v in self._votes if v == s)
-                  for s in (SIDE_LEFT, SIDE_RIGHT)}
+        counts = {sd: sum(1 for v in self._votes if v == sd)
+                  for sd in (SIDE_LEFT, SIDE_RIGHT)}
         best = max(counts, key=counts.get)
         other = SIDE_RIGHT if best == SIDE_LEFT else SIDE_LEFT
-        if counts[best] >= self.LOCK_VOTES:
-            self.side, self.locked = best, True
-        elif not self.locked and counts[best] > counts[other]:
+        if counts[best] > counts[other]:
             self.side = best
         return self.side
-
-
-# ── HUD ──────────────────────────────────────────────────────────────────────────
-def _ascii(txt):
-    """cv2.putText draws ASCII only; anything else shows as '???'."""
-    return (str(txt).replace("\u2014", "-").replace("\u2013", "-")
-            .replace("\u2264", "<=").encode("ascii", "replace").decode("ascii"))
 
 
 def draw_panel(img, x1, y1, x2, y2, colour=C_DARK, alpha=0.65):
@@ -1046,7 +1110,10 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
         y += dy
 
     line(f"SHOULDER STRETCH  [{st.name}]", colour, 0.68, 30)
-    line(f"Side: {side or '--'}    Pass: gap <= {tracker.pass_ratio:.2f} palm")
+    def mark(sd):
+        return "DONE" if tracker.side_done(sd) else "...."
+    line(f"Both sides needed:  R {mark(SIDE_RIGHT)}   L {mark(SIDE_LEFT)}"
+         f"    now: {side or '--'}")
     if ratio is not None:
         line(f"Gap: {ratio:.2f} palm",
              C_OK if ratio <= tracker.pass_ratio else C_TEXT)
@@ -1057,7 +1124,8 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
     left = tracker.cap_remaining()
     line(f"Touch: {tracker.touch_count} / {tracker.touch_frames}"
          f"   (closest {best})"
-         + (f"   {left:.0f}s left" if left is not None else ""))
+         + (f"   {left:.0f}s left of {tracker.cap_s:.0f}" if left is not None
+            else f"   {tracker.cap_s:.0f}s once you start"))
 
     if tracker.status_msg:
         draw_panel(frame, 12, h - 54, min(w - 12, 12 + 13 * len(tracker.status_msg) + 24), h - 12)
@@ -1075,7 +1143,7 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
     return frame
 
 
-def _stage_shoulder_stretch(session_id, result, side, rating=None):
+def _stage_shoulder_stretch(session_id, result, rating=None):
     """Stages the result on the server for human review/save on screen3 —
     does NOT write to the database directly."""
     try:
@@ -1085,7 +1153,10 @@ def _stage_shoulder_stretch(session_id, result, side, rating=None):
             json={
                 "session_id":     session_id,
                 "passed":         bool(result.get("passed")),
-                "side":           side,
+                "left_passed":    bool(result.get("left_passed")),
+                "right_passed":   bool(result.get("right_passed")),
+                "best_gap_left":  result.get("best_gap_left"),
+                "best_gap_right": result.get("best_gap_right"),
                 "best_gap_ratio": result.get("best_gap_ratio"),
                 "rating":         rating,
             },
@@ -1127,8 +1198,6 @@ def ensure_model(path):
 def main():
     parser = argparse.ArgumentParser(description="Shoulder Stretch Test")
     parser.add_argument("--source", default="0")
-    parser.add_argument("--side", choices=[SIDE_AUTO, SIDE_LEFT, SIDE_RIGHT], default=SIDE_AUTO,
-                        help="Which arm reaches over the shoulder (default: auto-detect)")
     parser.add_argument("--pass-ratio", type=float, default=PASS_RATIO,
                         help=f"Fingertip gap / palm length that counts as a touch "
                              f"(default {PASS_RATIO:.2f})")
@@ -1157,12 +1226,11 @@ def main():
           f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
     print("[INFO] Camera BEHIND the participant. One arm over the shoulder, the "
           "other up the back, fingertips together between the shoulder blades.")
-    print("[INFO] 1 = pin LEFT arm  |  2 = pin RIGHT arm  |  0 = auto  |  "
-          "E = end trial  |  R = reset  |  Q = quit\n")
+    print("[INFO] E = end trial  |  R = reset  |  Q = quit\n")
 
     tracker = ShoulderStretchTracker(pass_ratio=args.pass_ratio,
                                      touch_frames=args.touch_frames)
-    selector = SideSelector(forced=args.side)
+    selector = SideVoter()
     smooth = MedianSmoother(args.smooth)
     lock = ParticipantLock()
     staged = False
@@ -1243,10 +1311,15 @@ def main():
 
             reading = frame_gap_ratio(h_result.hand_landmarks, body_lms, fw, fh)
 
-            # The side only while the stretch is in view (a valid reading), from
-            # a body matched THIS frame, and never after the verdict.
-            if fresh is not None and reading is not None and not tracker.resolved:
-                selector.update(detect_side(fresh, fw, fh))
+            # Which arm is over the shoulder, only while the stretch is in
+            # view. Read from the HANDS (the down-pointing hand came over the
+            # shoulder); the elbows are a fallback for a frame the hands
+            # can't name.
+            if reading is not None and not tracker.resolved:
+                named = side_from_hands(h_result.hand_landmarks, body_lms, fw, fh)
+                if named is None and fresh is not None:
+                    named = detect_side(fresh, fw, fh)
+                selector.update(named)
             side = selector.side
             if reading is not None:
                 ratio = reading.ratio
@@ -1256,7 +1329,7 @@ def main():
 
             outcome = tracker.update(ratio, now=now, side=side)
             if outcome is not None and not staged and args.session_id:
-                _stage_shoulder_stretch(args.session_id, outcome, side)
+                _stage_shoulder_stretch(args.session_id, outcome)
                 staged = True
 
             if args.debug:
@@ -1275,19 +1348,8 @@ def main():
             elif key == ord("e"):
                 outcome = tracker.end_trial(by="coach")
                 if outcome is not None and not staged and args.session_id:
-                    _stage_shoulder_stretch(args.session_id, outcome, side)
+                    _stage_shoulder_stretch(args.session_id, outcome)
                     staged = True
-            elif key in (ord("1"), ord("2"), ord("0")):
-                # A pin only relabels the trial — the fingertip gap is the
-                # same measurement whichever arm is on top — so banked contact
-                # is kept, the same rule the web engine follows. Closed off
-                # once a verdict exists so a result can't be relabelled.
-                pinned = {ord("1"): SIDE_LEFT,
-                          ord("2"): SIDE_RIGHT,
-                          ord("0"): SIDE_AUTO}[key]
-                if not tracker.resolved:
-                    selector.pin(pinned)
-                    side = selector.side
             elif key == ord("r"):
                 tracker.reset()
                 selector.reset()
@@ -1306,12 +1368,16 @@ def main():
     res = tracker.result()
     print("\n── Shoulder Stretch ─────────────────────────")
     print(f"  Result       : {'PASS' if res['passed'] else 'FAIL / not completed'}")
-    print(f"  Side         : {res['side'] or '--'}  (arm over the shoulder)")
+    print(f"  Right side   : {'touched' if res['right_passed'] else 'not done'}"
+          f"   (closest {res['best_gap_right']})")
+    print(f"  Left side    : {'touched' if res['left_passed'] else 'not done'}"
+          f"   (closest {res['best_gap_left']})")
     print(f"  Closest gap  : {res['best_gap_ratio']} palm "
-          f"(pass <= {res['threshold_ratio']:.2f})")
-    print(f"  Touch frames : {res['touch_frames']} / {res['required_frames']} "
-          f"in {res['window_s']:.0f} s  (qualifying readings in trial: "
-          f"{res['qualifying_readings_total']}, ended by {res['ended_by']})")
+          f"(pass <= {res['threshold_ratio']:.2f}, both sides needed)")
+    print(f"  Trial        : {res['required_frames']} readings per side within "
+          f"{res['window_s']:.0f} s, {res['trial_cap_s']:.0f} s for the whole "
+          f"test (qualifying readings: {res['qualifying_readings_total']}, "
+          f"ended by {res['ended_by']})")
 
 
 if __name__ == "__main__":
