@@ -53,6 +53,20 @@ CHIN_MARGIN_FRAC    = 0.01   # chin may finish this far below the bar and still 
 # how close they are to the camera.
 CHIN_BELOW_MOUTH_K  = 1.3
 
+# The chin is a guess, so it doesn't decide a rep on its own: the shoulders
+# must also have come up past the elbows. Measured on the FMS demo footage
+# (three reps), the shoulder sits 0.88 upper-arm lengths ABOVE the elbow at the
+# top and 0.89 BELOW it at the bottom, so the signal swings right through zero
+# every rep and there is no honest reading anywhere near the middle.
+# Measured in upper arms rather than fractions of the frame so it holds at any
+# camera distance, the same way the chin-to-bar comparison does.
+# 0.40 is set at roughly half the lift every good rep in the footage shows.
+# Be straight about it: that footage contains no SHORT rep, so this line is
+# placed by judgement between two measured extremes, not measured itself.
+# It exists to stop the chin estimate being the only thing standing between a
+# tilted head and a rep — a head can tilt, but it cannot lift the shoulders.
+SHOULDER_LIFT_MIN   = 0.40
+
 # A rep can only begin from the hanging position: hands on the bar, which puts
 # the wrists this far above the shoulders. Measured on the demo footage, the
 # gap at the bottom of a rep runs 0.12-0.18 of frame height, so 0.05 passes
@@ -75,6 +89,7 @@ PAUSE_POS_TOL       = 0.012  # chin travel within the window (fraction of frame)
 # angle thresholds when the processing rate drops to ~10 fps on a weak phone.
 ANGLE_BUFFER_LEN    = 3     # rolling median smoothing window (elbow angle)
 NOSE_BUFFER_LEN     = 3     # rolling median smoothing window (head position)
+LIFT_BUFFER_LEN     = 3     # rolling median smoothing window (shoulder lift)
 
 # MediaPipe Pose landmark indices (same numbering across all API versions)
 IDX = {
@@ -131,6 +146,20 @@ def chin_y(lms):
     return mouth + CHIN_BELOW_MOUTH_K * (mouth - nose)
 
 
+def shoulder_lift(shoulder_px, elbow_px):
+    """How far the shoulder has risen above the elbow, in upper-arm lengths
+    (+ = shoulder above elbow, - = below).
+
+    Divided by the shoulder->elbow distance, which IS the upper arm and doesn't
+    change as the elbow bends, so the reading means the same whether the camera
+    is two metres away or five. Unlike the chin this comes from two real
+    landmarks, so a head tilt or an invented face can't move it."""
+    arm = float(np.linalg.norm(elbow_px[:2] - shoulder_px[:2]))
+    if arm < 1e-3:
+        return 0.0
+    return float((elbow_px[1] - shoulder_px[1]) / arm)
+
+
 def bar_y(lms, wrist_idx):
     """Height of the bar, 0..1 of frame height. The participant grips the bar,
     so the wrists mark it — both when they're both visible, otherwise the one
@@ -152,7 +181,11 @@ class PullUpCounter:
 
     A rep is one elbow flex-and-extend cycle, begun from a position where the
     hands are clearly above the shoulders (i.e. actually gripping the bar),
-    in which the chin reached the bar — the protocol's own criterion.
+    in which the chin reached the bar — the protocol's own criterion — AND the
+    shoulders came up past the elbows. Both have to happen in the same cycle.
+    The chin is only ever an estimate projected from the face, so on its own it
+    can be moved by a tilted head; the shoulder lift is two real landmarks and
+    takes an actual pull to produce.
     `stopped` goes True once the participant holds still for PAUSE_SEC, which
     is how the test is meant to end.
     """
@@ -166,20 +199,25 @@ class PullUpCounter:
         self.angle = 0.0
         self.gap = 0.0           # how far the chin still is below the bar (+ = below)
         self.reached = False     # chin has reached the bar during the rep in progress
+        self.lift_arms = 0.0     # shoulder height above the elbow, in upper arms
+        self.lifted = False      # shoulders have cleared the elbows during this rep
         self.hung = False        # hands seen above the shoulders — on the bar
         self.stopped = False     # ended by the two-second pause rule
         self.idle_sec = 0.0
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
         self.chin_buf = deque(maxlen=NOSE_BUFFER_LEN)
+        self.lift_buf = deque(maxlen=LIFT_BUFFER_LEN)
         self._ref = None         # last pose the participant actually moved away from
         self._last_move = None   # when that happened
         self._last_seen = None   # when a frame last reached the counter
         self._armed = False      # pause rule only applies once they've begun
 
-    def update(self, elbow_angle, chin, bar, shoulder, now=None, counting=True):
+    def update(self, elbow_angle, chin, bar, shoulder, lift,
+               now=None, counting=True):
         """Feed one frame. `chin`, `bar` and `shoulder` are heights in 0..1 of
-        frame height (bigger = lower on screen). Returns True iff this frame
-        completed a rep."""
+        frame height (bigger = lower on screen); `lift` is the shoulder's
+        height above the elbow in upper-arm lengths, from shoulder_lift().
+        Returns True iff this frame completed a rep."""
         now = time.time() if now is None else now
 
         self.angle_buf.append(elbow_angle)
@@ -187,9 +225,12 @@ class PullUpCounter:
         self.chin_buf.append(chin)
         chin = float(np.median(self.chin_buf))
         self.gap = chin - bar
+        self.lift_buf.append(lift)
+        self.lift_arms = float(np.median(self.lift_buf))
 
         if not counting or self.stopped:
             self.reached = False
+            self.lifted = False
             return False
 
         # ── two-second pause rule ──────────────────────────────────────────
@@ -215,6 +256,7 @@ class PullUpCounter:
             # with nothing to show the coach it happened.
             self.phase = "extended"
             self.reached = False
+            self.lifted = False
             self.hung = False
 
         if self._ref is None:
@@ -242,21 +284,29 @@ class PullUpCounter:
             if self.hung and self.angle <= ELBOW_FLEX_ANGLE:
                 self.phase = "flexed"
                 self.reached = False
+                self.lifted = False
                 self._armed = True
             return False
 
-        # phase == "flexed": did the chin make it up to the bar this rep?
-        # `chin` is a median of 3, so the chin has to be at the bar for two
-        # frames (~0.1 s) before it counts — a single glitched landmark frame
-        # can't award a rep, while a real turnaround at the top dwells there
-        # for longer than that.
+        # phase == "flexed": did the chin make it up to the bar this rep, and
+        # did the shoulders clear the elbows? Both are medians of 3, so each has
+        # to hold for two frames (~0.1 s) before it registers — a single
+        # glitched landmark frame can't award a rep, while a real turnaround at
+        # the top dwells there for longer than that.
         if self.gap <= CHIN_MARGIN_FRAC:
             self.reached = True
+        if self.lift_arms >= SHOULDER_LIFT_MIN:
+            self.lifted = True
         if self.angle >= ELBOW_EXTEND_ANGLE:
             self.phase = "extended"
             # The next rep has to prove the hanging position for itself.
             self.hung = False
-            if self.reached:
+            # Both signals, in the same cycle. They fail in different ways —
+            # the chin drifts with the head, the lift needs the shoulder and
+            # elbow tracked — so requiring both means one of them being fooled
+            # can cost a real rep (which the coach can add back on the review
+            # screen) but can never invent one.
+            if self.reached and self.lifted:
                 self.count += 1
                 return True
         return False
@@ -276,7 +326,7 @@ def draw_panel(img, x1, y1, x2, y2, r=12, colour=C_DARK, alpha=0.65):
 
 
 def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_started,
-            stopped=False, browser_mode=False, hung=True):
+            stopped=False, browser_mode=False, hung=True, lifted=False):
     h, w = frame.shape[:2]
 
     # Count
@@ -302,13 +352,19 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
                         (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, C_YELLOW, 2, cv2.LINE_AA)
         else:
             arrow = "^ PULL UP" if phase == "extended" else "v RETURN"
-            pc = C_ORANGE if phase == "extended" else C_GREEN
-            if reached:
-                chin_txt, cc = "CHIN AT BAR", C_GREEN
+            # Both checks have to pass in one cycle, so the line says which of
+            # them is still missing — a coach watching a rep that didn't count
+            # can see whether the chin came short or the body never came up.
+            if reached and lifted:
+                chin_txt, cc = "CHIN AT BAR + SHOULDERS UP", C_GREEN
+            elif reached:
+                chin_txt, cc = "Chin at bar - pull the body higher", C_ORANGE
+            elif lifted:
+                chin_txt, cc = "Shoulders up - chin not at bar yet", C_ORANGE
             else:
                 chin_txt, cc = f"Chin {gap*100:.1f}% below bar", C_ORANGE
             cv2.putText(frame, f"{chin_txt}  {arrow}",
-                        (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, cc, 2, cv2.LINE_AA)
+                        (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cc, 2, cv2.LINE_AA)
     else:
         # The bar itself is never detected — the wrists stand in for it — so
         # the message names what actually has to be visible.
@@ -489,6 +545,7 @@ def run(source):
                     chin_y(lms),
                     bar_y(lms, wr_i),
                     lms[s_i].y,
+                    shoulder_lift(shoulder, elbow),
                     counting=test_started,
                 )
                 if scored:
@@ -496,6 +553,7 @@ def run(source):
                         "rep"         : counter.count,
                         "elbow_deg"   : round(counter.angle, 2),
                         "chin_gap_pct": round(counter.gap * 100, 2),
+                        "lift_arms"   : round(counter.lift_arms, 2),
                         "timestamp_s" : round(elapsed, 3),
                     })
                 if counter.stopped:
@@ -505,7 +563,8 @@ def run(source):
 
         draw_ui(frame, counter.count, counter.phase, counter.angle, elapsed,
                 counter.gap, counter.reached, body_visible, test_started,
-                stopped=counter.stopped, hung=counter.hung)
+                stopped=counter.stopped, hung=counter.hung,
+                lifted=counter.lifted)
         cv2.imshow(WIN, frame)
 
         key = cv2.waitKey(1) & 0xFF

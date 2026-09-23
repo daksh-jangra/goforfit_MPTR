@@ -973,6 +973,10 @@ class PullUpEngine(BaseWebEngine):
                 pullup_mod.chin_y(lms),
                 pullup_mod.bar_y(lms, wr_i),
                 lms[s_i].y,
+                # Second signal: the chin is projected from the face, so it
+                # doesn't decide a rep alone — the shoulders must also have
+                # come up past the elbows.
+                pullup_mod.shoulder_lift(shoulder, elbow),
                 counting=test_started,
             )
         return True
@@ -1062,7 +1066,10 @@ class PullUpEngine(BaseWebEngine):
                 extra = {}
                 hung = getattr(self.counter, "hung", None)
                 if hung is not None:
+                    # Both of these are the modified pull-up counter's, so they
+                    # travel together off the one check.
                     extra["hung"] = hung
+                    extra["lifted"] = self.counter.lifted
                 lift = getattr(self.counter, "lift", None)
                 if lift is not None:
                     extra["lift"] = lift
