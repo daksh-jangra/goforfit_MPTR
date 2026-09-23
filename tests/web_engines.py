@@ -1066,6 +1066,7 @@ class PullUpEngine(BaseWebEngine):
                 lift = getattr(self.counter, "lift", None)
                 if lift is not None:
                     extra["lift"] = lift
+                    extra["back_view"] = self.counter.back_view
                 self._hud.draw_ui(frame, count, phase, angle, elapsed, gap, reached,
                                   body_visible, test_started, stopped=stopped,
                                   browser_mode=True, **extra)
