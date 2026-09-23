@@ -133,7 +133,7 @@ def body(scale=1.0, over=LEFT, lift=None, drop=None, vis_=0.9):
     })
 
 
-def hands(ratio, scale=1.0, palm_frac=0.30):
+def hands(ratio, scale=1.0, palm_frac=0.30, over=LEFT):
     """The participant's two hands, placed so the contact metric comes out at
     exactly `ratio`: each hand's wrist sits on its own pose wrist and the
     fingertips are (ratio * palm) apart between the shoulder blades."""
@@ -141,20 +141,22 @@ def hands(ratio, scale=1.0, palm_frac=0.30):
     palm = palm_frac * sep
     gap = ratio * palm
     ty = CY + 0.55 * sep
-    # The stretch: the top hand comes DOWN over the shoulder, the bottom hand
+    # The stretch: the top hand comes DOWN over the shoulder (so its wrist sits
+    # toward THAT shoulder, which is what names the side), the bottom hand
     # comes UP the back, and the fingertips meet between the shoulder blades.
-    return [make_hand((CX - gap / 2, ty - 1.8 * palm), palm, (CX - gap / 2, ty), down=True),
-            make_hand((CX + gap / 2, ty + 1.8 * palm), palm, (CX + gap / 2, ty))]
+    dx = (0.40 * sep) if over == RIGHT else (-0.40 * sep)
+    return [make_hand((CX + dx, ty - 1.8 * palm), palm, (CX - gap / 2, ty), down=True),
+            make_hand((CX, ty + 1.8 * palm), palm, (CX + gap / 2, ty))]
 
 
 def scene(ratio, scale=1.0, over=LEFT):
     """(pose, hands) for one frame of a participant holding the stretch with a
     fingertip gap of `ratio` palm lengths."""
-    return body(scale=scale, over=over), hands(ratio, scale=scale)
+    return body(scale=scale, over=over), hands(ratio, scale=scale, over=over)
 
 
 # ── drivers ──────────────────────────────────────────────────────────────────
-def feed(tracker, sequence, fps=20, t0=0.0, side=None):
+def feed(tracker, sequence, fps=20, t0=0.0, side=LEFT):
     """Drive the tracker through (duration_seconds, ratio_or_None) steps at a
     fixed frame rate with an injected clock, so the checks are deterministic.
     Returns (end_time, [(t, result), ...])."""
@@ -183,15 +185,16 @@ def feed_frames(tracker, frames, fps=20, t0=0.0, smooth=None, selector=None):
     for pose_lms, hand_list in frames:
         ratio, side = None, (selector.side if selector else None)
         if pose_lms is not None:
-            if selector is not None:
-                side = selector.update(ss.detect_side(pose_lms, FW, FH))
             reading = ss.frame_gap_ratio(hand_list, pose_lms, FW, FH)
             if reading is not None:
+                # The engine names the arm from the HANDS, with the elbows as
+                # a fallback, and only while the stretch is in view.
+                if selector is not None:
+                    named = ss.side_from_hands(hand_list, pose_lms, FW, FH)
+                    if named is None:
+                        named = ss.detect_side(pose_lms, FW, FH)
+                    side = selector.update(named)
                 ratio = smooth.push(reading.ratio) if smooth else reading.ratio
-            elif smooth:
-                smooth.reset()
-        elif smooth:
-            smooth.reset()
         out = tracker.update(ratio, now=t, side=side)
         if out:
             emitted.append((t, out))
@@ -202,6 +205,20 @@ def feed_frames(tracker, frames, fps=20, t0=0.0, smooth=None, selector=None):
 def held(n, ratio, scale=1.0, over=LEFT):
     """n identical frames of the stretch being held at `ratio`."""
     return [scene(ratio, scale=scale, over=over) for _ in range(n)]
+
+
+def both_sides(n=8, ratio=0.12, scale=1.0):
+    """A whole passing test: the right arm over, then the left."""
+    return held(n, ratio, scale=scale, over=RIGHT) + held(n, ratio, scale=scale, over=LEFT)
+
+
+def bank(tracker, side, ratio=0.12, t0=0.0, fps=20):
+    """Bank one side's touch straight into the tracker (no landmarks)."""
+    t = t0
+    for _ in range(ss.TOUCH_READINGS):
+        tracker.update(ratio, now=t, side=side)
+        t += 1.0 / fps
+    return t
 
 
 # ── the contact metric ───────────────────────────────────────────────────────
@@ -420,71 +437,95 @@ def test_side_needs_the_joints_to_be_visible():
         "named the trial from landmarks the model could not see"
 
 
-def test_side_selector_settles_and_noise_cannot_flip_it():
-    sel = ss.SideSelector()
-    assert sel.side is None and not sel.locked
+def test_the_side_voter_rides_out_a_stray_mis_read():
+    v = ss.SideVoter()
+    assert v.side is None
     for _ in range(3):
-        sel.update(None)                     # ambiguous frames vote for nothing
-    assert sel.side is None, "an ambiguous frame named the trial"
-
-    for _ in range(ss.SideSelector.LOCK_VOTES):
-        sel.update(LEFT)
-    assert sel.side == LEFT and sel.locked, f"side {sel.side}, locked {sel.locked}"
-
-    # Alternating noise can never reach 6 of 9 — the label must not follow it.
-    for i in range(40):
-        sel.update(RIGHT if i % 2 else LEFT)
-    assert sel.side == LEFT, "noise flipped the label mid-trial"
+        v.update(None)                       # frames that name nothing
+    assert v.side is None, "a frame naming nothing named the trial"
+    for _ in range(3):
+        v.update(RIGHT)
+    assert v.side == RIGHT
+    v.update(LEFT)                           # one stray frame
+    assert v.side == RIGHT, "a single mis-read flipped the side"
 
 
-def test_a_wrong_early_auto_lock_can_be_voted_out():
-    sel = ss.SideSelector()
-    for _ in range(ss.SideSelector.LOCK_VOTES):
-        sel.update(LEFT)
-    for _ in range(ss.SideSelector.VOTE_WINDOW):
-        sel.update(RIGHT)
-    assert sel.side == RIGHT, "a decisive run for the other side could not fix a wrong guess"
+def test_the_side_voter_follows_the_student_when_they_switch_arms():
+    # Both sides must be banked in one trial, so the label MUST be able to
+    # change — the old locking selector would have frozen on the first arm.
+    v = ss.SideVoter()
+    for _ in range(ss.SideVoter.VOTE_WINDOW):
+        v.update(RIGHT)
+    assert v.side == RIGHT
+    for _ in range(ss.SideVoter.VOTE_WINDOW):
+        v.update(LEFT)
+    assert v.side == LEFT, "the side could not follow the student to the other arm"
 
 
-def test_pinned_side_overrides_auto_detection():
-    sel = ss.SideSelector(forced=RIGHT)
-    assert sel.side == RIGHT and sel.locked, "a pin is a locked selector"
-    for _ in range(20):
-        sel.update(LEFT)
-    assert sel.side == RIGHT, "auto detection overrode the coach's pin"
-    sel.reset()
-    assert sel.side == RIGHT and sel.locked, "reset dropped the pin"
-
-    auto = ss.SideSelector(forced=ss.SIDE_AUTO)
-    assert auto.side is None and not auto.locked
+def test_the_side_is_named_from_the_hands():
+    # The down-pointing hand came over the shoulder, so it names the arm.
+    for over in (LEFT, RIGHT):
+        pose_lms, hand_list = scene(0.12, over=over)
+        assert ss.side_from_hands(hand_list, pose_lms, FW, FH) == over
 
 
-def test_the_side_pin_reaches_the_result():
+def test_the_side_reaches_the_result():
     tr = ss.ShoulderStretchTracker()
-    sel = ss.SideSelector(forced=RIGHT)
-    # The body on camera is doing a LEFT stretch; the coach pinned RIGHT.
-    _, emitted = feed_frames(tr, held(8, 0.10, over=LEFT), selector=sel)
-    assert emitted, "a clean touch did not resolve"
-    assert emitted[0][1]["side"] == RIGHT, \
-        f"staged side {emitted[0][1]['side']} ignored the pin"
+    _, emitted = feed_frames(tr, both_sides(), selector=ss.SideVoter())
+    assert emitted, "a clean touch on both sides did not resolve"
+    res = emitted[0][1]
+    assert res["right_passed"] and res["left_passed"], res
 
 
-# ── the verdict ──────────────────────────────────────────────────────────────
-def test_a_sustained_touch_passes():
+def test_a_sustained_touch_on_both_sides_passes():
     # Run it at several frame rates: a weak phone manages ~8 fps in this pose
     # and the verdict must not depend on that.
     for fps in (8, 10, 15, 30):
         tr = ss.ShoulderStretchTracker()
-        sel = ss.SideSelector()
-        _, emitted = feed_frames(tr, held(12, 0.12), fps=fps,
-                                 smooth=ss.MedianSmoother(), selector=sel)
-        assert tr.passed, f"{fps} fps: a held touch did not pass ({tr.state})"
+        _, emitted = feed_frames(tr, both_sides(12, 0.12), fps=fps,
+                                 smooth=ss.MedianSmoother(), selector=ss.SideVoter())
+        assert tr.passed, f"{fps} fps: a held touch on both sides did not pass ({tr.state})"
         assert tr.state is ss.State.PASSED
         assert len(emitted) == 1, f"{fps} fps: emitted {len(emitted)} results, want 1"
         res = emitted[0][1]
         assert res["verdict_by"] == "auto", res
-        assert res["side"] == LEFT, f"side {res['side']}"
+        assert res["right_passed"] and res["left_passed"], res
         assert abs(res["best_gap_ratio"] - 0.12) < 0.01, res
+
+
+def test_one_side_alone_is_not_a_pass():
+    # The whole point of the both-sides rule.
+    tr = ss.ShoulderStretchTracker()
+    _, emitted = feed_frames(tr, held(20, 0.10, over=RIGHT), selector=ss.SideVoter())
+    assert not tr.passed, "one side alone passed the test"
+    assert not emitted, "a one-sided trial resolved early"
+    res = tr.end_trial()
+    assert res["right_passed"] and not res["left_passed"], res
+    assert res["passed"] is False
+
+
+def test_the_trial_is_capped_at_fifteen_seconds_from_the_first_attempt():
+    tr = ss.ShoulderStretchTracker()
+    # Nothing happens for a while: the clock must NOT be running yet.
+    feed(tr, [(30.0, None)])
+    assert tr.cap_remaining() is None, "the clock started before the first attempt"
+    t = bank(tr, RIGHT, t0=30.0)                 # first attempt -> clock starts
+    assert abs(tr.cap_remaining(now=t) - (ss.TRIAL_CAP_S - (t - 30.0))) < 0.01
+    # ...and the second side arrives too late.
+    res = tr.update(0.10, now=30.0 + ss.TRIAL_CAP_S + 0.1, side=LEFT)
+    assert res is not None and res["passed"] is False, res
+    assert res["ended_by"] == "cap", res
+
+
+def test_both_sides_inside_the_cap_pass():
+    tr = ss.ShoulderStretchTracker()
+    t = bank(tr, RIGHT, t0=0.0)
+    res = None
+    for _ in range(ss.TOUCH_READINGS):
+        res = tr.update(0.10, now=t, side=LEFT) or res
+        t += 0.05
+    assert res is not None and res["passed"] is True, res
+    assert res["ended_by"] == "pass"
 
 
 def test_a_one_inch_miss_fails():
@@ -556,7 +597,7 @@ def test_a_jittery_frame_does_not_throw_away_the_run():
     assert tr.touch_count == banked, "a 0.22 blip zeroed the run"
     assert tr.state is ss.State.TOUCHING
     feed(tr, [(0.05 * (ss.TOUCH_READINGS - banked), 0.12)], t0=0.20)
-    assert tr.passed, "could not finish the run after one jittery frame"
+    assert tr.side_done(LEFT), "could not finish the side after one jittery frame"
 
 
 def test_a_real_separation_does_clear_the_run():
@@ -572,18 +613,18 @@ def test_intermittent_hand_detection_still_scores():
     # seen from the back, so the detector returns two hands, then one, then
     # none, then two again. The trial must survive that, not restart on it.
     tr = ss.ShoulderStretchTracker()
-    sel = ss.SideSelector()
-    pose_lms, hand_list = scene(0.12)
     frames = []
-    for i in range(24):
-        if i % 3 == 1:
-            frames.append((pose_lms, hand_list[:1]))     # one hand found
-        elif i % 3 == 2:
-            frames.append((pose_lms, []))                # neither hand found
-        else:
-            frames.append((pose_lms, hand_list))         # both
+    for over in (RIGHT, LEFT):
+        pose_lms, hand_list = scene(0.12, over=over)
+        for i in range(24):
+            if i % 3 == 1:
+                frames.append((pose_lms, hand_list[:1]))   # one hand found
+            elif i % 3 == 2:
+                frames.append((pose_lms, []))              # neither hand found
+            else:
+                frames.append((pose_lms, hand_list))       # both
     _, emitted = feed_frames(tr, frames, fps=20,
-                             smooth=ss.MedianSmoother(), selector=sel)
+                             smooth=ss.MedianSmoother(), selector=ss.SideVoter())
     assert tr.passed, f"a held touch failed on an intermittent feed ({tr.state})"
     assert len(emitted) == 1, f"emitted {len(emitted)} results"
 
@@ -595,7 +636,7 @@ def test_a_short_dropout_keeps_the_banked_touch():
     t, _ = feed(tr, [(0.20, None)], t0=t)          # inside DROPOUT_GRACE_S
     assert tr.touch_count == 2, "a 0.2 s dropout voided the run"
     feed(tr, [(0.15, 0.12)], t0=t)
-    assert tr.passed, "could not finish the run through a short dropout"
+    assert tr.side_done(LEFT), "could not finish the side through a short dropout"
 
 
 def test_touches_outside_the_window_do_not_add_up():
@@ -633,9 +674,9 @@ def test_an_all_none_stream_is_survivable():
 
 def test_a_frame_with_no_pose_at_all_is_survivable():
     tr = ss.ShoulderStretchTracker()
-    sel = ss.SideSelector()
-    frames = [(None, [])] * 10 + held(8, 0.12)
-    _, emitted = feed_frames(tr, frames, smooth=ss.MedianSmoother(), selector=sel)
+    frames = [(None, [])] * 10 + both_sides()
+    _, emitted = feed_frames(tr, frames, smooth=ss.MedianSmoother(),
+                             selector=ss.SideVoter())
     assert tr.passed and len(emitted) == 1
 
 
@@ -655,7 +696,7 @@ def test_the_smoother_forgets_across_a_dropout():
 # ── trial lifecycle ──────────────────────────────────────────────────────────
 def test_a_resolved_trial_is_frozen():
     tr = ss.ShoulderStretchTracker()
-    _, emitted = feed_frames(tr, held(8, 0.12))
+    _, emitted = feed_frames(tr, both_sides(), selector=ss.SideVoter())
     assert tr.passed
     verdict = dict(emitted[0][1])
     # More frames arrive after the verdict — the loop keeps running until the
@@ -665,14 +706,6 @@ def test_a_resolved_trial_is_frozen():
     assert tr.result()["passed"] == verdict["passed"]
     assert tr.result()["best_gap_ratio"] == verdict["best_gap_ratio"]
     assert tr.end_trial() is None, "end_trial re-resolved a decided trial"
-    # NOTE: "side" is deliberately not asserted here. update() records the
-    # side BEFORE the resolved guard, so a later frame can still move
-    # tracker.side after the verdict (see the note in this file's report /
-    # shoulder_stretch.ShoulderStretchTracker.update). The staged dict is
-    # taken at the resolving frame and is unaffected, which is why nothing
-    # reaches the database wrong today — but _state_locked() reads tr.side
-    # live, so screen4 can show a side the staged row does not have.
-
 
 def test_end_trial_resolves_once():
     tr = ss.ShoulderStretchTracker()
@@ -694,15 +727,16 @@ def test_there_is_no_coach_override():
 
 def test_reset_clears_everything():
     tr = ss.ShoulderStretchTracker()
-    feed_frames(tr, held(8, 0.12))
+    feed_frames(tr, both_sides(), selector=ss.SideVoter())
     assert tr.passed
     tr.reset()
     assert tr.state is ss.State.READY
     assert not tr.passed and not tr.resolved
     assert tr.touch_count == 0 and tr.frames_seen == 0
     assert tr.best_gap_ratio is None and tr.ratio is None and tr.side is None
+    assert not tr.side_done(LEFT) and not tr.side_done(RIGHT)
     # ...and the same tracker can run a fresh trial.
-    feed_frames(tr, held(8, 0.12))
+    feed_frames(tr, both_sides(), selector=ss.SideVoter())
     assert tr.passed, "a reset tracker could not score again"
 
 
@@ -710,14 +744,15 @@ def test_result_dict_is_the_shape_the_wiring_expects():
     # app.py's _stage closure and db.save_shoulder_stretch are positional /
     # keyed on exactly these names; a rename here fails silently at save time.
     tr = ss.ShoulderStretchTracker()
-    _, emitted = feed_frames(tr, held(8, 0.12), selector=ss.SideSelector())
+    _, emitted = feed_frames(tr, both_sides(), selector=ss.SideVoter())
     res = emitted[0][1]
-    assert set(res) == {"passed", "side", "best_gap_ratio", "threshold_ratio",
-                        "touch_frames", "required_frames", "window_s",
-                        "qualifying_readings_total", "ended_by",
-                        "verdict_by"}, res
+    assert set(res) == {"passed", "left_passed", "right_passed",
+                        "best_gap_left", "best_gap_right", "best_gap_ratio",
+                        "threshold_ratio", "required_frames", "window_s",
+                        "trial_cap_s", "qualifying_readings_total",
+                        "ended_by", "verdict_by"}, res
     assert isinstance(res["passed"], bool)
-    assert res["side"] in (LEFT, RIGHT, None)
+    assert res["passed"] == (res["left_passed"] and res["right_passed"])
     assert res["threshold_ratio"] == ss.PASS_RATIO
     assert res["required_frames"] == ss.TOUCH_FRAMES
     assert round(res["best_gap_ratio"], 3) == res["best_gap_ratio"], \
@@ -727,9 +762,11 @@ def test_result_dict_is_the_shape_the_wiring_expects():
 def test_touch_progress_tracks_the_run():
     tr = ss.ShoulderStretchTracker()
     assert tr.touch_progress() == 0.0
-    feed(tr, [(0.10, 0.12)])
-    assert 0.0 < tr.touch_progress() < 1.0, tr.touch_progress()
-    feed(tr, [(0.15, 0.12)], t0=0.10)
+    feed(tr, [(0.10, 0.12)], side=RIGHT)
+    assert 0.0 < tr.touch_progress() < 0.5, tr.touch_progress()
+    t = bank(tr, RIGHT, t0=1.0)
+    assert abs(tr.touch_progress() - 0.5) < 1e-6, "one banked side is half the test"
+    bank(tr, LEFT, t0=t)
     assert tr.passed and tr.touch_progress() == 1.0
 
 
