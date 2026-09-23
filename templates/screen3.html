@@ -428,7 +428,22 @@
         // would make a Fail impossible to save. These branches skip them.
         const PASS_FAIL_TESTS = new Set(['reverse_curl', 'shoulder_stretch']);
         const IS_PASS_FAIL = PASS_FAIL_TESTS.has(testId);
+        // Rep counts where zero is a real score: a kid who manages no pull-up
+        // scored 0, not "nothing measured". Every other measured test keeps the
+        // "positive number" guard, which is what stops an empty box being saved
+        // as a value; here an empty box is still refused, 0 is not.
+        const ZERO_OK = new Set(['pull_up', 'full_pull_up']).has(testId);
+        const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
+
+        // The override boxes are marked min="1" for measured tests; a rep count
+        // of 0 is valid, so the browser must not reject it.
+        if (ZERO_OK) {
+            document.querySelectorAll('#override-input').forEach(el => {
+                el.min = '0';
+                el.step = '1';
+            });
+        }
 
         let pendingResult = null;
 
@@ -588,8 +603,9 @@
                 return;
             }
             const v = parseFloat(input.value);
-            if (!v || v <= 0) {
-                msg.innerText = 'Please enter a valid positive number.';
+            if (badValue(v)) {
+                msg.innerText = ZERO_OK ? 'Please enter a number of reps (0 or more).'
+                                        : 'Please enter a valid positive number.';
                 msg.classList.remove('hidden');
                 return;
             }
@@ -630,7 +646,7 @@
                     pendingResult.rating = passFailLabel(passed);
                 } else {
                     const v = parseFloat(input.value);
-                    if (!v || v <= 0) {
+                    if (badValue(v)) {
                         showSaveMessage('Enter a value before saving.', false);
                         return;
                     }

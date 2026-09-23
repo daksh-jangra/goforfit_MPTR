@@ -978,9 +978,14 @@ class PullUpEngine(BaseWebEngine):
         return True
 
     def _stage_on_stop(self):
-        # Reached when the coach stops the test before the two-second pause rule
-        # fired; the loop stages it itself when the rule ends the test normally.
-        if self.counter.count > 0:
+        # Reached when the coach stops the test before the counter's own end
+        # rule fired; the loop stages it itself when that rule ends the test
+        # normally. A count of zero is staged like any other: a participant who
+        # manages no pull-up has scored 0, and leaving it unstaged forces the
+        # coach to either type a number the kid didn't earn or record nothing.
+        # Only a trial that actually started counts — stopping a test that was
+        # never begun must not stage a 0 nobody attempted.
+        if self.test_started:
             with self._lock:
                 self.last_save = self.counter.count
                 elapsed = (time.time() - self.start_time) if self.start_time else 0.0
