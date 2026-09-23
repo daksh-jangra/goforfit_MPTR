@@ -197,7 +197,8 @@ class PullUpCounter:
         self.count = 0
         self.phase = "extended"
         self.angle = 0.0
-        self.gap = 0.0           # how far the chin still is below the bar (+ = below)
+        self.gap = None          # how far the chin still is below the bar (+ = below),
+                                 # or None while the face can't be read
         self.reached = False     # chin has reached the bar during the rep in progress
         self.lift_arms = 0.0     # shoulder height above the elbow, in upper arms
         self.lifted = False      # shoulders have cleared the elbows during this rep
@@ -217,14 +218,23 @@ class PullUpCounter:
         """Feed one frame. `chin`, `bar` and `shoulder` are heights in 0..1 of
         frame height (bigger = lower on screen); `lift` is the shoulder's
         height above the elbow in upper-arm lengths, from shoulder_lift().
-        Returns True iff this frame completed a rep."""
+        `chin` is None when the face can't be read. Returns True iff this
+        frame completed a rep."""
         now = time.time() if now is None else now
 
         self.angle_buf.append(elbow_angle)
         self.angle = float(np.median(self.angle_buf))
-        self.chin_buf.append(chin)
-        chin = float(np.median(self.chin_buf))
-        self.gap = chin - bar
+        if chin is None:
+            # Face out of view. The arm is still tracked, so the test carries
+            # on and the rest of the frame is worth having — but the buffer is
+            # dropped rather than held, because a stale median would report a
+            # gap measured from wherever the head was last seen. No rep can be
+            # credited while this lasts, the chin being half the rule.
+            self.chin_buf.clear()
+            self.gap = None
+        else:
+            self.chin_buf.append(chin)
+            self.gap = float(np.median(self.chin_buf)) - bar
         self.lift_buf.append(lift)
         self.lift_arms = float(np.median(self.lift_buf))
 
@@ -259,11 +269,16 @@ class PullUpCounter:
             self.lifted = False
             self.hung = False
 
+        # Stillness is judged on the elbow angle and the SHOULDER height. The
+        # shoulder is a tracked landmark rather than a point projected from the
+        # face, it travels the full sweep of a rep, and — the reason it changed
+        # — it keeps reading when the face doesn't, so a student holding still
+        # with their head turned away still ends the test on time.
         if self._ref is None:
-            self._ref, self._last_move = (self.angle, chin), now
+            self._ref, self._last_move = (self.angle, shoulder), now
         if (abs(self.angle - self._ref[0]) > PAUSE_ANGLE_TOL
-                or abs(chin - self._ref[1]) > PAUSE_POS_TOL):
-            self._ref, self._last_move = (self.angle, chin), now
+                or abs(shoulder - self._ref[1]) > PAUSE_POS_TOL):
+            self._ref, self._last_move = (self.angle, shoulder), now
         self.idle_sec = now - self._last_move
         if self._armed and self.idle_sec >= PAUSE_SEC:
             self.stopped = True
@@ -293,7 +308,7 @@ class PullUpCounter:
         # to hold for two frames (~0.1 s) before it registers — a single
         # glitched landmark frame can't award a rep, while a real turnaround at
         # the top dwells there for longer than that.
-        if self.gap <= CHIN_MARGIN_FRAC:
+        if self.gap is not None and self.gap <= CHIN_MARGIN_FRAC:
             self.reached = True
         if self.lift_arms >= SHOULDER_LIFT_MIN:
             self.lifted = True
@@ -350,6 +365,13 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
             # so, rather than showing a chin reading that can't count.
             cv2.putText(frame, "Grip the bar - hands above shoulders",
                         (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, C_YELLOW, 2, cv2.LINE_AA)
+        elif gap is None:
+            # The arm is tracked and the test is running, but the face isn't
+            # readable, so the chin can't be checked and this rep can't be
+            # credited. Say that plainly instead of printing a number we don't
+            # have — the coach can move the phone or the student's head.
+            cv2.putText(frame, "Chin not visible - turn the face to the camera",
+                        (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, C_YELLOW, 2, cv2.LINE_AA)
         else:
             arrow = "^ PULL UP" if phase == "extended" else "v RETURN"
             # Both checks have to pass in one cycle, so the line says which of
@@ -367,8 +389,10 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
                         (20,h-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cc, 2, cv2.LINE_AA)
     else:
         # The bar itself is never detected — the wrists stand in for it — so
-        # the message names what actually has to be visible.
-        cv2.putText(frame, "Face and one full arm (to the hand) must be visible",
+        # the message names what actually has to be visible. The face is no
+        # longer part of this: without it the test still runs, it just can't
+        # credit reps, and that gets its own message above.
+        cv2.putText(frame, "One full arm (shoulder to hand) must be visible",
                     (20,h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, C_YELLOW, 2, cv2.LINE_AA)
 
     # Ended by the two-second pause rule
@@ -388,7 +412,7 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
         cv2.rectangle(ov, (0,0), (w,h), (0,0,0), -1)
         cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
         ready_col = C_GREEN if visible else C_YELLOW
-        ready_txt = "Body detected! " if visible else "Get your face and one arm in frame"
+        ready_txt = "Body detected! " if visible else "Get one full arm in frame"
         cv2.putText(frame, ready_txt, (w//2 - 300, h//2 - 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, ready_col, 2, cv2.LINE_AA)
         start_txt = ("Tap START to begin" if browser_mode
@@ -531,9 +555,15 @@ def run(source):
             lms = result.pose_landmarks[0]
 
             (s_i, e_i, wr_i), near_vis = near_arm(lms)
+            # The arm alone decides whether a frame is worth scoring. A frame
+            # without a readable face still goes in, carrying chin=None: the
+            # elbow angle and the shoulder lift keep flowing, so a blackout
+            # costs at most the rep it lands on instead of tripping the blind-
+            # gap rule and voiding the rep, the grip and the pause reference
+            # along with it.
             face_ok = all(lms[IDX[k]].visibility > 0.5
                           for k in ("NOSE", "MOUTH_L", "MOUTH_R"))
-            body_visible = near_vis > 0.5 and face_ok
+            body_visible = near_vis > 0.5
 
             if body_visible:
                 shoulder = lm_px(lms, s_i, w, h)
@@ -542,7 +572,7 @@ def run(source):
 
                 scored = counter.update(
                     calc_angle(shoulder, elbow, wrist),
-                    chin_y(lms),
+                    chin_y(lms) if face_ok else None,
                     bar_y(lms, wr_i),
                     lms[s_i].y,
                     shoulder_lift(shoulder, elbow),
@@ -552,7 +582,8 @@ def run(source):
                     rep_log.append({
                         "rep"         : counter.count,
                         "elbow_deg"   : round(counter.angle, 2),
-                        "chin_gap_pct": round(counter.gap * 100, 2),
+                        "chin_gap_pct": (round(counter.gap * 100, 2)
+                                         if counter.gap is not None else None),
                         "lift_arms"   : round(counter.lift_arms, 2),
                         "timestamp_s" : round(elapsed, 3),
                     })
