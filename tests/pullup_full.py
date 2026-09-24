@@ -138,7 +138,7 @@ class FullPullUpCounter:
                                  # None when the face isn't visible; shown to the
                                  # coach, scores nothing
         self.lift = 0.0          # how far the shoulders are above the elbows (+ = above)
-        self.reached = False     # both conditions met in the rep in progress
+        self.reached = False     # all three conditions met in the rep in progress
         self.stopped = False     # ended by dropping off the bar
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
         self.chin_buf = deque(maxlen=CHIN_BUFFER_LEN)
