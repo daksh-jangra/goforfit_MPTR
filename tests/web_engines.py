@@ -1720,6 +1720,7 @@ class TrunkLiftEngine(BaseWebEngine):
         self.calib = None
         self._calib_points = []
         self.height_cm = None
+        self.tracker.clear_hold()
         self.tracker.status_msg = msg
 
     def action_calib_click(self, value=None):
@@ -1781,6 +1782,10 @@ class TrunkLiftEngine(BaseWebEngine):
                 try:
                     self.calib = tl_mod.FloorCalibration(
                         self._calib_points[0], self._calib_points[1], cm)
+                    # This is the one path that swaps the scale without ever
+                    # passing through calib=None, so the loop never feeds a
+                    # None height and never clears the window itself.
+                    self.tracker.clear_hold()
                 except ValueError as exc:
                     self._clear_calibration_locked(str(exc))
             return {"ok": True, "stick_cm": cm}

@@ -312,6 +312,13 @@ class TrunkLiftTracker:
         self.status_msg = "Last trial removed"
         return True
 
+    def clear_hold(self):
+        """Drop the steadiness window. The heights in it were measured
+        against a calibration that no longer applies, so judging stability
+        across the change compares centimetres from two different rulers."""
+        self.window.clear()
+        self.peak_cm = None
+
     def last_is_up(self):
         return self.last_height_cm is not None and self.last_height_cm > self.rest_cm
 
