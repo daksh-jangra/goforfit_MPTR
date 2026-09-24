@@ -138,7 +138,6 @@ class FullPullUpCounter:
                                  # None when the face isn't visible; shown to the
                                  # coach, scores nothing
         self.lift = 0.0          # how far the shoulders are above the elbows (+ = above)
-        self.chin_ok = False     # chin is over the bar right now
         self.reached = False     # both conditions met in the rep in progress
         self.stopped = False     # ended by dropping off the bar
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
@@ -258,14 +257,15 @@ class FullPullUpCounter:
             # out. A real top is nowhere near this line: the manual's
             # up-position photo measures 21-27 deg and the video's deepest pull
             # 21.8, against the 140 that already means "straight" here.
-            self.chin_ok = self.gap is not None and self.gap <= 0
-            if self.chin_ok and self.lift > 0 and self.angle < ELBOW_EXTEND_ANGLE:
+            if (self.gap is not None and self.gap <= 0
+                    and self.lift > 0
+                    and self.angle < ELBOW_EXTEND_ANGLE):
                 self.phase = "up"
                 self.reached = True
             return False
 
-        # phase == "up": both conditions were met, so the rep lands when the
-        # arms straighten out again.
+        # phase == "up": all three conditions were met, so the rep lands when
+        # the arms straighten out again.
         if self.angle >= ELBOW_EXTEND_ANGLE:
             self.phase = "extended"
             self.reached = False
