@@ -181,6 +181,11 @@ TOUCH_RELEASE_RATIO = 0.24   # a reading between PASS_RATIO and this adds
 # the first frame that shows the stretch (a real attempt), not at camera start,
 # so getting into position does not eat the trial.
 TRIAL_CAP_S         = 15.0   # from the first reading of the trial
+# A separate, longer backstop: the student is on camera but NOTHING is ever
+# measured (bad angle, poor light, hands never found). Without this the trial
+# stays open forever, because the 15 s clock only starts at the first reading.
+# It resolves as "not completed" rather than a fail — nothing was scored.
+NO_ATTEMPT_CAP_S    = 30.0   # from when the student is locked on
 TOUCH_FRAMES = TOUCH_READINGS   # old name, kept: web_engines and the CLI pass
                                 # touch_frames= and it now means K.
 
@@ -819,7 +824,8 @@ class ShoulderStretchTracker:
 
     def __init__(self, pass_ratio=PASS_RATIO, touch_frames=TOUCH_READINGS,
                  release_ratio=TOUCH_RELEASE_RATIO, window_s=TOUCH_WINDOW_S,
-                 cap_s=TRIAL_CAP_S, grace_s=None):
+                 cap_s=TRIAL_CAP_S, no_attempt_s=NO_ATTEMPT_CAP_S,
+                 grace_s=None):
         # grace_s is accepted and ignored: a dropout no longer resets
         # anything, the kwarg only keeps old callers from breaking.
         self.pass_ratio = float(pass_ratio)
@@ -827,6 +833,7 @@ class ShoulderStretchTracker:
         self.release_ratio = float(release_ratio)
         self.window_s = float(window_s)                # T
         self.cap_s = None if cap_s is None else float(cap_s)
+        self.no_attempt_s = None if no_attempt_s is None else float(no_attempt_s)
         self.reset()
 
     # ── lifecycle ────────────────────────────────────────────────────────
@@ -846,6 +853,7 @@ class ShoulderStretchTracker:
                            "shoulder and up the back with the other hand")
         self._qual = {s: deque() for s in self.SIDES}
         self._cap_start = None
+        self._visible_since = None    # student locked on, nothing measured yet
         self._now = None
 
     @property
@@ -855,6 +863,19 @@ class ShoulderStretchTracker:
 
     def side_done(self, side):
         return side in self.done
+
+    @property
+    def no_attempt(self):
+        """Resolved without a single measurable frame — the camera never saw
+        the stretch, so there is nothing to score."""
+        return self.resolved and self.frames_seen == 0
+
+    def mark_visible(self, now=None):
+        """The student is locked on and the engine is watching. Starts the
+        no-attempt backstop; the 15 s trial clock still waits for a real
+        attempt, so getting into position does not eat it."""
+        if self._visible_since is None and not self.resolved:
+            self._visible_since = time.time() if now is None else now
 
     # ── per-frame update ─────────────────────────────────────────────────
     def update(self, ratio, now=None, side=None):
@@ -941,6 +962,12 @@ class ShoulderStretchTracker:
         if (self.cap_s is not None and self._cap_start is not None
                 and now - self._cap_start >= self.cap_s):
             return self.end_trial(now, by="cap")
+        # Nothing has EVER been measured and the student has been in view a
+        # long time: close it rather than leave the trial open forever.
+        if (self._cap_start is None and self.no_attempt_s is not None
+                and self._visible_since is not None
+                and now - self._visible_since >= self.no_attempt_s):
+            return self.end_trial(now, by="no_attempt")
         return None
 
     def _pass(self, now):
@@ -963,6 +990,9 @@ class ShoulderStretchTracker:
         self.state = State.PASSED if self.passed else State.FAILED
         if self.passed:
             self.status_msg = "PASS - fingertips touched on both sides"
+        elif by == "no_attempt":
+            self.status_msg = ("NOT COMPLETED - the camera never saw the "
+                               "stretch. Check the view and run it again")
         elif not self.done:
             self.status_msg = ("FAIL - time limit" if by == "cap"
                                else "FAIL - the fingertips did not touch")
@@ -986,7 +1016,7 @@ class ShoulderStretchTracker:
         return min(1.0, got + per * working / self.touch_frames)
 
     def cap_remaining(self, now=None):
-        """Seconds left in the trial, or None before it starts."""
+        """Seconds left in the 15 s trial, or None before it starts."""
         if self.cap_s is None or self._cap_start is None or self.resolved:
             return None
         now = (self._now if now is None else now)
@@ -1117,6 +1147,8 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
     if ratio is not None:
         line(f"Gap: {ratio:.2f} palm",
              C_OK if ratio <= tracker.pass_ratio else C_TEXT)
+    elif tracker.resolved:
+        line("Gap: --")
     else:
         line("Gap: hands not tracked", C_BAD)
     best = ("--" if tracker.best_gap_ratio is None
@@ -1299,6 +1331,8 @@ def main():
             # continuity, so a coach stepping in cannot take the trial over.
             fresh = lock.update(results.pose_landmarks, fw, fh, now)
             body_lms = lock.body_for(now)
+            if body_lms is not None:
+                tracker.mark_visible(now)
             if body_lms is not None:
                 for i, j in _POSE_CONNECTIONS:
                     if body_lms[i].visibility >= 0.45 and body_lms[j].visibility >= 0.45:

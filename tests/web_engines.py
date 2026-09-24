@@ -2399,6 +2399,7 @@ class ShoulderStretchEngine(BaseWebEngine):
             "side": self.selector.side,
             "left_done": tr.side_done(ss_mod.SIDE_LEFT),
             "right_done": tr.side_done(ss_mod.SIDE_RIGHT),
+            "no_attempt": tr.no_attempt,
             "seconds_left": (round(tr.cap_remaining(), 1)
                              if tr.cap_remaining() is not None else None),
             "trial_cap_s": tr.cap_s,
@@ -2495,6 +2496,13 @@ class ShoulderStretchEngine(BaseWebEngine):
         # pin or un-pin made since the last frame would otherwise be lost (C5).
         # Voting stops at the verdict, so this is the side AT the verdict.
         res = self.tracker.result()
+        # Nothing was ever measurable: stage it as NOT COMPLETED (passed=None)
+        # the way reverse curl does, so screen3 shows it and refuses to save a
+        # fail the camera never actually saw.
+        if self.tracker.no_attempt:
+            self.last_save = "Not completed"
+            self._safe_stage(None, None, None, None, None, None, self.last_save)
+            return
         self.last_save = "Pass" if res["passed"] else "Fail"
         # Positional contract with app.py's _stage(passed, left_passed,
         # right_passed, best_gap_ratio, best_gap_left, best_gap_right, rating)
@@ -2571,6 +2579,11 @@ class ShoulderStretchEngine(BaseWebEngine):
                 pose_detected = body is not None
 
                 if body is not None:
+                    # Student on camera: arms the backstop that closes a trial
+                    # where nothing is ever measurable. The 15 s trial clock
+                    # still waits for a real attempt.
+                    with self._lock:
+                        self.tracker.mark_visible(now)
                     for i, j in ss_mod._POSE_CONNECTIONS:
                         if body[i].visibility >= 0.45 and body[j].visibility >= 0.45:
                             p1 = (int(body[i].x * fw), int(body[i].y * fh))
