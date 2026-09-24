@@ -7,8 +7,9 @@ is above the bar, then lowers back to the full-hang starting position,
 repeating as many times as possible. The body must not swing, the knees must
 not bend and the legs must not kick. Score = number of correct pull-ups.
 
-A rep needs BOTH the chin above the bar and THE SHOULDERS ABOVE THE ELBOWS,
-then the arms straightening again. The chin is the protocol's own criterion.
+A rep needs the arms bent, the chin above the bar and THE SHOULDERS ABOVE THE
+ELBOWS, then the arms straightening again. The chin is the protocol's own
+criterion.
 The shoulders-over-elbows check is the second opinion: the chin has to be
 estimated from the face (there is no chin landmark) and a head tipped back at
 the top moves that estimate, whereas shoulder and elbow are real landmarks
@@ -118,8 +119,8 @@ class FullPullUpCounter:
     and the browser engine so both score a rep identically.
 
     Phases: "start" (waiting for the first straight-arm hang) -> "extended"
-    (hanging, pull up) -> "up" (chin over the bar AND shoulders over the
-    elbows, lower to a full hang) -> ... Starting in "start" rather than
+    (hanging, pull up) -> "up" (arms bent, chin over the bar AND shoulders over
+    the elbows, lower to a full hang) -> ... Starting in "start" rather than
     "extended" means a participant who jumps up to the bar already pulled up
     doesn't get a free rep — every rep begins from a full hang.
 
@@ -241,11 +242,24 @@ class FullPullUpCounter:
             return False
 
         if self.phase == "extended":
-            # The pull registers only when BOTH hold on the same frame: the
-            # protocol's chin over the bar, and the shoulders over the elbows
-            # agreeing with it. An unreadable chin is not a pass.
+            # The pull registers only when all three hold on the same frame:
+            # the elbow is genuinely bent, the protocol's chin is over the bar,
+            # and the shoulders are over the elbows agreeing with it. An
+            # unreadable chin is not a pass.
+            #
+            # The bent elbow is what makes this a PULL rather than a shape.
+            # Leaving "up" asks only for a straight arm, so without it the
+            # cycle can run extended -> up -> extended with the arms never
+            # flexing at all: arms held straight out sideways put the chin
+            # above the wrists and the shoulders above the elbows, and that
+            # pose scored a rep every other frame — 19 of them in four seconds.
+            # The demonstration video contains the pose, walking up to the bar
+            # with the arms down at 2.6 s, where only the on-bar margin kept it
+            # out. A real top is nowhere near this line: the manual's
+            # up-position photo measures 21-27 deg and the video's deepest pull
+            # 21.8, against the 140 that already means "straight" here.
             self.chin_ok = self.gap is not None and self.gap <= 0
-            if self.chin_ok and self.lift > 0:
+            if self.chin_ok and self.lift > 0 and self.angle < ELBOW_EXTEND_ANGLE:
                 self.phase = "up"
                 self.reached = True
             return False
