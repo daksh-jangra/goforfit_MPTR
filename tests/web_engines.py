@@ -1653,7 +1653,10 @@ class TrunkLiftEngine(BaseWebEngine):
         super().set_facing(facing)
         if was != self.mirror_preview:
             with self._lock:
-                self._clear_calibration_locked("Camera changed — tap the stick ends again")
+                self._clear_calibration_locked(
+                    "Camera changed — tap RESET, then the stick ends again"
+                    if self.tracker.trials else
+                    "Camera changed — tap the stick ends again")
 
     def _load_models(self):
         _ensure_pose_model(_MODEL_TRUNK)
@@ -1705,6 +1708,14 @@ class TrunkLiftEngine(BaseWebEngine):
         }
 
     # ── actions (screen4 buttons / taps on the feed) ────────────────────
+    def _refuse_locked(self, msg):
+        """screen4 rewrites its status box from the polled state every tick,
+        which wipes an action's error almost immediately. status_msg is part
+        of that state, so put the refusal there too — it then stays on screen
+        until the next capture or undo."""
+        self.tracker.status_msg = msg
+        return {"ok": False, "error": msg}
+
     def _clear_calibration_locked(self, msg=""):
         self.calib = None
         self._calib_points = []
@@ -1719,6 +1730,13 @@ class TrunkLiftEngine(BaseWebEngine):
         if x is None or y is None:
             return {"ok": False, "error": "calib_click needs {x, y}"}
         with self._lock:
+            # Two taps never land in exactly the same pixels, so a fresh
+            # calibration is a slightly different ruler — and the trials
+            # already recorded were measured with the old one. Same rule as
+            # action_stick_cm: make the coach clear them deliberately.
+            if self.tracker.trials:
+                return self._refuse_locked(
+                    "Trials already recorded on this scale — tap RESET to recalibrate")
             if self.calib is not None:
                 self._clear_calibration_locked()
             self._calib_points.append((float(x), float(y)))
@@ -1735,6 +1753,9 @@ class TrunkLiftEngine(BaseWebEngine):
 
     def action_calib_reset(self, value=None):
         with self._lock:
+            if self.tracker.trials:
+                return self._refuse_locked(
+                    "Trials already recorded on this scale — tap RESET to recalibrate")
             self._clear_calibration_locked("Tap both ends of the stick")
             return {"ok": True}
 
@@ -1753,8 +1774,8 @@ class TrunkLiftEngine(BaseWebEngine):
             # Rebuilding it now would leave one test holding two different
             # units, so make the coach clear the trials deliberately.
             if self.tracker.trials:
-                return {"ok": False,
-                        "error": "Trials already recorded on the old scale — tap RESET first"}
+                return self._refuse_locked(
+                    "Trials already recorded on the old scale — tap RESET first")
             self.stick_cm = cm
             if len(self._calib_points) == 2:
                 try:
@@ -1770,6 +1791,13 @@ class TrunkLiftEngine(BaseWebEngine):
         with self._lock:
             if self.calib is None:
                 return {"ok": False, "error": "Tap both ends of the measuring stick first"}
+            # tracker.mark() returns None in DONE without touching
+            # status_msg, which still holds the last capture's success
+            # line — reporting that as the error reads as a failure.
+            if self.tracker.complete:
+                return self._refuse_locked(
+                    f"All {self.tracker.trials_required} trials recorded — "
+                    "tap UNDO TRIAL to redo one, or RESET")
             captured = self.tracker.mark()
             if captured is None:
                 return {"ok": False, "error": self.tracker.status_msg or "Nothing to capture"}

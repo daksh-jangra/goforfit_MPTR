@@ -689,6 +689,11 @@ def main():
             elif key == ord(" "):
                 if calib[0] is None:
                     print("[WARN] Calibrate first — click both ends of the stick.")
+                elif tracker.complete:
+                    # mark() returns None here without touching status_msg,
+                    # which still holds the last capture's success line.
+                    print(f"[WARN] All {tracker.trials_required} trials recorded "
+                          "— press U to redo one, or R to reset.")
                 else:
                     v = tracker.mark()
                     if v is not None:
@@ -696,9 +701,16 @@ def main():
                     else:
                         print(f"[WARN] {tracker.status_msg}")
             elif key == ord("c"):
-                calib[0] = None
-                clicks.clear()
-                print("[INFO] Calibration cleared — click both stick ends again.")
+                if tracker.trials:
+                    # Fresh clicks land on slightly different pixels, so the
+                    # new scale differs from the one the recorded trials were
+                    # measured against. Clear them deliberately first.
+                    print("[WARN] Trials already recorded on this scale "
+                          "— press R to reset before recalibrating.")
+                else:
+                    calib[0] = None
+                    clicks.clear()
+                    print("[INFO] Calibration cleared — click both stick ends again.")
             elif key == ord("u"):
                 if tracker.undo():
                     print("[INFO] Last trial removed.")
