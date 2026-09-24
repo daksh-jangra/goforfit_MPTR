@@ -504,6 +504,39 @@ def test_one_side_alone_is_not_a_pass():
     assert res["passed"] is False
 
 
+def test_a_trial_that_never_measures_anything_still_ends():
+    # The camera sees the student but never measures a thing (bad angle, poor
+    # light, hands never found). Without the backstop the trial stayed open
+    # forever and only a coach pressing Stop ended it.
+    tr = ss.ShoulderStretchTracker()
+    t = 0.0
+    out = None
+    for _ in range(int(ss.NO_ATTEMPT_CAP_S / 0.05) + 40):
+        tr.mark_visible(t)
+        out = tr.update(None, now=t) or out
+        t += 0.05
+    assert tr.resolved, "a trial with no readings never ended"
+    assert out is not None and out["ended_by"] == "no_attempt", out
+    assert tr.no_attempt and not tr.passed
+    # It is NOT a fail the camera earned, so it stages as "not completed".
+    assert out["right_passed"] is False and out["left_passed"] is False
+
+
+def test_the_no_attempt_backstop_does_not_cut_a_real_trial_short():
+    # A student in view for a while who then starts: the 15 s clock begins at
+    # the attempt, and the backstop must not have fired in the meantime.
+    tr = ss.ShoulderStretchTracker()
+    t = 0.0
+    while t < ss.NO_ATTEMPT_CAP_S - 2.0:
+        tr.mark_visible(t)
+        tr.update(None, now=t)
+        t += 0.05
+    assert not tr.resolved
+    t = bank(tr, RIGHT, t0=t)
+    bank(tr, LEFT, t0=t)
+    assert tr.passed, "the backstop stole a real attempt"
+
+
 def test_the_trial_is_capped_at_fifteen_seconds_from_the_first_attempt():
     tr = ss.ShoulderStretchTracker()
     # Nothing happens for a while: the clock must NOT be running yet.

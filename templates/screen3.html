@@ -142,7 +142,7 @@
         {% else %}
         <div class="space-y-3">
             <h3 class="text-center font-bold text-indigo-950 text-base tracking-wide">{{ test.title }} Score</h3>
-            <div id="pending-summary" class="text-center text-xs text-gray-500">No AI reading staged. Enter a value manually below, or use Switch to AI.</div>
+            <div id="pending-summary" class="text-center text-xs text-gray-500"></div>
 
             {% if test.id == 'bmi' %}
             <div class="max-w-2xl mx-auto w-full grid grid-cols-2 gap-3">
@@ -428,6 +428,11 @@
         // would make a Fail impossible to save. These branches skip them.
         const PASS_FAIL_TESTS = new Set(['reverse_curl', 'shoulder_stretch']);
         const IS_PASS_FAIL = PASS_FAIL_TESTS.has(testId);
+        // Pass/fail tests are decided by the camera and their box is locked,
+        // so "enter a value manually" would be wrong advice there.
+        const NO_READING_MSG = IS_PASS_FAIL
+            ? 'No result yet \u2014 run the test; the camera decides it.'
+            : 'No AI reading staged. Enter a value manually below, or use Switch to AI.';
         // Rep counts where zero is a real score: a kid who manages no pull-up
         // scored 0, not "nothing measured". Every other measured test keeps the
         // "positive number" guard, which is what stops an empty box being saved
@@ -487,7 +492,7 @@
                         // Show panel with empty summary so override is accessible
                         panel.classList.remove('hidden');
                         document.getElementById('pending-summary').innerHTML =
-                            '<span class="text-gray-400 text-xs">No AI reading staged. Enter value manually below.</span>';
+                            `<span class="text-gray-400 text-xs">${NO_READING_MSG}</span>`;
                     }
                     return;
                 }
@@ -497,6 +502,9 @@
                 console.warn('Could not load pending result:', e);
             }
         }
+
+        // Fill the placeholder as soon as we know which kind of test this is.
+        document.getElementById('pending-summary').textContent = NO_READING_MSG;
 
         function renderPendingResult() {
             const panel = document.getElementById('pending-panel');
@@ -559,7 +567,7 @@
                 document.getElementById('pending-summary').innerHTML =
                     val !== undefined && val !== null
                         ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}</span> — edit above if it looks wrong.`
-                        : '<span class="text-gray-400">No AI reading staged. Enter a value manually below, or use Switch to AI.</span>';
+                        : `<span class="text-gray-400">${NO_READING_MSG}</span>`;
                 return;
             }
 
