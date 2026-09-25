@@ -99,7 +99,20 @@ PAUSE_SEC           = 2.0
 # means we stopped looking rather than that they stopped moving.
 SAMPLE_GAP_SEC      = 0.5
 PAUSE_ANGLE_TOL     = 10.0   # degrees of elbow movement within the window
-PAUSE_POS_TOL       = 0.012  # chin travel within the window (fraction of frame)
+# Shoulder travel within the window (fraction of frame height). This sets how
+# noisy a camera may be and still let the test end itself: too tight and the
+# landmark's own wander keeps resetting the clock, so the pause never fires and
+# the coach has to reach over and press STOP.
+# Measured on the FMS demo footage, a shoulder holding still wanders 0.0064 of
+# frame height over half a second, against 0.717 of travel across a rep — four
+# orders of magnitude apart, so there is no reason to sit close to the noise.
+# 0.012 left under 2x of headroom on clean footage, which a phone in a gym
+# would not have. 0.025 gives 3.9x and is still ~28x below a single rep's
+# travel, so genuine movement cannot hide inside it.
+# Smoothing was tried first and rejected: a 3-frame median of the shoulder only
+# moves the margin to 2.0x and 7 frames to 2.1x, because the wander is slow
+# drift rather than single-frame jitter.
+PAUSE_POS_TOL       = 0.025
 
 # 3-frame medians, not the 5 curl-ups uses: they still drop single-frame
 # landmark outliers, but with half the lag, so a brisk rep still reaches both
@@ -453,8 +466,16 @@ def draw_ui(frame, count, phase, angle, elapsed, gap, reached, visible, test_sta
         ov = frame.copy()
         cv2.rectangle(ov, (0,0), (w,h), (0,0,0), -1)
         cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
-        ready_col = C_GREEN if visible else C_YELLOW
-        ready_txt = "Body detected! " if visible else "Get one full arm in frame"
+        # Three states, not two. The arm alone is enough to RUN the test, but a
+        # green "ready" with the face out of shot promises a score the test
+        # can't deliver: with no chin reading, no rep can be credited, and the
+        # coach would find that out at the end.
+        if not visible:
+            ready_col, ready_txt = C_YELLOW, "Get one full arm in frame"
+        elif gap is None:
+            ready_col, ready_txt = C_YELLOW, "Arm ready - turn the face to the camera"
+        else:
+            ready_col, ready_txt = C_GREEN, "Body detected! "
         cv2.putText(frame, ready_txt, (w//2 - 300, h//2 - 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, ready_col, 2, cv2.LINE_AA)
         start_txt = ("Tap START to begin" if browser_mode
