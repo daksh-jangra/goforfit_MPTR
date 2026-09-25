@@ -73,6 +73,23 @@ SHOULDER_LIFT_MIN   = 0.40
 # every real rep with room to spare while rejecting someone who simply lifts a
 # hand towards their face.
 POSTURE_MARGIN      = 0.05
+# ...and the grip is re-checked for as long as the rep lasts. Hands that fall
+# clearly BELOW the shoulders mean the bar has been let go of. Measured on the
+# FMS demo footage, during a real rep the hands never drop more than 0.055 of
+# frame height below the shoulders — the top of a pull brings them almost level
+# — so a line at 0.10 fired on 0 of 157 real-rep frames while still catching
+# someone who has sat up off the bar. Deliberately not the same number as
+# POSTURE_MARGIN: starting a rep demands hands clearly above the shoulders,
+# abandoning one demands them clearly below, and in between nothing changes.
+LET_GO_MARGIN       = 0.10
+# Hands above the shoulders isn't enough on its own: sitting upright with a hand
+# raised to the face looks the same. What can't be faked upright is the BODY's
+# position — lying under the bar, the shoulders are below the elbows. Measured
+# inside the three demo rep cycles, 42 of the 43 arm-extended frames read at or
+# below -0.30 upper arms (median -0.74, floor -0.89), while an upright person
+# never drops below +0.72. Only one qualifying frame per rep is needed, so the
+# single outlier costs nothing.
+LYING_LIFT_MAX      = -0.30
 
 # "The test will stop when the participant pauses for two or more seconds."
 PAUSE_SEC           = 2.0
@@ -90,6 +107,7 @@ PAUSE_POS_TOL       = 0.012  # chin travel within the window (fraction of frame)
 ANGLE_BUFFER_LEN    = 3     # rolling median smoothing window (elbow angle)
 NOSE_BUFFER_LEN     = 3     # rolling median smoothing window (head position)
 LIFT_BUFFER_LEN     = 3     # rolling median smoothing window (shoulder lift)
+GRIP_BUFFER_LEN     = 3     # rolling median smoothing window (hands vs shoulders)
 
 # MediaPipe Pose landmark indices (same numbering across all API versions)
 IDX = {
@@ -179,8 +197,9 @@ class PullUpCounter:
     bar height) samples. Shared by the desktop script and the browser engine
     so both score a rep identically.
 
-    A rep is one elbow flex-and-extend cycle, begun from a position where the
-    hands are clearly above the shoulders (i.e. actually gripping the bar),
+    A rep is one elbow flex-and-extend cycle, begun from the position the test
+    is performed in — lying under the bar, hands on it — and held there
+    throughout,
     in which the chin reached the bar — the protocol's own criterion — AND the
     shoulders came up past the elbows. Both have to happen in the same cycle.
     The chin is only ever an estimate projected from the face, so on its own it
@@ -208,6 +227,7 @@ class PullUpCounter:
         self.angle_buf = deque(maxlen=ANGLE_BUFFER_LEN)
         self.chin_buf = deque(maxlen=NOSE_BUFFER_LEN)
         self.lift_buf = deque(maxlen=LIFT_BUFFER_LEN)
+        self.grip_buf = deque(maxlen=GRIP_BUFFER_LEN)
         self._ref = None         # last pose the participant actually moved away from
         self._last_move = None   # when that happened
         self._last_seen = None   # when a frame last reached the counter
@@ -284,6 +304,24 @@ class PullUpCounter:
             self.stopped = True
             return False
 
+        # ── still on the bar? ──────────────────────────────────────────────
+        # Checked every frame, where the hanging position used to be confirmed
+        # once and then trusted for the rest of the rep. That let a student who
+        # had let go, sat up and raised a hand to their face be credited one
+        # rep: the chin landed at hand height and, sitting upright, the
+        # shoulders are above the elbows anyway, so both rep checks passed.
+        # Medianed like the others so a single mistracked wrist can't void a
+        # real rep.
+        self.grip_buf.append(bar - shoulder)
+        if float(np.median(self.grip_buf)) > LET_GO_MARGIN:
+            self.hung = False
+            if self.phase == "flexed":
+                # Same treatment as a blind gap: a rep we watched being
+                # abandoned is not a rep, whatever the chin did on the way up.
+                self.phase = "extended"
+                self.reached = False
+                self.lifted = False
+
         # ── rep state machine ──────────────────────────────────────────────
         if self.phase == "extended":
             # Only a participant hanging under the bar can start a rep. Lying
@@ -294,7 +332,11 @@ class PullUpCounter:
             # level with the hands (measured: within 0.01 of frame height), so
             # testing this every frame would reject the very frames that
             # validate the rep.
-            if bar < shoulder - POSTURE_MARGIN:
+            # Both: hands on the bar AND the body lying under it. Upright, the
+            # first can be mimicked by raising a hand to the face, but the
+            # second can't be — standing or sitting puts the shoulders above the
+            # elbows, not below them.
+            if bar < shoulder - POSTURE_MARGIN and self.lift_arms <= LYING_LIFT_MAX:
                 self.hung = True
             if self.hung and self.angle <= ELBOW_FLEX_ANGLE:
                 self.phase = "flexed"
