@@ -159,6 +159,21 @@ def test_long_dropout_voids_the_hold():
     assert tr.passed, "could not recover after a dropout"
 
 
+def test_blackout_while_lowering_does_not_pass_on_the_first_frame_back():
+    # The "weight is down" window proves the elbow sat still for a second. If
+    # tracking dies partway through that second, the window must not be
+    # measured from a reading taken before the blackout: for four seconds
+    # nobody could see where the weight was. It used to PASS on the first
+    # frame back.
+    tr = rc.ReverseCurlTracker()
+    down = [(1.0, REST), (0.3, 70.0), (2.4, UP), (0.3, 60.0), (0.2, 78.0)]
+    feed(tr, down + [(4.0, None), (0.2, 79.0)], 20)
+    assert tr.state is rc.State.LOWERING, f"passed across a blackout: {tr.state}"
+    # ...and it is only delayed, not broken: a fresh still second still passes.
+    feed(tr, [(1.2, 79.0)], 20, t0=100.0)
+    assert tr.state is rc.State.PASSED, f"never passed after settling: {tr.state}"
+
+
 def test_single_dropped_frame_does_not_void_the_hold():
     tr = rc.ReverseCurlTracker()
     t, _ = feed(tr, [(1.0, REST), (0.3, 70.0), (0.8, UP)], 20)
@@ -248,6 +263,25 @@ def test_stop_just_after_setting_the_weight_down_is_a_pass():
     assert tr.state is rc.State.LOWERING, tr.state
     res = tr.finish()
     assert tr.state is rc.State.PASSED and res["passed"], tr.state
+
+
+def test_stop_half_way_down_is_not_a_pass_at_a_high_rest_angle():
+    # "Back down" is measured against THIS participant's own rest angle. A
+    # student who rests at 125 deg (taller, or a different thigh angle) and is
+    # stopped at 85 still has the weight halfway up — but 85 is inside the
+    # resting RANGE, so judging by the range alone credited a PASS, while the
+    # same arm a few degrees lower FAILED.
+    high = [(1.5, 125.0), (0.3, 100.0), (0.2, 60.0), (2.4, UP)]
+    tr = rc.ReverseCurlTracker()
+    feed(tr, high + [(0.3, 85.0)], 20)
+    assert tr.state is rc.State.LOWERING, tr.state
+    res = tr.finish()
+    assert tr.state is rc.State.FAILED and res["passed"] is False, tr.state
+    # Back near that arm's own rest, the same stop is still a PASS.
+    tr2 = rc.ReverseCurlTracker()
+    feed(tr2, high + [(0.3, 100.0)], 20)
+    assert tr2.state is rc.State.LOWERING, tr2.state
+    assert tr2.finish()["passed"], tr2.state
 
 
 def test_stop_with_the_weight_still_up_after_the_hold_is_a_fail():
@@ -430,6 +464,49 @@ def test_arm_choice_locks_once_the_lift_starts():
     sel2, tr2 = _pipeline([(1.0, REST, REST), (0.1, REST, 80.0), (0.1, REST, 65.0),
                            (0.3, 30.0, 60.0)])         # the other hand now moves a lot
     assert sel2.arm == R, f"the idle hand took over mid-lift: {sel2.arm}"
+
+
+def test_a_small_shift_does_not_pin_the_arm_chooser():
+    # The chooser pins its arm on flexion worth a real attempt, not on the
+    # smaller threshold that merely starts watching a lift — 12-15 deg is
+    # about what adjusting the grip on the thigh looks like.
+    sel = rc.ArmSelector()
+    t = 0.0
+    for _ in range(30):                                   # both hands resting
+        sel.update({L: REST, R: 92.0}, now=t); t += 0.05
+    for a in (88.0, 84.0, 81.0, 84.0, 88.0, REST):        # left adjusts its grip
+        sel.update({L: a, R: 92.0}, now=t); t += 0.05
+    assert not sel.locked, "a 14 deg shift of the idle hand pinned the choice"
+    for a in (80.0, 70.0, 60.0):                          # the right arm curls
+        sel.update({L: REST, R: a}, now=t); t += 0.05
+    assert sel.locked and sel.arm == R, (sel.locked, sel.arm)
+
+
+def test_a_fidget_does_not_pin_the_camera_to_the_idle_hand():
+    # The idle hand shifts ~14 deg on the thigh — adjusting the grip. That is
+    # not an attempt, so it must not own the trial: the working arm then does
+    # a perfect curl and it has to be scored. This used to end NOT COMPLETED
+    # with the camera watching the wrong arm.
+    sel, tr = _pipeline([(1.2, REST, 92.0),
+                         (0.15, 84.0, 92.0), (0.15, 81.0, 92.0), (0.15, 84.0, 92.0),
+                         (1.2, REST, 92.0),                      # back on the thigh
+                         (0.15, REST, 80.0), (0.15, REST, 65.0), (0.15, REST, 50.0),
+                         (2.4, REST, UP),
+                         (0.3, REST, 60.0), (0.3, REST, 80.0), (0.8, REST, 92.0)])
+    assert sel.arm == R, f"still watching the idle hand: {sel.arm}"
+    assert tr.state is rc.State.PASSED, f"the curl was not scored: {tr.state}"
+
+
+def test_a_long_hold_is_not_stolen_by_the_other_hand():
+    # The release above is time-based, so check it cannot fire mid-attempt:
+    # through a 3 s hold — longer than the idle delay — the other hand curls
+    # hard and must be ignored.
+    sel, tr = _pipeline([(1.2, REST, REST),
+                         (0.15, REST, 75.0), (0.15, REST, 60.0), (0.15, REST, 45.0),
+                         (3.0, 45.0, UP),                        # other hand at 45 too
+                         (0.3, 45.0, 70.0), (0.8, 45.0, REST)])
+    assert sel.arm == R, f"the other hand took over during the hold: {sel.arm}"
+    assert tr.state is rc.State.PASSED, f"the curl was not scored: {tr.state}"
 
 
 def test_slow_lift_is_not_stolen_by_the_other_hand():

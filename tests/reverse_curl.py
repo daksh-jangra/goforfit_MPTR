@@ -434,6 +434,16 @@ class ReverseCurlTracker:
         # span the dropout and read as "perfectly still".
         self._settle.clear()
 
+        if gap > DROPOUT_GRACE_S:
+            # Same reasoning for the window that proves the weight was set
+            # down: it means "the elbow sat still for SETTLED_S", and a window
+            # whose first sample predates a blackout proves nothing about the
+            # seconds nobody saw. Without this, tracking lost for seconds while
+            # lowering and regained anywhere in the resting range passed on the
+            # first frame back. One dropped frame (inside the grace) still
+            # keeps the window, like the hold.
+            self._return.clear()
+
         if self.state == State.HOLD and gap > DROPOUT_GRACE_S:
             # Void the hold rather than credit time nobody could see. Same
             # rule the pull-up counter uses for a rep that was mid-flight
@@ -573,7 +583,16 @@ class ReverseCurlTracker:
             return self.result()
         now = self._now if self._now is not None else time.time()
         if (self.state == State.LOWERING and self.angle_deg is not None
-                and self.rest_min <= self.angle_deg <= REST_MAX_DEG):
+                and self.baseline_deg is not None
+                and self.rest_min <= self.angle_deg <= REST_MAX_DEG
+                and self.angle_deg >= self.baseline_deg - ATTEMPT_MIN_DEG):
+            # "Back down" is measured against THIS participant's own rest
+            # angle, not the bottom of the resting range. Taking the range's
+            # floor instead meant someone who rests at 125 deg could be
+            # stopped at 72 — elbow still bent, weight halfway up — and be
+            # credited with a PASS, while the same arm one degree lower
+            # FAILED. Still flexed by ATTEMPT_MIN_DEG or more from rest is as
+            # much bend as a real attempt, so the weight is not on the thigh.
             return self._pass(now, self.angle_deg)
         if self.state in (State.LIFTING, State.HOLD, State.LOWERING) and self._is_real_try():
             if self.state == State.HOLD:
@@ -645,12 +664,16 @@ class ArmSelector:
     the rest angle it handed the tracker came out ~15 deg too low.
 
     Once a real lift starts the choice LOCKS, so the other hand moving — to
-    steady the chair, say — cannot steal the test mid-curl.
+    steady the chair, say — cannot steal the test mid-curl. The lock needs
+    flexion worth a real attempt (ATTEMPT_MIN_DEG): locking at the smaller
+    "watching" threshold meant a 12-15 deg shift of the IDLE hand — about what
+    adjusting the grip looks like — pinned the camera to the wrong arm. It is
+    released again by note_idle() once the tracker is back at rest.
     """
 
     SWITCH_MARGIN_DEG = 8.0
 
-    def __init__(self, forced=ARM_AUTO, lock_delta=MOVE_DELTA_DEG):
+    def __init__(self, forced=ARM_AUTO, lock_delta=ATTEMPT_MIN_DEG):
         self.forced = forced if forced in (ARM_LEFT, ARM_RIGHT) else None
         self.lock_delta = float(lock_delta)
         self.reset()
@@ -660,6 +683,7 @@ class ArmSelector:
         self.locked = self.forced is not None
         self._still = {ARM_LEFT: deque(), ARM_RIGHT: deque()}   # (t, deg)
         self._rest = {ARM_LEFT: None, ARM_RIGHT: None}          # last still reading
+        self._idle_since = None      # when the tracker last went back to rest
 
     def _track_rest(self, arm, v, now):
         """Update this arm's resting angle from a still, in-range stretch."""
@@ -685,8 +709,26 @@ class ArmSelector:
 
     def lock(self):
         """Pin the current choice — the lift has begun on this arm."""
+        self._idle_since = None
         if self.arm is not None:
             self.locked = True
+
+    def note_idle(self, now):
+        """No attempt is under way — the weight is on the thigh. Once that has
+        been true for SETTLED_S the lock is released, so a movement the tracker
+        decided was NOT an attempt cannot own the rest of the trial: a lock
+        taken on a fidget used to leave the camera watching the idle hand while
+        a perfect curl happened on the other arm, ending the trial NOT
+        COMPLETED. The delay is what makes it safe — a slow lift flaps between
+        "watching" and "at rest" frame by frame, and releasing on the first
+        such frame let the other hand take over a real lift in progress. A
+        pinned arm (--arm left/right) stays pinned."""
+        if self.forced is not None:
+            return
+        if self._idle_since is None:
+            self._idle_since = now
+        elif now - self._idle_since >= SETTLED_S:
+            self.locked = False
 
     def update(self, angles, now=None):
         """angles: {ARM_LEFT: deg|None, ARM_RIGHT: deg|None} -> chosen arm|None"""
@@ -750,7 +792,13 @@ def step_arm(selector, tracker, smooth, raw, prev_arm, now=None):
     else:
         angle = smooth.push(value)
     outcome = tracker.update(angle, now=now)
-    if tracker.state not in (State.READY, State.SET):
+    if tracker.state in (State.READY, State.SET):
+        # Nothing under way — the weight is on the thigh. A lock taken on a
+        # movement that turned out not to be an attempt is released once that
+        # has held for a moment (see note_idle), so the arm that really curls
+        # can still take over.
+        selector.note_idle(now)
+    else:
         selector.lock()
     return arm, angle, outcome
 
