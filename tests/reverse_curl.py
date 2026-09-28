@@ -934,6 +934,20 @@ def main():
         print(f"[ERROR] Cannot open source: {source}")
         sys.exit(1)
 
+    # A recording has a timeline of its own. Timing the 2 s hold by the wall
+    # clock while frames are decoded faster or slower than real time measures
+    # the computer instead of the participant: 2 s of video that takes 4 s to
+    # decode credits a 4 s hold, and a clip decoded quickly fails a good one.
+    # So a file is clocked by its own frame rate (the same way pullup_full.py
+    # times clips) while a camera keeps the wall clock, which for a camera IS
+    # the truth.
+    live = isinstance(source, int)
+    clip_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    if not live and not (1.0 <= clip_fps <= 240.0):
+        clip_fps = 30.0
+        print(f"[WARN] {args.source} reports no usable frame rate — "
+              f"timing it as {clip_fps:.0f} fps")
+
     print(f"\n[INFO] Stream  {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}×"
           f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
     print(f"[INFO] Seated, weight on the mid-thigh. Lift to <= {args.up_angle:.0f} deg, "
@@ -946,6 +960,7 @@ def main():
     staged = False
     prev_arm = None
     stream_start = time.time()
+    frame_no = 0
     last_ts = -1
 
     options = PoseLandmarkerOptions(
@@ -968,10 +983,13 @@ def main():
                 print("[INFO] End of stream.")
                 break
 
+            frame_no += 1
+            now = time.time() if live else stream_start + (frame_no - 1) / clip_fps
+
             fh, fw = frame.shape[:2]
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB,
                                 data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            ts = int((time.time() - stream_start) * 1000)
+            ts = int((now - stream_start) * 1000)
             if ts <= last_ts:
                 ts = last_ts + 1
             last_ts = ts
@@ -992,7 +1010,7 @@ def main():
 
                 raw = {a: elbow_angle(lms, a, fw, fh) for a in (ARM_LEFT, ARM_RIGHT)}
 
-            arm, angle, outcome = step_arm(selector, tracker, smooth, raw, prev_arm)
+            arm, angle, outcome = step_arm(selector, tracker, smooth, raw, prev_arm, now=now)
             prev_arm = arm
             if angle is not None and lms is not None:
                 arm_pts = [lm_px(lms, i, fw, fh) for i in ARM_IDX[arm]]
