@@ -1604,8 +1604,10 @@ def stop(test_id: str):
         _trunk_lift_engine.stop()
         return {"ok": True}
     if test_id == "reverse_curl" and _reverse_curl_engine is not None:
-        # Stops stage whatever the trial reached, so an unresolved one still
-        # reaches screen3 (as not-passed) for the coach to confirm.
+        # The engine stages from its own stop() hook, applying the manual's
+        # one-trial rule: an attempt under way is a FAIL, a finished curl
+        # already back on the thigh is a PASS. Neither -> "Not completed",
+        # which screen3 shows but refuses to save, so the test is run again.
         _reverse_curl_engine.stop()
         return {"ok": True}
     if test_id == "shoulder_stretch" and _shoulder_stretch_engine is not None:
