@@ -20,6 +20,7 @@ SECTIONS IN THIS FILE
   4B. TrunkLiftEngine    wraps trunk_lift.py      (trunk lift height)
   4C. ReverseCurlEngine  wraps reverse_curl.py    (reverse curl pass/fail)
   4D. ShoulderStretchEngine  wraps shoulder_stretch.py  (shoulder stretch pass/fail)
+  4E. IsometricPushUpEngine  wraps isometric_pushup.py  (isometric push-up hold time)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -2631,6 +2632,213 @@ class ShoulderStretchEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4E — ISOMETRIC PUSH-UP   (wraps isometric_pushup.py)
+# ════════════════════════════════════════════════════════════════════════
+import isometric_pushup as ipu_mod  # noqa: E402
+
+_MODEL_ISOMETRIC_PUSHUP = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class IsometricPushUpEngine(BaseWebEngine):
+    """Live isometric push-up engine (Brockport fig. 5.14). One trial: the
+    participant holds the UP position of a push-up and the score is the time
+    held, to the nearest second, up to 40 s.
+
+    Nothing to calibrate and nothing to press between Start and Stop: the
+    clock starts once the camera has seen the correct position held still for
+    a second, and stops by itself on a bend, sag, sway or the 40 s cap. The
+    coach can correct the seconds on screen3. Stopping mid-hold ends the
+    clock at the last moment the camera saw the position; stopping before
+    the clock ever started stages nothing (NOT COMPLETED, not a zero).
+
+    All the geometry and the state machine live in isometric_pushup.py —
+    this class only replaces the desktop cv2.imshow/waitKey loop."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera: frames are POSTed to
+        # /api/isometric_push_up/frame -> push_frame().
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.tracker = ipu_mod.IsometricPushUpTracker()
+        self.pose_detected = False
+        self.last_save = None
+
+    # ── camera plumbing (identical contract to ReverseCurlEngine) ───────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """Switching lens flips the mirror, which swaps the sides and the
+        forward/back direction the sway is measured in — a starting shape
+        taken through the old lens describes nothing in the new one. So an
+        undecided trial starts over; a finished one keeps its score."""
+        was = self.mirror_preview
+        super().set_facing(facing)
+        if was == self.mirror_preview:
+            return
+        with self._lock:
+            if not self.tracker.resolved:
+                self.tracker.reset()
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_ISOMETRIC_PUSHUP)
+        options = ipu_mod.PoseLandmarkerOptions(
+            base_options=ipu_mod.BaseOptions(model_asset_path=_MODEL_ISOMETRIC_PUSHUP),
+            running_mode=ipu_mod.VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = ipu_mod.PoseLandmarker.create_from_options(options)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        m, b = tr.current, tr.baseline
+
+        def r(d, k, n=0):
+            return round(d[k], n) if d is not None else None
+
+        return {
+            "state": tr.state.name,
+            "pose_detected": self.pose_detected,
+            "clock_running": tr.state == ipu_mod.State.HOLDING,
+            "elapsed_s": round(tr.elapsed_s, 1),
+            "max_hold_s": tr.max_hold_s,
+            "hold_pct": int(round(100 * tr.elapsed_s / tr.max_hold_s)) if tr.max_hold_s else 0,
+            "elbow_deg": r(m, "elbow"), "elbow_start_deg": r(b, "elbow"),
+            "bend_deg": r(m, "bend"), "bend_start_deg": r(b, "bend"),
+            "knee_deg": r(m, "knee"), "knee_start_deg": r(b, "knee"),
+            "resolved": tr.resolved,
+            "seconds": tr.score_s if tr.resolved else None,
+            "end_reason": tr.end_reason,
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        """Generic dispatcher, so app.py can forward screen4's {action, value}
+        payload straight through the way the other engines do."""
+        handler = {
+            "reset": self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self):
+        """Stage the score once the hold is over. Called with self._lock held."""
+        if not self.tracker.resolved:
+            return
+        res = self.tracker.result()
+        self.last_save = f"{res['hold_sec']} s"
+        self._safe_stage(res["hold_sec"], res["held_exact_s"], res["end_reason"])
+
+    def _stage_on_stop(self):
+        """STOP pressed. A hold under way ends where the camera last saw the
+        position; no hold started stages nothing, so screen3 shows no reading
+        rather than a zero the student never earned."""
+        with self._lock:
+            if self._staged:
+                return
+            if self.tracker.finish() is not None:
+                self._maybe_stage_locked()
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # live in the same pixel space.
+                frame = camera.mirror(frame, self.mirror_preview)
+                fh, fw = frame.shape[:2]
+                mp_image = ipu_mod.mp.Image(
+                    image_format=ipu_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                now = time.time()
+                ts = int((now - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+
+                lms = results.pose_landmarks[0] if results.pose_landmarks else None
+                if lms is not None:
+                    for i, j in ipu_mod._POSE_CONNECTIONS:
+                        if lms[i].visibility >= 0.45 and lms[j].visibility >= 0.45:
+                            p1 = (int(lms[i].x * fw), int(lms[i].y * fh))
+                            p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+                sides = ipu_mod.read_sides(lms, fw, fh)
+
+                with self._lock:
+                    # Under the lock: RESET and a lens change replace tracker
+                    # state from other threads.
+                    outcome = self.tracker.update(sides, now=now)
+                    self.pose_detected = lms is not None
+                    if outcome is not None:
+                        self._maybe_stage_locked()
+                    ipu_mod.draw_hud(frame, self.tracker,
+                                     ipu_mod.tracked_points(self.tracker, lms, fw, fh))
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -2650,6 +2858,7 @@ __all__ = [
     "TrunkLiftEngine",
     "ReverseCurlEngine",
     "ShoulderStretchEngine",
+    "IsometricPushUpEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]

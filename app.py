@@ -74,7 +74,7 @@ try:
     from web_engines import (
         BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
-        ShoulderStretchEngine,
+        ShoulderStretchEngine, IsometricPushUpEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -82,6 +82,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     WallTossEngine = SitReachEngine = TrunkLiftEngine = None
     ReverseCurlEngine = None
     ShoulderStretchEngine = None
+    IsometricPushUpEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -119,6 +120,7 @@ _sit_reach_engine = None
 _trunk_lift_engine = None
 _reverse_curl_engine = None
 _shoulder_stretch_engine = None
+_isometric_push_up_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -575,6 +577,35 @@ TESTS = {
         "unit":   "pass/fail",
         "live_feed":   True,
     },
+    "isometric_push_up": {
+        "id":          "isometric_push_up",
+        "title":       "Isometric Push-Up",
+        "subtitle":    "Hold the top of a push-up \u2014 seconds held, up to 40 s",
+        "icon":        "\u23f1\ufe0f",
+        "category":    "Muscular Endurance",
+        "script":      "isometric_pushup.py",
+        "description": (
+            "Upper-body strength and endurance. The participant holds the UP "
+            "position of a push-up: hands directly below the shoulders, arms "
+            "straight, the whole body in a straight line, toes on the mat. The "
+            "clock starts by itself once the camera sees that position held still, "
+            "and stops the moment the elbows bend, the hips sag or pike, the knees "
+            "bend or the body sways \u2014 or at 40 seconds, the maximum. One "
+            "trial; the score is the time held to the nearest second. The coach "
+            "may help place the body in position but must not hold it up."
+        ),
+        "controls": [
+            ("RESET", "Start the trial over (clears the clock)"),
+        ],
+        "tip": (
+            "Camera on the floor or just above it, SIDE-ON to the participant, "
+            "1.5-2 m away, with the whole body from the hands to the toes in frame. "
+            "Only the student should be in frame."
+        ),
+        "params": [],
+        "unit":   "s",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -682,6 +713,8 @@ def _is_running(test_id: str) -> bool:
         return _reverse_curl_engine.is_running()
     if test_id == "shoulder_stretch" and _shoulder_stretch_engine is not None:
         return _shoulder_stretch_engine.is_running()
+    if test_id == "isometric_push_up" and _isometric_push_up_engine is not None:
+        return _isometric_push_up_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -806,6 +839,13 @@ class ShoulderStretchSave(BaseModel):
     best_gap_ratio: Optional[float] = None
     best_gap_left: Optional[float] = None
     best_gap_right: Optional[float] = None
+    rating: Optional[str] = None
+
+class IsometricPushUpSave(BaseModel):
+    session_id: Optional[int] = None
+    hold_sec: Optional[float] = None       # the score: seconds held, 0-40
+    held_exact_s: Optional[float] = None
+    end_reason: Optional[str] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -1045,6 +1085,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "shoulder_stretch" and ShoulderStretchEngine is not None:
         return await _launch_shoulder_stretch(request)
+
+    if test_id == "isometric_push_up" and IsometricPushUpEngine is not None:
+        return await _launch_isometric_push_up(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1399,6 +1442,29 @@ async def _launch_shoulder_stretch(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_isometric_push_up(request: Request):
+    global _isometric_push_up_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # Nothing to configure: the clock starts and stops itself from the pose.
+    def _stage(hold_sec, held_exact_s, end_reason):
+        _pending["isometric_push_up"] = {
+            "session_id": session_id, "hold_sec": hold_sec,
+            "held_exact_s": held_exact_s, "end_reason": end_reason,
+        }
+
+    try:
+        engine = IsometricPushUpEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _isometric_push_up_engine = engine
+    _pending.pop("isometric_push_up", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1525,7 +1591,7 @@ def engine_status():
         "web_engines_covers": ["wingspan", "bmi", "curl_up", "pull_up", "full_pull_up",
                                "wall_toss",
                                "sit_reach", "trunk_lift", "reverse_curl",
-                               "shoulder_stretch",
+                               "shoulder_stretch", "isometric_push_up",
                                "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
@@ -1615,6 +1681,12 @@ def stop(test_id: str):
         # still reaches screen3 as not-passed, carrying the closest gap the
         # fingers actually reached.
         _shoulder_stretch_engine.stop()
+        return {"ok": True}
+    if test_id == "isometric_push_up" and _isometric_push_up_engine is not None:
+        # The engine stages from its own stop() hook: a hold under way ends
+        # where the camera last saw the position. No hold started stages
+        # nothing, so screen3 shows no reading rather than a zero.
+        _isometric_push_up_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -1785,6 +1857,11 @@ async def reverse_curl_frame(request: Request):
 @app.post("/api/shoulder_stretch/frame")
 async def shoulder_stretch_frame(request: Request):
     return await _receive_frame(_shoulder_stretch_engine, request)
+
+
+@app.post("/api/isometric_push_up/frame")
+async def isometric_push_up_frame(request: Request):
+    return await _receive_frame(_isometric_push_up_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -2258,6 +2335,40 @@ def reverse_curl_action(b: ReverseCurlAction):
     # The engine validates the action name itself and reports unknown ones.
     return _reverse_curl_engine.action(b.action, b.value)
 
+# ── Isometric push-up live-feed control ────────────────────────────────
+class IsometricPushUpAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/isometric_push_up/feed")
+def isometric_push_up_feed():
+    if _isometric_push_up_engine is None or not _isometric_push_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Isometric push-up test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _isometric_push_up_engine is not None and _isometric_push_up_engine.is_running():
+            jpg = _isometric_push_up_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/isometric_push_up/state")
+def isometric_push_up_state():
+    if _isometric_push_up_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_isometric_push_up_engine.get_state()}
+
+@app.post("/api/isometric_push_up/action")
+def isometric_push_up_action(b: IsometricPushUpAction):
+    if _isometric_push_up_engine is None or not _isometric_push_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Isometric push-up test isn't running"}, status_code=409)
+    return _isometric_push_up_engine.action(b.action, b.value)
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -2582,6 +2693,25 @@ def save_shoulder_stretch(b: ShoulderStretchSave):
         best_gap_left  = b.best_gap_left,
         best_gap_right = b.best_gap_right,
         rating         = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/isometric_push_up")
+def save_isometric_push_up(b: IsometricPushUpSave):
+    """Fields: session_id, hold_sec (0-40, whole seconds), held_exact_s (opt),
+    end_reason (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.hold_sec is None or not 0 <= b.hold_sec <= 40:
+        return JSONResponse({"ok": False, "error": "Seconds held must be between 0 and 40"},
+                            status_code=400)
+    row_id = db.save_isometric_push_up(
+        session_id   = b.session_id,
+        hold_sec     = int(round(b.hold_sec)),
+        held_exact_s = b.held_exact_s,
+        end_reason   = b.end_reason,
+        rating       = b.rating,
     )
     return {"ok": True, "id": row_id}
 
