@@ -400,6 +400,7 @@
             trunk_lift:  'lift_cm',
             reverse_curl: 'passed',
             shoulder_stretch: 'passed',
+            isometric_push_up: 'hold_sec',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
             vertical_jump: 'jump_cm',
@@ -416,6 +417,7 @@
             trunk_lift:  'cm',
             reverse_curl: '',
             shoulder_stretch: '',
+            isometric_push_up: 's',
             bmi:         'cm',
             wingspan:    'cm',
             vertical_jump: 'cm',
@@ -437,7 +439,9 @@
         // scored 0, not "nothing measured". Every other measured test keeps the
         // "positive number" guard, which is what stops an empty box being saved
         // as a value; here an empty box is still refused, 0 is not.
-        const ZERO_OK = new Set(['pull_up', 'full_pull_up']).has(testId);
+        // Isometric push-up: a student who can't hold the position at all
+        // scored 0 seconds.
+        const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
 
@@ -656,6 +660,10 @@
                     const v = parseFloat(input.value);
                     if (badValue(v)) {
                         showSaveMessage('Enter a value before saving.', false);
+                        return;
+                    }
+                    if (testId === 'isometric_push_up' && v > 40) {
+                        showSaveMessage('Seconds held can\'t be more than 40 (the test maximum).', false);
                         return;
                     }
                     if (!pendingResult) {

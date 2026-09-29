@@ -585,6 +585,57 @@
                   return state.resolved ? { shoulderStretchScore: state.passed ? 1 : 0 } : null;
               },
           },
+          isometric_push_up: {
+              feedUrl:    '/api/isometric_push_up/feed',
+              stateUrl:   '/api/isometric_push_up/state',
+              actionUrl:  '/api/isometric_push_up/action',
+              browserCamera: true,
+              frameUrl:   '/api/isometric_push_up/frame',
+              // The phone sits on the floor side-on to the participant, screen
+              // toward the coach — the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              // Nothing to calibrate or press: the clock starts once the
+              // correct position is held still and stops itself on a break.
+              buttons: [
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-amber-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [`State: ${state.state}`];
+                  lines.push(`Time: ${state.elapsed_s} / ${state.max_hold_s} s` +
+                             (state.clock_running ? '  \u2014 clock running' : ''));
+                  const deg = (v, start, sign) => {
+                      if (v === null || v === undefined) return '--';
+                      const f = (x) => (sign && x > 0 ? '+' : '') + x + '\u00b0';
+                      return f(v) + ((start !== null && start !== undefined) ? ` (start ${f(start)})` : '');
+                  };
+                  if (state.elbow_deg !== null && state.elbow_deg !== undefined) {
+                      lines.push(`Elbow: ${deg(state.elbow_deg, state.elbow_start_deg)}   ` +
+                                 `Knee: ${deg(state.knee_deg, state.knee_start_deg)}`);
+                      lines.push(`Hips off line: ${deg(state.bend_deg, state.bend_start_deg, true)}`);
+                  } else {
+                      lines.push(state.pose_detected
+                          ? 'Body not fully visible \u2014 side-on, hands to toes in frame'
+                          : 'No participant detected');
+                  }
+                  if (state.resolved) {
+                      lines.push(`RESULT: ${state.seconds} s` +
+                                 (state.end_reason ? ` (${state.end_reason})` : ''));
+                  }
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              syncFields(state) {
+                  // Only a finished hold is synced, in exactly the BMI/Wingspan
+                  // payload shape: one numeric score, whole seconds held.
+                  return state.resolved
+                      ? { isometricPushUpScore: state.seconds }
+                      : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1226,6 +1277,7 @@
               wall_toss:'WallToss', sit_reach:'SitReach', trunk_lift:'TrunkLift',
               reverse_curl:'ReverseCurl',
               shoulder_stretch:'ShoulderStretch',
+              isometric_push_up:'IsometricPushUp',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
