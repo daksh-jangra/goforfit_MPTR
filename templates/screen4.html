@@ -628,6 +628,19 @@
                   if (state.status_msg) lines.push(state.status_msg);
                   return lines;
               },
+              // A beep when the clock starts and when it stops, so the student
+              // on the floor knows without looking at the screen. Only real
+              // transitions beep: the first poll just records where things
+              // are, and RESET (running -> not running, not resolved) is silent.
+              _prev: null,
+              onState(state) {
+                  const now = { running: !!state.clock_running, done: !!state.resolved };
+                  const prev = this._prev;
+                  this._prev = now;
+                  if (!prev || !state.running) return;
+                  if (now.running && !prev.running) beep(880, 0.25);
+                  if (now.done && !prev.done) beep(440, 0.8);
+              },
               syncFields(state) {
                   // Only a finished hold is synced, in exactly the BMI/Wingspan
                   // payload shape: one numeric score, whole seconds held.
@@ -826,6 +839,7 @@
           row.classList.remove('hidden');
           box.classList.remove('hidden');
           box.innerText = engineCfg.renderStatus(state).join('  •  ');
+          if (engineCfg.onState) engineCfg.onState(state);
           document.getElementById('ai-calib-overlay')?.classList.toggle('hidden', !engineCfg.showCalibOverlay(state));
           setButtonsEnabled(state);
       }
@@ -843,6 +857,33 @@
           if (btn) { btn.disabled = false; btn.innerText = 'START'; btn.classList.replace('bg-emerald-800', 'bg-emerald-500'); }
           runActive = false;
           camStatusClear();
+      }
+
+      // ── Beeps (used by tests with an onState hook) ─────────────────────
+      // Browsers only allow sound after the page has been tapped, so the
+      // audio context is created on the first tap (START counts).
+      let audioCtx = null;
+      document.addEventListener('pointerdown', () => {
+          try {
+              if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+              if (audioCtx.state === 'suspended') audioCtx.resume();
+          } catch (e) {}
+      });
+      function beep(freq, seconds) {
+          if (!audioCtx) return;
+          try {
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              osc.type = 'square';          // carries on a phone speaker
+              osc.frequency.value = freq;
+              const t = audioCtx.currentTime;
+              gain.gain.setValueAtTime(0.25, t);
+              gain.gain.setValueAtTime(0.25, t + seconds - 0.03);
+              gain.gain.linearRampToValueAtTime(0, t + seconds);
+              osc.connect(gain).connect(audioCtx.destination);
+              osc.start(t);
+              osc.stop(t + seconds);
+          } catch (e) {}
       }
 
       async function pollState() {
