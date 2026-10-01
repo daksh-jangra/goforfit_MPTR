@@ -85,11 +85,19 @@ The clock
              clock started and rises as the arm straightens further - only a
              steady reading (a full smoothing window) raises it, never one
              odd frame - so straightening and then bending back is caught.
-         The time stops at the FIRST frame of the break, not after the grace
-         - the grace only stops one shaky frame from ending a good hold.
+         The time stops at the last frame the position was still correct,
+         not after the grace - the grace only stops one shaky frame from
+         ending a good hold.
   CAP    20 s is the maximum; the clock stops itself there.
-  LOST   tracking gone longer than DROPOUT_GRACE_S ends the hold at the last
-         frame the camera saw: only time that was seen is credited. "Seen"
+  LOST   tracking (or the phone's frames) gone longer than DROPOUT_GRACE_S
+         ends the hold at the last frame the position was seen correct. A
+         shorter gap - school Wi-Fi stalls for a second at a time - does not:
+         if the student is still up when the picture comes back, the clock
+         carries on; if they sat down meanwhile, it stops at the last frame
+         they were seen up. Smoothing is cleared after any gap, so the first
+         frame back is judged on what it shows, not on readings from before.
+         If a break had begun before the picture was lost, its reason is
+         the one given. "Seen"
          means the hips, a hand that has a seat reading, and an arm that has
          an elbow mark - without those the hold cannot be checked. An arm
          that was hidden when the clock started gets its own mark from its
@@ -173,7 +181,14 @@ SINK_FRAC        = 0.35   # lift falls below this share of the starting lift
 SEAT_TOUCH_TORSO = 0.05   # ... but never a line closer to the seat than this
 ELBOW_BEND_DEG   = 20.0   # an elbow closes this far -> "elbows bent"
 BREAK_GRACE_S    = 0.30   # a break must last this long to end the hold
-DROPOUT_GRACE_S  = 0.60   # tracking may vanish this long mid-hold
+DROPOUT_GRACE_S  = 2.00   # mid-hold, tracking or the phone's frames may
+                          # vanish this long (0.6 ended good Isometric holds
+                          # on a single school Wi-Fi stall). The time is
+                          # still only credited if the student is seen up
+                          # again afterwards.
+SETTLE_GAP_S     = 0.60   # any gap in the frames longer than this empties
+                          # the seat / settle windows and the smoothing -
+                          # stillness can't be proven across time nobody saw
 
 SMOOTH_FRAMES    = 3      # median window per measurement
 MIN_VIS          = 0.50   # landmark visibility floor for every joint used
@@ -347,6 +362,8 @@ class SeatedPushUpTracker:
         self._bad_since = None
         self._bad_reason = None
         self._last_seen = None        # last frame the hold could be checked
+        self._last_good = None        # last frame the position was still correct -
+                                      # where the clock stops, whatever ends it
         self._last_frame_t = None
         self._now = None
 
@@ -362,13 +379,17 @@ class SeatedPushUpTracker:
         # Frames that simply stopped arriving (phone or network stalled) are
         # time nobody saw - the same as a tracking dropout.
         prev_t, self._last_frame_t = self._last_frame_t, now
-        if prev_t is not None and now - prev_t > DROPOUT_GRACE_S:
+        gap = (now - prev_t) if prev_t is not None else 0.0
+        if gap > SETTLE_GAP_S:
+            # Readings from before the gap say nothing about now: a median
+            # still holding them would let a student who sat down during the
+            # gap read as still up on the first frame back.
             self._seat_win.clear()
             self._settle.clear()
             self._smooth.reset()
-            if self.state == State.HOLDING:
-                return self._end(self._last_seen if self._last_seen is not None else prev_t,
-                                 "the video paused - the camera lost sight of the student")
+            if self.state == State.HOLDING and gap > DROPOUT_GRACE_S:
+                return self._end_lost(
+                    "the video paused - the camera lost sight of the student")
 
         if body is None:
             self._smooth.reset()
@@ -385,9 +406,10 @@ class SeatedPushUpTracker:
             # left the supports and the picture - so it is judged regardless.
             if not (self._stood(m) or self._checkable(m)):
                 if now - self._last_seen > DROPOUT_GRACE_S:
-                    return self._end(self._last_seen,
-                                     "the camera lost sight of the student")
-                return self._check_cap(now)
+                    return self._end_lost("the camera lost sight of the student")
+                # Unseen time is never capped or credited on its own: the
+                # clock only moves on if the position is seen again.
+                return None
             self._last_seen = now
             return self._check_hold(m, now)
 
@@ -545,6 +567,7 @@ class SeatedPushUpTracker:
             self.baseline["elbow_" + s] = float(np.median(vals)) if vals else None
         self.hold_start = self._settle[0][0]
         self._last_seen = now
+        self._last_good = now
         self._bad_since = None
         self._settle.clear()
         self.state = State.HOLDING
@@ -623,15 +646,26 @@ class SeatedPushUpTracker:
         if why is None:
             self._bad_since = None
             self._bad_reason = None
+            self._last_good = now
             self.status_msg = "Clock running - hold it"
             return self._check_cap(now)
         if self._bad_since is None:
             self._bad_since = now
             self._bad_reason = why
         if now - self._bad_since > BREAK_GRACE_S:
-            # The hold ended when the break began, not when it was confirmed.
-            return self._end(self._bad_since, BREAK_WORDS[self._bad_reason])
-        return self._check_cap(now)
+            # The hold ended at the last correct frame, not when the break
+            # was confirmed.
+            return self._end(self._last_good, BREAK_WORDS[self._bad_reason])
+        # No cap on a frame that may be a break: if it is one, the clock
+        # stops at the last good frame anyway; if not, the next good frame caps.
+        return None
+
+    def _end_lost(self, reason):
+        """The picture is gone for good. Stop at the last frame the position
+        was correct - and if a break had already begun, that is the reason."""
+        if self._bad_since is not None:
+            reason = BREAK_WORDS[self._bad_reason]
+        return self._end(self._last_good, reason)
 
     def _check_cap(self, now):
         if self.hold_start is not None and now - self.hold_start >= self.max_hold_s:
@@ -649,16 +683,13 @@ class SeatedPushUpTracker:
 
     def finish(self):
         """The coach pressed STOP. A hold under way ends at the last frame the
-        camera saw the student up. No hold started -> None: NOT COMPLETED (not
-        a zero). Already done -> that result unchanged."""
+        position was still correct. No hold started -> None: NOT COMPLETED
+        (not a zero). Already done -> that result unchanged."""
         if self.state == State.DONE:
             return self.result()
         if self.state != State.HOLDING:
             return None
-        when = self._last_seen if self._last_seen is not None else self._now
-        if self._bad_since is not None:
-            when = min(when, self._bad_since)
-        return self._end(when, "stopped by the coach")
+        return self._end(self._last_good, "stopped by the coach")
 
     # ── read-only views ──────────────────────────────────────────────────
     @property
