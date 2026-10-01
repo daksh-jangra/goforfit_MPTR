@@ -75,10 +75,18 @@ The clock
   LOST   tracking gone longer than DROPOUT_GRACE_S ends the hold at the last
          frame the camera saw: only time that was seen is credited. "Seen"
          means the hips, a hand that has a seat reading, and an arm that has
-         an elbow mark - without those the hold cannot be checked.
+         an elbow mark - without those the hold cannot be checked. An arm
+         that was hidden when the clock started gets its own mark from its
+         first steady reading, so the arms swapping in and out of view
+         mid-hold does not count as losing the student.
 
   Hips more than MAX_LIFT_TORSO above the seat is standing up, not a seated
-  push-up: it never starts the clock and it ends a hold.
+  push-up: it never starts the clock and it ends a hold. This one is judged
+  on SCREEN height, not against the hands - a student who stands takes the
+  hands off the supports and they rise too, so against the hands standing
+  reads as an ordinary 0.25-0.6 lift. A bumped phone moves the picture a
+  few centimetres; standing moves the hips a whole torso, so screen height
+  is safe for this rule alone.
 
   Stopping before the clock ever started is NOT COMPLETED, not a zero - a
   camera or setup problem must never be recorded against the participant.
@@ -129,8 +137,9 @@ SEAT_BAND_TORSO  = 0.10   # hip-above-hand spread allowed while sitting still
 # ── Lifted: the clock can start ──────────────────────────────────────────────────
 LIFT_MIN_TORSO   = 0.12   # hips this far above the seat = off it. ~5 cm on a
                           # child's ~42 cm torso; landmark jitter is ~0.03.
-MAX_LIFT_TORSO   = 0.80   # beyond this the student has stood up. A seated
-                          # push-up from bent arms lifts ~0.3-0.5.
+MAX_LIFT_TORSO   = 0.80   # hips this far up, on screen or against the
+                          # hands -> stood up. A seated push-up from bent
+                          # arms lifts ~0.3-0.5; standing ~1.0.
 SETTLE_S         = 1.0    # lifted and steady this long -> clock starts
 SETTLE_LIFT_BAND = 0.10   # lift spread allowed inside the settle window - wide
                           # for the same reason; the lift itself is >= 0.12
@@ -301,6 +310,8 @@ class SeatedPushUpTracker:
         self.current = None           # latest smoothed readings
         self.seat = None              # {side: hip-above-hand gap while sitting, px}
         self.seat_torso = None        # torso length while sitting, pixels
+        self.seat_hip_y = None        # mid-hip SCREEN height while sitting - only
+                                      # for spotting a stand-up (see the notes)
         self.lift = None              # current lift above the seat, torso lengths
         self.baseline = None          # starting lift, and each arm's elbow mark
         self.hold_start = None
@@ -308,7 +319,7 @@ class SeatedPushUpTracker:
         self.end_reason = None        # plain words: why the clock stopped
         self.capped = False
         self.status_msg = "Sit facing the camera, hands on the supports"
-        self._seat_win = deque()      # (t, hand gaps, torso) while sitting
+        self._seat_win = deque()      # (t, hand gaps, torso, hip_y) while sitting
         self._settle = deque()        # (t, metrics with 'lift')
         self._smooth = MedianSmoother()
         self._bad_since = None
@@ -346,7 +357,11 @@ class SeatedPushUpTracker:
         self.lift = self._lift_of(hand_gaps(m)) if m is not None else None
 
         if self.state == State.HOLDING:
-            if not self._checkable(m):
+            if m is not None:
+                self._mark_new_arms(m)
+            # A stand-up shows from the hips alone - the hands may well have
+            # left the supports and the picture - so it is judged regardless.
+            if not (self._stood(m) or self._checkable(m)):
                 if now - self._last_seen > DROPOUT_GRACE_S:
                     return self._end(self._last_seen,
                                      "the camera lost sight of the student")
@@ -374,17 +389,17 @@ class SeatedPushUpTracker:
             self.state = State.READY
             self.status_msg = "Sit still, hands on the supports"
             return None
+        if self._stood(m):
+            self._settle.clear()
+            self.state = State.READY
+            self.status_msg = "Stay seated - push up with the arms"
+            return None
         if self.lift is None:           # only a hand the seat was not read on
             self._settle.clear()
             self.state = State.READY
             self.status_msg = "Keep both hands in view"
             return None
 
-        if self.lift > MAX_LIFT_TORSO:
-            self._settle.clear()
-            self.state = State.READY
-            self.status_msg = "Stay seated - push up with the arms"
-            return None
         if self.lift < LIFT_MIN_TORSO:
             self._settle.clear()
             self.state = State.READY
@@ -436,11 +451,11 @@ class SeatedPushUpTracker:
         was seen first. A hand first seen during a still sit at the seat's
         level is added to it."""
         win = self._seat_win
-        win.append((now, hand_gaps(m), m["torso"]))
+        win.append((now, hand_gaps(m), m["torso"], m["hip_y"]))
 
         def still():
-            band = SEAT_BAND_TORSO * np.median([t for _, _, t in win])
-            return all(_band([g[s] for _, g, _ in win if s in g]) <= band for s in ARMS)
+            band = SEAT_BAND_TORSO * np.median([t for _, _, t, _ in win])
+            return all(_band([g[s] for _, g, _, _ in win if s in g]) <= band for s in ARMS)
 
         while len(win) > 1 and not still():
             win.popleft()
@@ -449,28 +464,29 @@ class SeatedPushUpTracker:
         # A hand counts if it was in view for at least half the stretch.
         gaps = {}
         for s in ARMS:
-            vals = [g[s] for _, g, _ in win if s in g]
+            vals = [g[s] for _, g, _, _ in win if s in g]
             if 2 * len(vals) >= len(win):
                 gaps[s] = float(np.median(vals))
         if not gaps:
             return
-        torso = float(np.median([t for _, _, t in win]))
+        torso = float(np.median([t for _, _, t, _ in win]))
+        hip_y = float(np.median([y for _, _, _, y in win]))
 
         if self.seat is None:
-            self._set_seat(gaps, torso, m)
+            self._set_seat(gaps, torso, hip_y, m)
             return
         lift = self._lift_of(gaps)
         if lift is None or lift < -SEAT_BAND_TORSO:
             # Sitting lower than the seat held (or only on hands it has no
             # reading for): this is the seat now.
-            self._set_seat(gaps, torso, m)
+            self._set_seat(gaps, torso, hip_y, m)
         elif abs(lift) <= SEAT_BAND_TORSO:
             for s, g in gaps.items():
                 if s not in self.seat:
                     self.seat[s] = g - lift * self.seat_torso
 
-    def _set_seat(self, gaps, torso, m):
-        self.seat, self.seat_torso = dict(gaps), torso
+    def _set_seat(self, gaps, torso, hip_y, m):
+        self.seat, self.seat_torso, self.seat_hip_y = dict(gaps), torso, hip_y
         self.lift = self._lift_of(hand_gaps(m))
         self._settle.clear()
 
@@ -519,6 +535,23 @@ class SeatedPushUpTracker:
               if s in self.seat and m.get("wrist_" + s) is not None]
         return float(np.mean(ys)) if ys else None
 
+    def _stood(self, m):
+        """Hips risen past MAX_LIFT_TORSO - on screen, or against the hands."""
+        if m is None or self.seat_hip_y is None:
+            return False
+        if (self.seat_hip_y - m["hip_y"]) / self.seat_torso > MAX_LIFT_TORSO:
+            return True
+        return self.lift is not None and self.lift > MAX_LIFT_TORSO
+
+    def _mark_new_arms(self, m):
+        """Mid-hold, an arm that was hidden when the clock started gets its
+        mark from its first steady reading (a full smoothing window), so it
+        can carry the hold when the other arm goes out of view."""
+        for s in ARMS:
+            k = "elbow_" + s
+            if self.baseline[k] is None and m[k] is not None and self._smooth.full(k):
+                self.baseline[k] = m[k]
+
     def _raise_marks(self, m):
         """An arm that straightens further than its mark raises the mark, so
         a later bend is measured from the straightest it has been. Only a
@@ -531,11 +564,12 @@ class SeatedPushUpTracker:
                 self.baseline[k] = m[k]
 
     def _broken(self, m):
-        """The first rule this frame breaks, or None."""
+        """The first rule this frame breaks, or None. A stand-up comes first:
+        it is the one rule judged without the hands, so lift may be None."""
+        if self._stood(m):
+            return "stood"
         if self.lift < self.sink_line:
             return "sink"
-        if self.lift > MAX_LIFT_TORSO:
-            return "stood"
         for s in ARMS:
             base, now_deg = self.baseline["elbow_" + s], m["elbow_" + s]
             if base is not None and now_deg is not None and now_deg < base - ELBOW_BEND_DEG:
