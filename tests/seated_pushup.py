@@ -53,10 +53,22 @@ The clock
          SEAT_STILL_S. How far the hips then sit above each hand is the seat.
          A later still sit that reads LOWER replaces it, so a student who was
          already part-way up when the camera first saw them is not held to
-         that.
-  START  once the hips are LIFT_MIN_TORSO above the seat, at least one whole
-         arm (shoulder, elbow, wrist) is in view, and the body has been steady
-         for SETTLE_S. That second is credited - they were holding it. The
+         that. The seat also keeps where the hips are on SCREEN, and a later
+         still sit corrects it:
+           * hips level on screen but the hands now lower (hands moved from
+             the lap down onto the supports) -> the hands moved, not the
+             body: the seat is learned again
+           * hips level against the hands but moved on screen (a bumped
+             phone, or sitting down after standing still in front of the
+             camera) -> the on-screen seat is moved to match
+  START  once the hips are LIFT_MIN_TORSO above the seat against the hands
+         AND have risen at least SCREEN_RISE_MIN_TORSO on screen, at least one
+         whole arm (shoulder, elbow, wrist) is in view, and the body has been
+         steady
+         for SETTLE_S. A real lift moves the hips on screen and away from the
+         hands; hands shifting on the supports only does the second, and a
+         bumped phone only the first, so neither alone can start the clock.
+         That second is credited - they were holding it. The
          elbow angles and the lift over that second become the participant's
          own starting position. With no arm in view there is no elbow to
          check, so the clock waits rather than run on the hips alone.
@@ -137,6 +149,9 @@ SEAT_BAND_TORSO  = 0.10   # hip-above-hand spread allowed while sitting still
 # ── Lifted: the clock can start ──────────────────────────────────────────────────
 LIFT_MIN_TORSO   = 0.12   # hips this far above the seat = off it. ~5 cm on a
                           # child's ~42 cm torso; landmark jitter is ~0.03.
+SCREEN_RISE_MIN_TORSO = 0.06  # ... and at least this far up on screen (~2.5 cm)
+                              # - the check that hands moving lower on the
+                              # supports is not mistaken for a lift.
 MAX_LIFT_TORSO   = 0.80   # hips this far up, on screen or against the
                           # hands -> stood up. A seated push-up from bent
                           # arms lifts ~0.3-0.5; standing ~1.0.
@@ -400,7 +415,7 @@ class SeatedPushUpTracker:
             self.status_msg = "Keep both hands in view"
             return None
 
-        if self.lift < LIFT_MIN_TORSO:
+        if self.lift < LIFT_MIN_TORSO or self._screen_rise(m) < SCREEN_RISE_MIN_TORSO:
             self._settle.clear()
             self.state = State.READY
             self.status_msg = "Push up - lift off the seat"
@@ -454,7 +469,11 @@ class SeatedPushUpTracker:
         win.append((now, hand_gaps(m), m["torso"], m["hip_y"]))
 
         def still():
+            # Still against the hands AND on screen - standing then sitting
+            # can leave the hands-to-hips gap unchanged.
             band = SEAT_BAND_TORSO * np.median([t for _, _, t, _ in win])
+            if _band([y for _, _, _, y in win]) > band:
+                return False
             return all(_band([g[s] for _, g, _, _ in win if s in g]) <= band for s in ARMS)
 
         while len(win) > 1 and not still():
@@ -476,14 +495,24 @@ class SeatedPushUpTracker:
             self._set_seat(gaps, torso, hip_y, m)
             return
         lift = self._lift_of(gaps)
+        screen = (self.seat_hip_y - hip_y) / self.seat_torso
         if lift is None or lift < -SEAT_BAND_TORSO:
             # Sitting lower than the seat held (or only on hands it has no
             # reading for): this is the seat now.
+            self._set_seat(gaps, torso, hip_y, m)
+        elif lift > SEAT_BAND_TORSO and screen <= SEAT_BAND_TORSO:
+            # Higher above the hands, but the hips have not moved on screen:
+            # the HANDS moved (lap -> supports), not the body. Learn it again.
             self._set_seat(gaps, torso, hip_y, m)
         elif abs(lift) <= SEAT_BAND_TORSO:
             for s, g in gaps.items():
                 if s not in self.seat:
                     self.seat[s] = g - lift * self.seat_torso
+            # Sitting, by the hands - so wherever the hips are on screen now
+            # is the seat on screen (after a bumped phone, or after sitting
+            # down from standing). Taken at zero lift, so the two references
+            # stay in step.
+            self.seat_hip_y = hip_y + lift * self.seat_torso
 
     def _set_seat(self, gaps, torso, hip_y, m):
         self.seat, self.seat_torso, self.seat_hip_y = dict(gaps), torso, hip_y
@@ -535,11 +564,15 @@ class SeatedPushUpTracker:
               if s in self.seat and m.get("wrist_" + s) is not None]
         return float(np.mean(ys)) if ys else None
 
+    def _screen_rise(self, m):
+        """How far the hips are above the seat on SCREEN, torso lengths."""
+        return (self.seat_hip_y - m["hip_y"]) / self.seat_torso
+
     def _stood(self, m):
         """Hips risen past MAX_LIFT_TORSO - on screen, or against the hands."""
         if m is None or self.seat_hip_y is None:
             return False
-        if (self.seat_hip_y - m["hip_y"]) / self.seat_torso > MAX_LIFT_TORSO:
+        if self._screen_rise(m) > MAX_LIFT_TORSO:
             return True
         return self.lift is not None and self.lift > MAX_LIFT_TORSO
 
