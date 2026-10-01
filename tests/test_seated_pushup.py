@@ -183,7 +183,7 @@ def check_short_dropout_survives_long_one_ends():
     _, res = feed(tr, [(2, SIT), (5, UP), (0.4, None), (20, UP)])
     assert res and res["capped"], res
     tr = sp.SeatedPushUpTracker()
-    _, res = feed(tr, [(2, SIT), (5, UP), (2, None), (5, UP)])
+    _, res = feed(tr, [(2, SIT), (5, UP), (3, None), (5, UP)])
     assert res and res["hold_sec"] == 5, res
     assert "lost sight" in res["end_reason"], res
 
@@ -229,7 +229,7 @@ def check_no_hands_no_lift():
     assert tr.seat is None and tr.hold_start is None
     # Seat known, then both hands vanish mid-hold: that is losing the student.
     tr = sp.SeatedPushUpTracker()
-    _, res = feed(tr, [(2, SIT), (5, UP), (2, body(0.30, None, None, wrist_left=None,
+    _, res = feed(tr, [(2, SIT), (5, UP), (3, body(0.30, None, None, wrist_left=None,
                                                     wrist_right=None))])
     assert res and res["hold_sec"] == 5 and "lost sight" in res["end_reason"], res
 
@@ -402,6 +402,57 @@ def check_stood_still_before_sitting():
     assert abs(tr.seat_hip_y - SEAT_Y) < 2.0, tr.seat_hip_y
     _, res = feed(tr, [(4, sat(0.30, 176.0)), (3, stand())], t0=t)
     assert res and res["hold_sec"] == 4 and res["end_reason"] == sp.BREAK_WORDS["stood"], res
+
+
+def check_wifi_stall_keeps_a_good_hold():
+    # The phone's frames stop for up to 2 s (school Wi-Fi) while the student
+    # stays up: the hold carries on - and the unseen time counts, because
+    # they are seen still up afterwards.
+    for stall in (0.8, 1.5, 1.9):
+        tr = sp.SeatedPushUpTracker()
+        t, _ = feed(tr, [(2, SIT), (5, UP)])
+        _, res = feed(tr, [(20, UP)], t0=t + stall)
+        assert res and res["capped"], (stall, res)
+    # Tracking lost (frames still arriving) for 1.5 s - the same.
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, SIT), (5, UP), (1.5, None), (20, UP)])
+    assert res and res["capped"], res
+
+
+def check_long_stall_stops_at_last_good_frame():
+    tr = sp.SeatedPushUpTracker()
+    t, _ = feed(tr, [(2, SIT), (5, UP)])
+    res = tr.update(UP, now=t + 2.5)
+    assert res and res["hold_sec"] == 5 and "paused" in res["end_reason"], res
+
+
+def check_sat_down_during_a_stall():
+    # Up for 5 s, then the frames stop for 1.5 s and when they come back the
+    # student is sitting. Nothing before the gap may vouch for them: the
+    # clock stops at the last frame they were seen up.
+    tr = sp.SeatedPushUpTracker()
+    t, _ = feed(tr, [(2, SIT), (5, UP)])
+    _, res = feed(tr, [(3, SIT)], t0=t + 1.5)
+    assert res and res["end_reason"] == sp.BREAK_WORDS["sink"], res
+    assert abs(res["held_exact_s"] - 5.0) < 0.1, res
+
+
+def check_sat_down_then_lost_from_view():
+    # They sit back down and the camera loses them a moment later, before
+    # the break grace is over. The clock stops at the last frame they were
+    # up (not when the camera lost them), with the real reason.
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, SIT), (5, UP), (0.25, SIT), (3, None)])
+    assert res and res["end_reason"] == sp.BREAK_WORDS["sink"], res
+    assert abs(res["held_exact_s"] - 5.0) < 0.1, res
+
+
+def check_stop_ends_at_last_good_frame():
+    # STOP pressed while a break is under way: the clock stops before it.
+    tr = sp.SeatedPushUpTracker()
+    feed(tr, [(2, SIT), (6, UP), (0.2, SIT)])
+    res = tr.finish()
+    assert res and abs(res["held_exact_s"] - 6.0) < 0.1, res
 
 
 def check_sink_reason_wording():
