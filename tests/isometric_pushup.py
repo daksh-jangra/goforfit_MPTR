@@ -40,11 +40,18 @@ The clock
   STOP   when any of these lasts longer than BREAK_GRACE_S:
            * the elbows bend        (ELBOW_BEND_DEG below the start,
                                      or below HOLD_ELBOW_MIN_DEG at all)
-           * the hips sag or pike   (BEND_MOVE_DEG away from the start,
-                                     or more than HOLD_BEND_MAX_DEG off the line)
+           * the hips sag or pike   (BEND_MOVE_DEG further from straight than
+                                     the start - see below - or more than
+                                     HOLD_BEND_MAX_DEG off the line)
            * the knees bend         (KNEE_BEND_DEG below the start,
                                      or below HOLD_KNEE_MIN_DEG at all)
            * the body sways         (SWAY_MOVE shoulder travel over the hand)
+         Hips moving TOWARD straight never stop the clock - a student who
+         starts a little piked and lowers into a better line is correcting,
+         not breaking (owner's call, 2026-10-01). Moving away from straight,
+         on either side, is allowed BEND_MOVE_DEG past whichever is worse:
+         the start or straight itself. Started +18 (piked): fine anywhere
+         from -15 (sag) to +33 (pike). Started straight: -15 to +15.
          The fixed limits matter for a student who only just qualified: arms
          that start at 150 could otherwise bend to 131 before "20 below the
          start" caught them.
@@ -118,7 +125,7 @@ SETTLE_SWAY_BAND  = 0.10
 
 # ── Breaking the hold (all measured against the participant's own start) ────────
 ELBOW_BEND_DEG  = 20.0   # elbow closes this far -> "elbows bent"
-BEND_MOVE_DEG   = 15.0   # hip leaves its start line this far -> sag / pike
+BEND_MOVE_DEG   = 15.0   # hip moves this far further from straight -> sag / pike
 KNEE_BEND_DEG   = 20.0   # knee closes this far -> "knees bent"
 SWAY_MOVE       = 0.25   # shoulder travels this many torso lengths forward or
                          # back over the planted hand -> "swayed". ~11 cm on a
@@ -410,7 +417,11 @@ class IsometricPushUpTracker:
         b = self.baseline
         if m["elbow"] < b["elbow"] - ELBOW_BEND_DEG or m["elbow"] < HOLD_ELBOW_MIN_DEG:
             return "elbow"
-        if abs(m["bend"] - b["bend"]) > BEND_MOVE_DEG or abs(m["bend"]) > HOLD_BEND_MAX_DEG:
+        # Toward straight is free; away from it gets BEND_MOVE_DEG past the
+        # worse of the start and straight (0).
+        lo = min(b["bend"], 0.0) - BEND_MOVE_DEG
+        hi = max(b["bend"], 0.0) + BEND_MOVE_DEG
+        if not lo <= m["bend"] <= hi or abs(m["bend"]) > HOLD_BEND_MAX_DEG:
             return "bend"
         if m["knee"] < b["knee"] - KNEE_BEND_DEG or m["knee"] < HOLD_KNEE_MIN_DEG:
             return "knee"
