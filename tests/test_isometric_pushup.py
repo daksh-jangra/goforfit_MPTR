@@ -216,6 +216,35 @@ def check_fixed_limits_catch_a_borderline_start():
     assert tr.state == ip.State.HOLDING, tr.result()
 
 
+def check_hips_toward_straight_is_free_away_is_not():
+    """Owner's call: correcting INTO a straighter line never stops the clock;
+    moving away from straight, on either side, still does."""
+    # Started piked, lowers to straight: keeps running.
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(5, near(pose(bend=18)))])
+    feed(tr, [(5, near(pose(bend=0)))], t0=t)
+    assert tr.state == ip.State.HOLDING, tr.result()
+
+    # Started sagging, lifts to straight: keeps running.
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(5, near(pose(bend=-18)))])
+    feed(tr, [(5, near(pose(bend=0)))], t0=t)
+    assert tr.state == ip.State.HOLDING, tr.result()
+
+    # Started piked, comes down THROUGH straight into a sag past 15: stops.
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(5, near(pose(bend=18)))])
+    feed(tr, [(1, near(pose(bend=-17)))], t0=t)
+    assert tr.resolved and tr.end_reason == "hips sagged or piked", tr.result()
+
+    # Started piked, pikes further by more than 15: stops (fixed 28 limit
+    # gets there first here, either way it stops).
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(5, near(pose(bend=10)))])
+    feed(tr, [(1, near(pose(bend=26)))], t0=t)
+    assert tr.resolved and tr.end_reason == "hips sagged or piked", tr.result()
+
+
 def check_break_then_camera_loss_ends_at_the_break():
     tr = ip.IsometricPushUpTracker()
     feed(tr, [(10, near(GOOD)), (0.25, near(pose(elbow=120))), (3, None)])
