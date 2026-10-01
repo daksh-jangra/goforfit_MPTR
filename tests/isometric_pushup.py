@@ -38,15 +38,25 @@ The clock
          every later frame is compared with THAT, so a child whose arms lock
          at 160 is not held to someone else's 175.
   STOP   when any of these lasts longer than BREAK_GRACE_S:
-           * the elbows bend        (ELBOW_BEND_DEG below the start)
-           * the hips sag or pike   (BEND_MOVE_DEG away from the start)
-           * the knees bend         (KNEE_BEND_DEG below the start)
+           * the elbows bend        (ELBOW_BEND_DEG below the start,
+                                     or below HOLD_ELBOW_MIN_DEG at all)
+           * the hips sag or pike   (BEND_MOVE_DEG away from the start,
+                                     or more than HOLD_BEND_MAX_DEG off the line)
+           * the knees bend         (KNEE_BEND_DEG below the start,
+                                     or below HOLD_KNEE_MIN_DEG at all)
            * the body sways         (SWAY_MOVE shoulder travel over the hand)
-         The time stops at the FIRST frame of the break, not after the grace
-         - the grace only stops one shaky frame from ending a good hold.
+         The fixed limits matter for a student who only just qualified: arms
+         that start at 150 could otherwise bend to 131 before "20 below the
+         start" caught them.
+         The time stops at the last frame the position was still correct,
+         not after the grace - the grace only stops one shaky frame from
+         ending a good hold.
   CAP    40 s is the maximum; the clock stops itself there.
-  LOST   tracking gone longer than DROPOUT_GRACE_S ends the hold at the last
-         frame the camera saw: only time that was seen is credited.
+  LOST   tracking (or the phone's frames) gone longer than DROPOUT_GRACE_S
+         ends the hold at the last frame the position was seen. A shorter gap
+         - school Wi-Fi stalls for a second at a time - does not: if the
+         student is still in position when the picture comes back, the clock
+         carries on.
 
   Stopping before the clock ever started is NOT COMPLETED, not a zero - a
   camera or setup problem must never be recorded against the participant.
@@ -115,8 +125,20 @@ SWAY_MOVE       = 0.25   # shoulder travels this many torso lengths forward or
                          # child: clearly visible, well above landmark jitter
                          # (~0.03). Deliberately tolerant - sway is the rule
                          # most likely to cut a good hold short.
+# Fixed limits while the clock runs, whatever the start was. A little looser
+# than the entry gates so a student who only just qualified isn't stopped by
+# landmark jitter.
+HOLD_ELBOW_MIN_DEG = 140.0
+HOLD_BEND_MAX_DEG  = 28.0
+HOLD_KNEE_MIN_DEG  = 140.0
 BREAK_GRACE_S   = 0.30   # a break must last this long to end the hold
-DROPOUT_GRACE_S = 0.60   # tracking may vanish this long mid-hold
+DROPOUT_GRACE_S = 2.00   # mid-hold, tracking or the phone's frames may vanish
+                         # this long. 0.6 s ended good holds on a single Wi-Fi
+                         # stall; the time is still only credited if the
+                         # position is seen again afterwards.
+SETTLE_GAP_S    = 0.60   # before the clock starts, any gap longer than this
+                         # empties the settle window - stillness can't be
+                         # proven across time nobody saw
 
 SMOOTH_FRAMES   = 3      # median window per measurement
 MIN_VIS         = 0.50   # landmark visibility floor for every joint used
@@ -279,9 +301,11 @@ class IsometricPushUpTracker:
         self.status_msg = "Get into the push-up position, side-on to the camera"
         self._settle = deque()        # (t, metrics)
         self._smooth = {SIDE_LEFT: MedianSmoother(), SIDE_RIGHT: MedianSmoother()}
-        self._bad_since = None
+        self._bad_since = None        # first frame of a possible break (grace timer)
         self._bad_reason = None
         self._last_seen = None        # last frame the locked side was tracked
+        self._last_good = None        # last frame the position was still correct -
+                                      # where the clock stops, whatever ends it
         self._last_frame_t = None
         self._now = None
 
@@ -297,22 +321,28 @@ class IsometricPushUpTracker:
         # Frames that simply stopped arriving (phone or network stalled) are
         # time nobody saw - the same as a tracking dropout.
         prev_t, self._last_frame_t = self._last_frame_t, now
-        if prev_t is not None and now - prev_t > DROPOUT_GRACE_S:
-            self._settle.clear()
+        gap = (now - prev_t) if prev_t is not None else 0.0
+        if gap > SETTLE_GAP_S:
+            # Readings from before the gap say nothing about now: a median
+            # still holding them would let a student who collapsed during the
+            # gap read as "still in position" on the first frame back.
             for sm in self._smooth.values():
                 sm.reset()
-            if self.state == State.HOLDING:
-                return self._end(self._last_seen if self._last_seen is not None else prev_t,
+            self._settle.clear()
+            if self.state == State.HOLDING and gap > DROPOUT_GRACE_S:
+                return self._end(self._last_good,
                                  "the video paused - the camera lost sight of the student")
 
         m = self._pick(sides)
 
         if self.state == State.HOLDING:
             if m is None:
+                # Unseen time is never capped or credited on its own: the
+                # clock only moves on if the position is seen again.
                 if now - self._last_seen > DROPOUT_GRACE_S:
-                    return self._end(self._last_seen,
+                    return self._end(self._last_good,
                                      "the camera lost sight of the student")
-                return self._check_cap(now)
+                return None
             self._last_seen = now
             return self._check_hold(m, now)
 
@@ -369,6 +399,7 @@ class IsometricPushUpTracker:
                          for k in METRICS}
         self.hold_start = self._settle[0][0]
         self._last_seen = now
+        self._last_good = now
         self._bad_since = None
         self._settle.clear()
         self.state = State.HOLDING
@@ -377,11 +408,11 @@ class IsometricPushUpTracker:
     def _broken(self, m):
         """The first rule this frame breaks, or None."""
         b = self.baseline
-        if m["elbow"] < b["elbow"] - ELBOW_BEND_DEG:
+        if m["elbow"] < b["elbow"] - ELBOW_BEND_DEG or m["elbow"] < HOLD_ELBOW_MIN_DEG:
             return "elbow"
-        if abs(m["bend"] - b["bend"]) > BEND_MOVE_DEG:
+        if abs(m["bend"] - b["bend"]) > BEND_MOVE_DEG or abs(m["bend"]) > HOLD_BEND_MAX_DEG:
             return "bend"
-        if m["knee"] < b["knee"] - KNEE_BEND_DEG:
+        if m["knee"] < b["knee"] - KNEE_BEND_DEG or m["knee"] < HOLD_KNEE_MIN_DEG:
             return "knee"
         if abs(m["sway"] - b["sway"]) > SWAY_MOVE:
             return "sway"
@@ -392,15 +423,19 @@ class IsometricPushUpTracker:
         if why is None:
             self._bad_since = None
             self._bad_reason = None
+            self._last_good = now
             self.status_msg = "Clock running - hold the position"
             return self._check_cap(now)
         if self._bad_since is None:
             self._bad_since = now
             self._bad_reason = why
         if now - self._bad_since > BREAK_GRACE_S:
-            # The hold ended when the break began, not when it was confirmed.
-            return self._end(self._bad_since, BREAK_WORDS[self._bad_reason])
-        return self._check_cap(now)
+            # The hold ended at the last correct frame, not when the break
+            # was confirmed.
+            return self._end(self._last_good, BREAK_WORDS[self._bad_reason])
+        # No cap on a frame that may be a break: if it is one, the clock
+        # stops at the last good frame anyway; if not, the next good frame caps.
+        return None
 
     def _check_cap(self, now):
         if self.hold_start is not None and now - self.hold_start >= self.max_hold_s:
@@ -418,16 +453,13 @@ class IsometricPushUpTracker:
 
     def finish(self):
         """The coach pressed STOP. A hold under way ends at the last frame the
-        camera saw the student in position. No hold started -> None: NOT
+        position was still correct. No hold started -> None: NOT
         COMPLETED (not a zero). Already done -> that result unchanged."""
         if self.state == State.DONE:
             return self.result()
         if self.state != State.HOLDING:
             return None
-        when = self._last_seen if self._last_seen is not None else self._now
-        if self._bad_since is not None:
-            when = min(when, self._bad_since)
-        return self._end(when, "stopped by the coach")
+        return self._end(self._last_good, "stopped by the coach")
 
     # ── read-only views ──────────────────────────────────────────────────
     @property

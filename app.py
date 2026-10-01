@@ -2367,7 +2367,13 @@ def isometric_push_up_state():
 def isometric_push_up_action(b: IsometricPushUpAction):
     if _isometric_push_up_engine is None or not _isometric_push_up_engine.is_running():
         return JSONResponse({"ok": False, "error": "Isometric push-up test isn't running"}, status_code=409)
-    return _isometric_push_up_engine.action(b.action, b.value)
+    res = _isometric_push_up_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # The trial being thrown away may already have staged its time.
+        # Left in place, screen3 would show that voided score if the next
+        # try never starts the clock.
+        _pending.pop("isometric_push_up", None)
+    return res
 
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):

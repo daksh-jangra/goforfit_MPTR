@@ -174,6 +174,56 @@ def check_frames_stop_arriving():
     assert tr.resolved and tr.score_s == 7, tr.result()
 
 
+def check_wifi_stall_does_not_end_a_good_hold():
+    """A 1.5 s gap in the phone's frames, student still in position after:
+    the clock carries on (0.6 s used to end the trial)."""
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(25, near(GOOD))])
+    feed(tr, [(5, near(GOOD))], t0=t + 1.5)
+    assert tr.state == ip.State.HOLDING, tr.result()
+    assert 31 < tr.elapsed_s < 32, tr.elapsed_s
+
+    # ...but if the picture comes back on a broken position, the time ends
+    # where it was last seen correct, not after the gap.
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(25, near(GOOD))])
+    feed(tr, [(1, near(pose(elbow=110)))], t0=t + 1.5)
+    assert tr.resolved and tr.score_s == 25, tr.result()
+
+
+def check_fixed_limits_catch_a_borderline_start():
+    """Arms that only just qualified (152) bending to 135 is only 17 below
+    the start, but it is no longer 'arms straight'. Same for the hips."""
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(6, near(pose(elbow=152)))])
+    feed(tr, [(1, near(pose(elbow=135)))], t0=t)
+    assert tr.resolved and tr.end_reason == "elbows bent", tr.result()
+    assert tr.score_s == 6
+
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(6, near(pose(bend=18)))])
+    feed(tr, [(1, near(pose(bend=31)))], t0=t)
+    assert tr.resolved and tr.end_reason == "hips sagged or piked", tr.result()
+
+    tr = ip.IsometricPushUpTracker()
+    t, _ = feed(tr, [(6, near(pose(knee=152)))])
+    feed(tr, [(1, near(pose(knee=136)))], t0=t)
+    assert tr.resolved and tr.end_reason == "knees bent", tr.result()
+
+    # Jitter around a borderline start must NOT trip the fixed limits.
+    tr = ip.IsometricPushUpTracker()
+    feed(tr, [(20, near(pose(elbow=154, bend=17, knee=154)))], jitter=3)
+    assert tr.state == ip.State.HOLDING, tr.result()
+
+
+def check_break_then_camera_loss_ends_at_the_break():
+    tr = ip.IsometricPushUpTracker()
+    feed(tr, [(10, near(GOOD)), (0.25, near(pose(elbow=120))), (3, None)])
+    assert tr.resolved, tr.result()
+    assert tr.elapsed_s < 10.05, tr.result()      # not the 10.2 the break ran to
+    assert tr.score_s == 10, tr.result()
+
+
 def check_stop_mid_hold_and_before():
     tr = ip.IsometricPushUpTracker()
     feed(tr, [(17.3, near(GOOD))])
