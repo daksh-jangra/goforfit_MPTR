@@ -55,9 +55,13 @@ The clock
          already part-way up when the camera first saw them is not held to
          that. The seat also keeps where the hips are on SCREEN, and a later
          still sit corrects it:
-           * hips level on screen but the hands now lower (hands moved from
-             the lap down onto the supports) -> the hands moved, not the
-             body: the seat is learned again
+           * hips level on screen but the hands moved on screen by more than
+             HAND_MOVE_TORSO (from the lap down onto the supports, or just
+             re-gripping a little lower) -> the hands moved, not the body:
+             the seat is learned again. Even a small shift matters - left
+             in, it counts as lift, and a student on blocks who sits back
+             down with straight arms would still read as "up". A real lift
+             moves the hips, not the hands, so it never triggers this.
            * hips level against the hands but moved on screen (a bumped
              phone, or sitting down after standing still in front of the
              camera) -> the on-screen seat is moved to match
@@ -149,6 +153,9 @@ SEAT_BAND_TORSO  = 0.10   # hip-above-hand spread allowed while sitting still
 # ── Lifted: the clock can start ──────────────────────────────────────────────────
 LIFT_MIN_TORSO   = 0.12   # hips this far above the seat = off it. ~5 cm on a
                           # child's ~42 cm torso; landmark jitter is ~0.03.
+HAND_MOVE_TORSO  = 0.04   # hands moved this far on screen while the hips
+                          # stayed put -> re-learn the seat (~1.7 cm). A still
+                          # stretch's median hand height wobbles ~0.01.
 SCREEN_RISE_MIN_TORSO = 0.06  # ... and at least this far up on screen (~2.5 cm)
                               # - the check that hands moving lower on the
                               # supports is not mistaken for a lift.
@@ -500,9 +507,10 @@ class SeatedPushUpTracker:
             # Sitting lower than the seat held (or only on hands it has no
             # reading for): this is the seat now.
             self._set_seat(gaps, torso, hip_y, m)
-        elif lift > SEAT_BAND_TORSO and screen <= SEAT_BAND_TORSO:
-            # Higher above the hands, but the hips have not moved on screen:
-            # the HANDS moved (lap -> supports), not the body. Learn it again.
+        elif abs(lift - screen) > HAND_MOVE_TORSO and screen <= SEAT_BAND_TORSO:
+            # lift - screen is how far the hands moved on screen. They moved,
+            # but the hips did not: the HANDS moved (lap -> supports, or a
+            # re-grip), not the body. Learn it again.
             self._set_seat(gaps, torso, hip_y, m)
         elif abs(lift) <= SEAT_BAND_TORSO:
             for s, g in gaps.items():

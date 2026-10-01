@@ -338,6 +338,34 @@ def check_hands_moving_onto_supports_is_not_a_lift():
         assert res["end_reason"] == sp.BREAK_WORDS["sink"], (drop, res)
 
 
+def check_small_regrip_then_sitting_down_stops_the_clock():
+    # Push-up blocks: arms straight both sitting and lifted. After the seat is
+    # learned the hands settle a little lower (a re-grip, 0.04-0.09 torso -
+    # too small to look like a lift on its own). Then a small push, then the
+    # student sits back down with the arms still straight. Left uncorrected,
+    # the re-grip reads as lift and the clock ran on while they sat.
+    for drop in (0.05, 0.07, 0.09):
+        low = HAND_Y + drop * TORSO
+        b = lambda lift: body(lift, 176.0, 176.0, wrist_left=low, wrist_right=low)
+        for lift in (0.20, 0.25):     # clear of the lift minimum, so the
+            for seed in range(5):      # start is not late from wobble alone
+                tr = sp.SeatedPushUpTracker()
+                _, res = feed(tr, [(2, body(0.0, 176.0, 176.0)), (3, b(0.0)),
+                                   (5, b(lift)), (6, b(0.0))], jitter=3, seed=seed)
+                assert res and res["end_reason"] == sp.BREAK_WORDS["sink"], (drop, lift, seed, res)
+                assert 4 <= res["hold_sec"] <= 5, (drop, lift, seed, res)
+        # The bug itself lives at SMALL lifts, where the re-grip is a big
+        # share of the reading. Whenever the clock started there, it must
+        # not still be running after they have sat down for 12 s.
+        for lift in (0.12, 0.15):
+            for seed in range(10):
+                tr = sp.SeatedPushUpTracker()
+                feed(tr, [(2, body(0.0, 176.0, 176.0)), (3, b(0.0)),
+                          (5, b(lift)), (12, b(0.0))], jitter=3, seed=seed)
+                running = tr.state == sp.State.HOLDING or (tr.resolved and tr.capped)
+                assert not running, (drop, lift, seed, tr.state, round(tr.elapsed_s, 1))
+
+
 def check_screen_rise_is_a_backstop():
     # Re-learning the seat after the hands move needs a still second, and so
     # does starting the clock - today the re-learn wins the tie. Make the seat
