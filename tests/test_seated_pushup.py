@@ -274,6 +274,53 @@ def check_one_odd_frame_does_not_raise_the_mark():
     assert res and res["capped"], res
 
 
+def stand(elbow=175.0):
+    """Stood up: hips a whole torso higher on screen, hands off the supports
+    hanging ~0.35 torso below the hips - so against the hands it reads as an
+    ordinary-looking lift."""
+    hip = SEAT_Y - 1.0 * TORSO
+    return {"hip_y": hip, "torso": TORSO,
+            "wrist_left": hip + 0.35 * TORSO, "wrist_right": hip + 0.35 * TORSO,
+            "elbow_left": elbow, "elbow_right": elbow}
+
+
+def check_standing_up_is_caught_on_screen():
+    # Hands at the side, low on the blocks.
+    tr = sp.SeatedPushUpTracker()
+    feed(tr, [(2, SIT), (8, stand())])
+    assert tr.hold_start is None, (tr.state, tr.lift)
+    assert tr.status_msg == "Stay seated - push up with the arms", tr.status_msg
+    # Wheelchair armrests: hands ABOVE the hips while sitting.
+    armrest = body(0.0, 100.0, 100.0, wrist_left=SEAT_Y - 50, wrist_right=SEAT_Y - 50)
+    tr = sp.SeatedPushUpTracker()
+    feed(tr, [(2, armrest), (8, stand())])
+    assert tr.hold_start is None, (tr.state, tr.lift)
+
+
+def check_standing_up_mid_hold_ends_it():
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, SIT), (4, UP), (3, stand())])
+    assert res and res["end_reason"] == sp.BREAK_WORDS["stood"] and res["hold_sec"] == 4, res
+    # ... even when the hands leave the picture as they stand.
+    gone = dict(stand(), wrist_left=None, wrist_right=None, elbow_left=None, elbow_right=None)
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, SIT), (4, UP), (3, gone)])
+    assert res and res["end_reason"] == sp.BREAK_WORDS["stood"] and res["hold_sec"] == 4, res
+
+
+def check_arms_swapping_view_mid_hold():
+    # Only the right arm is seen as the clock starts; mid-hold it goes out of
+    # view and the left arm comes in. The left arm takes its own mark, so the
+    # hold carries on - and a bend in it still ends the hold.
+    tr = sp.SeatedPushUpTracker()
+    t, res = feed(tr, [(2, body(0.0, None, 120.0)), (4, body(0.30, None, 176.0)),
+                       (6, body(0.30, 176.0, None))])
+    assert res is None and tr.state == sp.State.HOLDING, (res, tr.state)
+    assert tr.baseline["elbow_left"] is not None, tr.baseline
+    _, res = feed(tr, [(2, body(0.30, 150.0, None))], t0=t)
+    assert res and res["end_reason"] == sp.BREAK_WORDS["elbow"] and res["hold_sec"] == 10, res
+
+
 def check_sink_reason_wording():
     # Fix 5: the line sits above the seat, so the words must not claim they
     # sat on it.
