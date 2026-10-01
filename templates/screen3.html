@@ -401,6 +401,7 @@
             reverse_curl: 'passed',
             shoulder_stretch: 'passed',
             isometric_push_up: 'hold_sec',
+            seated_push_up: 'hold_sec',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
             vertical_jump: 'jump_cm',
@@ -418,6 +419,7 @@
             reverse_curl: '',
             shoulder_stretch: '',
             isometric_push_up: 's',
+            seated_push_up: 's',
             bmi:         'cm',
             wingspan:    'cm',
             vertical_jump: 'cm',
@@ -441,7 +443,9 @@
         // as a value; here an empty box is still refused, 0 is not.
         // Isometric push-up: a student who can't hold the position at all
         // scored 0 seconds.
-        const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up']).has(testId);
+        // Seated push-up: likewise, a student who never gets off the seat.
+        const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up',
+                                 'seated_push_up']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
 
@@ -664,6 +668,10 @@
                     }
                     if (testId === 'isometric_push_up' && v > 40) {
                         showSaveMessage('Seconds held can\'t be more than 40 (the test maximum).', false);
+                        return;
+                    }
+                    if (testId === 'seated_push_up' && v > 20) {
+                        showSaveMessage('Seconds held can\'t be more than 20 (the test maximum).', false);
                         return;
                     }
                     if (!pendingResult) {

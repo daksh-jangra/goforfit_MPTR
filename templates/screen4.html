@@ -649,6 +649,71 @@
                       : null;
               },
           },
+          seated_push_up: {
+              feedUrl:    '/api/seated_push_up/feed',
+              stateUrl:   '/api/seated_push_up/state',
+              actionUrl:  '/api/seated_push_up/action',
+              browserCamera: true,
+              frameUrl:   '/api/seated_push_up/frame',
+              // The phone faces the participant at seat height, screen toward
+              // the coach — the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              // Nothing to calibrate or press: the camera finds the seat, the
+              // clock starts once the hips are lifted and steady, and it stops
+              // itself when they come back down or an elbow bends.
+              buttons: [
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-amber-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [`State: ${state.state}`];
+                  lines.push(`Time: ${state.elapsed_s} / ${state.max_hold_s} s` +
+                             (state.clock_running ? '  \u2014 clock running' : ''));
+                  const deg = (v, start) => {
+                      if (v === null || v === undefined) return '--';
+                      return v + '\u00b0' + ((start !== null && start !== undefined) ? ` (best ${start}\u00b0)` : '');
+                  };
+                  if (state.body_tracked) {
+                      const hasLift = state.lift !== null && state.lift !== undefined;
+                      lines.push(!state.seat_found ? 'Finding the seat \u2014 sit still'
+                          : !hasLift ? 'Hands not in view \u2014 the lift is measured against them'
+                          : `Hips above seat: ${state.lift.toFixed(2)} torso (need ${state.lift_needed})`);
+                      lines.push(`Elbows: L ${deg(state.elbow_left_deg, state.elbow_left_start_deg)}   ` +
+                                 `R ${deg(state.elbow_right_deg, state.elbow_right_start_deg)}`);
+                  } else {
+                      lines.push(state.pose_detected
+                          ? 'Body not fully visible \u2014 face the camera, head to hips and both hands in frame'
+                          : 'No participant detected');
+                  }
+                  if (state.resolved) {
+                      lines.push(`RESULT: ${state.seconds} s` +
+                                 (state.end_reason ? ` (${state.end_reason})` : ''));
+                  }
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              // Same beeps as the isometric push-up: short high when the clock
+              // starts, long low when it stops. RESET is silent.
+              _prev: null,
+              onState(state) {
+                  const now = { running: !!state.clock_running, done: !!state.resolved };
+                  const prev = this._prev;
+                  this._prev = now;
+                  if (!prev || !state.running) return;
+                  if (now.running && !prev.running) beep(880, 0.25);
+                  if (now.done && !prev.done) beep(440, 0.8);
+              },
+              syncFields(state) {
+                  // Only a finished hold is synced, in exactly the BMI/Wingspan
+                  // payload shape: one numeric score, whole seconds held.
+                  return state.resolved
+                      ? { seatedPushUpScore: state.seconds }
+                      : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1319,6 +1384,7 @@
               reverse_curl:'ReverseCurl',
               shoulder_stretch:'ShoulderStretch',
               isometric_push_up:'IsometricPushUp',
+              seated_push_up:'SeatedPushUp',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };

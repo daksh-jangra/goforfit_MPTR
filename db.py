@@ -236,6 +236,20 @@ CREATE TABLE IF NOT EXISTS isometric_push_up (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Seated Push-Up Test ───────────────────────────────────────────────────
+-- One trial (Brockport fig. 5.21): the body held off the seat on extended
+-- arms as long as possible, max 20 s. hold_sec is the score, to the nearest
+-- second.
+CREATE TABLE IF NOT EXISTS seated_push_up (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    hold_sec        INTEGER,     -- seconds held, 0-20 (the score)
+    held_exact_s    REAL,        -- the camera's unrounded time, for review
+    end_reason      TEXT,        -- why the clock stopped, e.g. 'elbows bent'
+    rating          TEXT,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,7 +334,11 @@ UNION ALL
 UNION ALL
     SELECT 'isometric_push_up', ip.id, ip.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, ip.hold_sec, ip.rating, ip.recorded_at
-    FROM isometric_push_up ip LEFT JOIN sessions s ON ip.session_id = s.id;
+    FROM isometric_push_up ip LEFT JOIN sessions s ON ip.session_id = s.id
+UNION ALL
+    SELECT 'seated_push_up', sp.id, sp.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, sp.hold_sec, sp.rating, sp.recorded_at
+    FROM seated_push_up sp LEFT JOIN sessions s ON sp.session_id = s.id;
 """
 
 
@@ -697,6 +715,26 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Seated Push-Up ───────────────────────────────────────────────────
+
+    def save_seated_push_up(
+        self,
+        session_id: int,
+        hold_sec: int,
+        held_exact_s: float = None,
+        end_reason: str = None,
+        rating: str = None,
+    ) -> int:
+        """One trial: seconds the body was held off the seat, 0-20."""
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO seated_push_up (session_id, hold_sec,
+                                               held_exact_s, end_reason, rating)
+                   VALUES (?,?,?,?,?)""",
+                (session_id, hold_sec, held_exact_s, end_reason, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -742,6 +780,7 @@ class GoForFitDB:
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
+        "seated_push_up",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:
