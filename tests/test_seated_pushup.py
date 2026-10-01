@@ -321,6 +321,61 @@ def check_arms_swapping_view_mid_hold():
     assert res and res["end_reason"] == sp.BREAK_WORDS["elbow"] and res["hold_sec"] == 10, res
 
 
+def check_hands_moving_onto_supports_is_not_a_lift():
+    # The seat is learned with the hands resting in the lap, level with the
+    # hips; then the hands go down onto the rims / blocks. The hips never move
+    # - the clock must not start. Then a real push from there is timed, and
+    # sitting back down still ends it.
+    lap = body(0.0, 90.0, 90.0, wrist_left=SEAT_Y, wrist_right=SEAT_Y)
+    for drop in (0.20, 0.30, 0.50):
+        low = SEAT_Y + drop * TORSO
+        rims = lambda lift, el=170.0: body(lift, el, el, wrist_left=low, wrist_right=low)
+        tr = sp.SeatedPushUpTracker()
+        t, _ = feed(tr, [(2, lap), (6, rims(0.0))])
+        assert tr.hold_start is None, (drop, tr.state, tr.lift)
+        _, res = feed(tr, [(5, rims(0.30, 176.0)), (2, rims(0.0))], t0=t)
+        assert res and res["hold_sec"] == 5, (drop, res)
+        assert res["end_reason"] == sp.BREAK_WORDS["sink"], (drop, res)
+
+
+def check_screen_rise_is_a_backstop():
+    # Re-learning the seat after the hands move needs a still second, and so
+    # does starting the clock - today the re-learn wins the tie. Make the seat
+    # slower to learn than the clock is to start: the on-screen rise rule
+    # alone must still stop the hands' move from starting the clock.
+    lap = body(0.0, 90.0, 90.0, wrist_left=SEAT_Y, wrist_right=SEAT_Y)
+    low = SEAT_Y + 0.30 * TORSO
+    rims = body(0.0, 170.0, 170.0, wrist_left=low, wrist_right=low)
+    tr = sp.SeatedPushUpTracker(seat_still_s=2.0)
+    feed(tr, [(3, lap), (6, rims)])
+    assert tr.hold_start is None, (tr.state, tr.lift)
+
+
+def check_bumped_phone_then_a_real_lift():
+    # The phone is knocked so the picture drops 30 px while the student sits.
+    # Their real lift afterwards must still start the clock - the on-screen
+    # seat follows the bump once they have sat still for a moment.
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, SIT), (2, body(0.0, 120.0, 120.0, camera=30.0)),
+                       (5, body(0.30, 176.0, 178.0, camera=30.0)),
+                       (2, body(0.0, 120.0, 120.0, camera=30.0))])
+    assert res and res["hold_sec"] == 5, res
+
+
+def check_stood_still_before_sitting():
+    # Standing still in front of the camera first (hands hanging about as low
+    # against the hips as they will rest when seated), then sitting down: the
+    # on-screen seat must move down to where they sit, so a lift starts the
+    # clock and standing up mid-hold reads as standing up.
+    low = SEAT_Y + 0.35 * TORSO
+    sat = lambda lift, el=160.0: body(lift, el, el, wrist_left=low, wrist_right=low)
+    tr = sp.SeatedPushUpTracker()
+    t, _ = feed(tr, [(2, stand()), (2, sat(0.0))])
+    assert abs(tr.seat_hip_y - SEAT_Y) < 2.0, tr.seat_hip_y
+    _, res = feed(tr, [(4, sat(0.30, 176.0)), (3, stand())], t0=t)
+    assert res and res["hold_sec"] == 4 and res["end_reason"] == sp.BREAK_WORDS["stood"], res
+
+
 def check_sink_reason_wording():
     # Fix 5: the line sits above the seat, so the words must not claim they
     # sat on it.
