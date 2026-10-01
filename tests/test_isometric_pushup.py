@@ -135,6 +135,7 @@ def check_wrong_positions_never_start():
         "standing":     pose(body_tilt=80, arm_tilt=5),
         "bottom hold":  pose(elbow=95, arm_tilt=35),
         "knees down":   pose(knee=110),
+        "soft knees":   pose(knee=152),     # just under the 155 entry limit
         "piked":        pose(bend=28),
         "sagging":      pose(bend=-25),
         "hands ahead":  pose(arm_tilt=50),
@@ -206,13 +207,13 @@ def check_fixed_limits_catch_a_borderline_start():
     assert tr.resolved and tr.end_reason == "hips sagged or piked", tr.result()
 
     tr = ip.IsometricPushUpTracker()
-    t, _ = feed(tr, [(6, near(pose(knee=152)))])
+    t, _ = feed(tr, [(6, near(pose(knee=157)))])
     feed(tr, [(1, near(pose(knee=136)))], t0=t)
     assert tr.resolved and tr.end_reason == "knees bent", tr.result()
 
     # Jitter around a borderline start must NOT trip the fixed limits.
     tr = ip.IsometricPushUpTracker()
-    feed(tr, [(20, near(pose(elbow=154, bend=17, knee=154)))], jitter=3)
+    feed(tr, [(20, near(pose(elbow=154, bend=17, knee=159)))], jitter=3)
     assert tr.state == ip.State.HOLDING, tr.result()
 
 

@@ -110,7 +110,10 @@ MAX_HOLD_S = 40.0     # "hold a raised push-up position for as long as 40 second
 # ── "In position" gates (checked before the clock starts) ────────────────────────
 ELBOW_MIN_DEG     = 150.0   # arms extended          (figure: 168-171)
 BEND_MAX_DEG      = 20.0    # body in a straight line (figure: 1-2)
-KNEE_MIN_DEG      = 150.0   # legs straight, knees off the mat (figure: 167-172)
+KNEE_MIN_DEG      = 155.0   # legs straight, knees off the mat. Straight legs
+                            # read 163-178 (fig 5.14: 167-172, three YouTube
+                            # planks); slightly soft knees read 147-162. Owner
+                            # set 155, 2026-10-01.
 BODY_TILT_MAX_DEG = 40.0    # shoulder-to-ankle line near horizontal (figure: 11).
                             # This is what stops a standing person qualifying.
 ARM_TILT_MAX_DEG  = 35.0    # shoulder-to-wrist line near vertical: hands under
