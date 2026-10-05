@@ -622,6 +622,7 @@
             if (badValue(v)) {
                 msg.innerText = ZERO_OK ? 'Please enter a number of reps (0 or more).'
                                         : 'Please enter a valid positive number.';
+                if (testId === 'seated_push_up') msg.innerText = 'Please enter the seconds held (0 to 20).';
                 msg.classList.remove('hidden');
                 return;
             }

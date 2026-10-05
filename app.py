@@ -632,8 +632,9 @@ TESTS = {
             ("RESET", "Start the trial over (clears the clock and the seat)"),
         ],
         "tip": (
-            "Camera at seat height, FACING the participant, 1.5-2 m away, with "
-            "the head, both hands and the hips in frame. The student sits still "
+            "Camera at seat height, front-on or side-on to the participant, "
+            "1.5-2 m away, with the head, the hips and the hands in frame. "
+            "The student sits still "
             "for a moment first so the camera can find the seat. Only the "
             "student should be in frame."
         ),
