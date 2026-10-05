@@ -2950,6 +2950,7 @@ class SeatedPushUpEngine(BaseWebEngine):
             "seat_found": tr.seat_found,
             "lift": round(tr.lift, 2) if tr.lift is not None else None,
             "lift_needed": spu_mod.LIFT_MIN_TORSO,
+            "lift_stop": round(tr.sink_line, 2) if tr.sink_line is not None else None,
             "elbow_left_deg": r(m, "elbow_left"), "elbow_left_start_deg": r(b, "elbow_left"),
             "elbow_right_deg": r(m, "elbow_right"), "elbow_right_start_deg": r(b, "elbow_right"),
             "resolved": tr.resolved,
