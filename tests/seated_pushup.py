@@ -182,7 +182,14 @@ SETTLE_ELBOW_BAND = 8.0   # elbow spread allowed inside the settle window
 # ── Breaking the hold (measured against the participant's own start) ────────────
 SINK_FRAC        = 0.35   # lift falls below this share of the starting lift
                           # -> "came back down onto the seat"
-SEAT_TOUCH_TORSO = 0.05   # ... but never a line closer to the seat than this
+SEAT_TOUCH_TORSO = 0.07   # ... but never a line closer to the seat than this
+                          # (~2.9 cm). It must sit above the largest hand
+                          # re-grip the seat re-learn can miss under wobble
+                          # (~0.06): at 0.05, a small re-grip plus a ~3.4 cm
+                          # push kept the clock running after the student sat
+                          # back down. Costs a little on ~4 cm holds, which
+                          # wobble now cuts short a bit more often; 5 cm and
+                          # up are unaffected.
 ELBOW_BEND_DEG   = 20.0   # an elbow closes this far -> "elbows bent"
 BREAK_GRACE_S    = 0.30   # a break must last this long to end the hold
 DROPOUT_GRACE_S  = 2.00   # mid-hold, tracking or the phone's frames may
