@@ -398,6 +398,19 @@ def check_small_regrip_then_sitting_down_stops_the_clock():
                           (5, b(lift)), (12, b(0.0))], jitter=3, seed=seed)
                 running = tr.state == sp.State.HOLDING or (tr.resolved and tr.capped)
                 assert not running, (drop, lift, seed, tr.state, round(tr.elapsed_s, 1))
+    # The corner left after that: a re-grip just over the re-learn size, which
+    # wobble can hide, followed by a very small push (3.4-5 cm). The stop line
+    # must sit above anything the re-learn can miss.
+    for drop in (0.03, 0.04, 0.05, 0.06, 0.07):
+        low = HAND_Y + drop * TORSO
+        b = lambda lift: body(lift, 176.0, 176.0, wrist_left=low, wrist_right=low)
+        for lift in (0.08, 0.10, 0.12):
+            for seed in range(30):
+                tr = sp.SeatedPushUpTracker()
+                feed(tr, [(2, body(0.0, 176.0, 176.0)), (3, b(0.0)),
+                          (5, b(lift)), (12, b(0.0))], jitter=3, seed=seed)
+                running = tr.state == sp.State.HOLDING or (tr.resolved and tr.capped)
+                assert not running, (drop, lift, seed, tr.state, round(tr.elapsed_s, 1))
 
 
 def check_screen_rise_is_a_backstop():
