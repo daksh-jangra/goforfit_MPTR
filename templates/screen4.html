@@ -680,7 +680,10 @@
                       const hasLift = state.lift !== null && state.lift !== undefined;
                       lines.push(!state.seat_found ? 'Finding the seat \u2014 sit still'
                           : !hasLift ? 'Hands not in view \u2014 the lift is measured against them'
-                          : `Hips above seat: ${state.lift.toFixed(2)} torso (need ${state.lift_needed})`);
+                          : `Hips above seat: ${state.lift.toFixed(2)} torso ` +
+                            (state.lift_stop !== null && state.lift_stop !== undefined
+                                ? `(stops below ${state.lift_stop})`
+                                : `(need ${state.lift_needed})`));
                       lines.push(`Elbows: L ${deg(state.elbow_left_deg, state.elbow_left_start_deg)}   ` +
                                  `R ${deg(state.elbow_right_deg, state.elbow_right_start_deg)}`);
                   } else {

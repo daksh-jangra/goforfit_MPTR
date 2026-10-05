@@ -117,9 +117,43 @@ def check_straight_arms_while_sitting_need_the_lift():
 
 
 def check_small_lift_does_not_start():
+    # ~1.7 cm: shifting in the seat, not a push-up.
     tr = sp.SeatedPushUpTracker()
-    feed(tr, [(2, SIT), (10, body(0.08, 176.0, 178.0))], jitter=2)
+    feed(tr, [(2, SIT), (10, body(0.04, 176.0, 178.0))], jitter=2)
     assert tr.hold_start is None, tr.state
+    # ~3 cm, held dead steady: high enough on screen (>= 0.06), so only the
+    # lift minimum itself keeps the clock from starting.
+    tr = sp.SeatedPushUpTracker()
+    feed(tr, [(2, SIT), (10, body(0.07, 176.0, 178.0))])
+    assert tr.hold_start is None, tr.state
+
+
+def check_five_cm_lift_always_starts():
+    # A real 5 cm lift (0.12 torso) must start the clock every time, wobble
+    # and all - with the lift minimum AT 0.12 it did ~1 time in 10.
+    for seed in range(10):
+        for fps in (10, 20, 30):
+            tr = sp.SeatedPushUpTracker()
+            feed(tr, [(2, SIT), (6, body(0.12, 176.0, 178.0))], fps=fps, jitter=3, seed=seed)
+            assert tr.hold_start is not None, (seed, fps, tr.status_msg)
+
+
+def check_sitting_still_never_starts():
+    # A minute of sitting still with normal wobble never starts the clock.
+    for seed in range(10):
+        for fps in (10, 20, 30):
+            tr = sp.SeatedPushUpTracker()
+            feed(tr, [(60, SIT)], fps=fps, jitter=3, seed=seed)
+            assert tr.hold_start is None, (seed, fps)
+
+
+def check_messages_before_and_during_the_hold():
+    tr = sp.SeatedPushUpTracker()
+    feed(tr, [(2, SIT)])
+    assert "already up? sit down first" in tr.status_msg, tr.status_msg
+    assert tr.sink_line is None
+    feed(tr, [(4, UP)], t0=2.0)
+    assert tr.state == sp.State.HOLDING and tr.sink_line is not None, tr.state
 
 
 def check_standing_up_never_starts():

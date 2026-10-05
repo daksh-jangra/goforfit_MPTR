@@ -159,8 +159,12 @@ SEAT_BAND_TORSO  = 0.10   # hip-above-hand spread allowed while sitting still
                           # 0.04 a normally jittery student never read as still.
 
 # ── Lifted: the clock can start ──────────────────────────────────────────────────
-LIFT_MIN_TORSO   = 0.12   # hips this far above the seat = off it. ~5 cm on a
-                          # child's ~42 cm torso; landmark jitter is ~0.03.
+LIFT_MIN_TORSO   = 0.08   # hips this far above the seat = off it (~3.4 cm on
+                          # a child's ~42 cm torso). Set below the 5 cm aimed
+                          # for because of landmark wobble: at 0.12 a real 5 cm
+                          # lift started the clock ~1 in 10 wobbly tries, at
+                          # 0.08 every time - and a minute of sitting still
+                          # with the same wobble never started it.
 HAND_MOVE_TORSO  = 0.04   # hands moved this far on screen while the hips
                           # stayed put -> re-learn the seat (~1.7 cm). A still
                           # stretch's median hand height wobbles ~0.01.
@@ -447,7 +451,9 @@ class SeatedPushUpTracker:
         if self.lift < LIFT_MIN_TORSO or self._screen_rise(m) < SCREEN_RISE_MIN_TORSO:
             self._settle.clear()
             self.state = State.READY
-            self.status_msg = "Push up - lift off the seat"
+            # A student already up when the seat was taken reads as sitting
+            # here, so the message covers both cases.
+            self.status_msg = "Push up off the seat (already up? sit down first)"
             return None
         if all(m["elbow_" + s] is None for s in ARMS):
             # No elbow to check means no way to see the arms give way, so the
@@ -763,10 +769,17 @@ def draw_hud(frame, tracker, body_pts=None):
         cv2.line(frame, (0, sy), (w, sy), C_SEAT, 2, cv2.LINE_AA)
         cv2.putText(frame, "seat", (w - 70, sy - 8), cv2.FONT_HERSHEY_SIMPLEX,
                     0.55, C_SEAT, 2, cv2.LINE_AA)
-        need = tracker.sink_line if tracker.sink_line is not None else LIFT_MIN_TORSO
-        ny = int(seat_y - need * tracker.seat_torso)
+        # Dashed: the line to clear before the clock, the line not to sink
+        # below while it runs.
+        stop = tracker.sink_line
+        line_at = stop if stop is not None else LIFT_MIN_TORSO
+        ny = int(seat_y - line_at * tracker.seat_torso)
         for x in range(0, w, 24):
             cv2.line(frame, (x, ny), (min(w, x + 12), ny), C_SEAT, 1, cv2.LINE_AA)
+        # Left edge: the two lines sit only a few pixels apart, and "seat"
+        # already labels the right.
+        cv2.putText(frame, "stop" if stop is not None else "need", (10, ny - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, C_SEAT, 2, cv2.LINE_AA)
 
     if body_pts is not None:
         for s in ARMS:
@@ -800,7 +813,10 @@ def draw_hud(frame, tracker, body_pts=None):
     m = tracker.current
     if m is not None:
         if tracker.lift is not None:
-            line(f"Hips up: {tracker.lift:+.2f} torso  (need {LIFT_MIN_TORSO:.2f})")
+            if tracker.sink_line is not None:
+                line(f"Hips up: {tracker.lift:+.2f} torso  (stops below {tracker.sink_line:.2f})")
+            else:
+                line(f"Hips up: {tracker.lift:+.2f} torso  (need {LIFT_MIN_TORSO:.2f})")
         else:
             line("Hips up: finding the seat")
         line(f"Elbows: {_fmt_elbows(m, tracker.baseline)}")
