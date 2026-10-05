@@ -20,11 +20,12 @@ Protocol (Brockport Physical Fitness Test Manual p.85, figure 5.21)
 
 What the camera measures
 --------------------------------------------------------------------
-  FRONT-ON, facing the participant - the owner's choice. Nothing here
-  depends on which way the camera looks at the body, though: the lift is
-  measured against the hands and each arm is read on its own, so a side-on
-  camera works too. The manual's wheelchair photo (fig 5.21b) IS side-on and reads fine;
-  the blocks photo (fig 5.21a) is roughly front-on.
+  FRONT-ON or SIDE-ON. Nothing here depends on which way the camera looks
+  at the body: the lift is measured against the hands, each arm is read on
+  its own, and when one shoulder or hip is hidden behind the body (side-on)
+  the visible side's own shoulder and hip stand in for the mid-points. The
+  manual's wheelchair photo (fig 5.21b) IS side-on and reads fine; the
+  blocks photo (fig 5.21a) is roughly front-on.
 
     lift    how much further above the HANDS the hips are than when they
             sat, in torso lengths (mid-shoulder to mid-hip, measured while
@@ -65,6 +66,16 @@ The clock
            * hips level against the hands but moved on screen (a bumped
              phone, or sitting down after standing still in front of the
              camera) -> the on-screen seat is moved to match
+           * the shoulders risen more than TRUNK_STRAIGHTEN_TORSO beyond
+             the hips, with the hips up less than SLUMP_MAX_RISE_TORSO ->
+             sat up straighter after slumping, not a push: the clock may not
+             start, and the seat is learned again upright. A push lifts
+             shoulders and hips together; a bigger lift that also
+             straightens the back still counts.
+           * only a hand the seat has no reading for (it was learned on the
+             other one) -> that hand's seat is worked out from how far the
+             hips have moved on screen and added, instead of the seat being
+             thrown away
   START  once the hips are LIFT_MIN_TORSO above the seat against the hands
          AND have risen at least SCREEN_RISE_MIN_TORSO on screen, at least one
          whole arm (shoulder, elbow, wrist) is in view, and the body has been
@@ -125,8 +136,8 @@ Usage
 
 Camera placement
 ----------------
-  Phone at seat height, FACING the participant, 1.5-2 m away, with the head,
-  both hands and the hips in frame.
+  Phone at seat height, front-on or side-on to the participant, 1.5-2 m
+  away, with the head, the hips and the hands in frame.
 """
 
 import argparse
@@ -168,6 +179,11 @@ LIFT_MIN_TORSO   = 0.08   # hips this far above the seat = off it (~3.4 cm on
 HAND_MOVE_TORSO  = 0.04   # hands moved this far on screen while the hips
                           # stayed put -> re-learn the seat (~1.7 cm). A still
                           # stretch's median hand height wobbles ~0.01.
+TRUNK_STRAIGHTEN_TORSO = 0.10  # shoulders risen this much MORE than the hips
+                               # since the seat (~4 cm) = sat up straighter
+SLUMP_MAX_RISE_TORSO = 0.12    # ... a slumped student sitting up raises the
+                               # hips less than this (~5 cm); with the hips up
+                               # further it is a lift, straightening or not
 SCREEN_RISE_MIN_TORSO = 0.06  # ... and at least this far up on screen (~2.5 cm)
                               # - the check that hands moving lower on the
                               # supports is not mistaken for a lift.
@@ -264,31 +280,35 @@ def _clear(lms, idx):
 
 
 def body_metrics(lms, w, h):
-    """What the test compares, for one frame - or None when the shoulders or
-    hips are unclear. A hand or an arm that is unclear reads None on its own;
-    the other side and the hips still count.
+    """What the test compares, for one frame - or None when no side has both
+    its shoulder and hip clear. A hand or an arm that is unclear reads None on
+    its own; the other side and the hips still count.
 
-      hip_y    mid-hip height on screen, pixels (down = bigger)
-      torso    mid-shoulder to mid-hip, pixels
-      wrist_*  wrist height on screen per hand, pixels, or None
-      elbow_*  shoulder-elbow-wrist angle per arm, degrees, or None
+      hip_y       hip height on screen, pixels (down = bigger)
+      shoulder_y  shoulder height on screen, pixels
+      torso       shoulder to hip, pixels
+      wrist_*     wrist height on screen per hand, pixels, or None
+      elbow_*     shoulder-elbow-wrist angle per arm, degrees, or None
+
+    Both sides clear (front-on): the mid-points. Only one (side-on, the far
+    shoulder or hip hidden behind the body): that side's own shoulder and hip.
     """
     if lms is None:
         return None
-    for s in ARMS:
-        if not (_clear(lms, SHOULDER[s]) and _clear(lms, HIP[s])):
-            return None
-    sh = (lm_px(lms, SHOULDER[SIDE_LEFT], w, h) + lm_px(lms, SHOULDER[SIDE_RIGHT], w, h)) / 2
-    hp = (lm_px(lms, HIP[SIDE_LEFT], w, h) + lm_px(lms, HIP[SIDE_RIGHT], w, h)) / 2
+    sides = [s for s in ARMS if _clear(lms, SHOULDER[s]) and _clear(lms, HIP[s])]
+    if not sides:
+        return None
+    sh = np.mean([lm_px(lms, SHOULDER[s], w, h) for s in sides], axis=0)
+    hp = np.mean([lm_px(lms, HIP[s], w, h) for s in sides], axis=0)
     torso = float(np.linalg.norm(sh - hp))
     if torso < 1.0:
         return None
 
-    out = {"hip_y": float(hp[1]), "torso": torso}
+    out = {"hip_y": float(hp[1]), "shoulder_y": float(sh[1]), "torso": torso}
     for s in ARMS:
         wrist_ok = _clear(lms, WRIST[s])
         out["wrist_" + s] = float(lm_px(lms, WRIST[s], w, h)[1]) if wrist_ok else None
-        if wrist_ok and _clear(lms, ELBOW[s]):
+        if wrist_ok and _clear(lms, ELBOW[s]) and _clear(lms, SHOULDER[s]):
             out["elbow_" + s] = calc_angle(lm_px(lms, SHOULDER[s], w, h),
                                            lm_px(lms, ELBOW[s], w, h),
                                            lm_px(lms, WRIST[s], w, h))
@@ -301,7 +321,8 @@ class MedianSmoother:
     """Short median per measurement - kills single-frame landmark spikes. A
     hand or arm that drops out starts its window afresh when it comes back."""
 
-    KEYS = ("hip_y", "torso", "wrist_left", "wrist_right", "elbow_left", "elbow_right")
+    KEYS = ("hip_y", "shoulder_y", "torso", "wrist_left", "wrist_right",
+            "elbow_left", "elbow_right")
 
     def __init__(self, n=SMOOTH_FRAMES):
         self.n = int(n)
@@ -358,6 +379,8 @@ class SeatedPushUpTracker:
         self.current = None           # latest smoothed readings
         self.seat = None              # {side: hip-above-hand gap while sitting, px}
         self.seat_torso = None        # torso length while sitting, pixels
+        self.seat_trunk = None        # hip-to-shoulder height on screen while
+                                      # sitting - how upright they sat
         self.seat_hip_y = None        # mid-hip SCREEN height while sitting - only
                                       # for spotting a stand-up (see the notes)
         self.lift = None              # current lift above the seat, torso lengths
@@ -366,8 +389,8 @@ class SeatedPushUpTracker:
         self.hold_end = None
         self.end_reason = None        # plain words: why the clock stopped
         self.capped = False
-        self.status_msg = "Sit facing the camera, hands on the supports"
-        self._seat_win = deque()      # (t, hand gaps, torso, hip_y) while sitting
+        self.status_msg = "Sit still, hands on the supports"
+        self._seat_win = deque()      # {t, gaps, torso, hip, trunk} while sitting
         self._settle = deque()        # (t, metrics with 'lift')
         self._smooth = MedianSmoother()
         self._bad_since = None
@@ -429,7 +452,7 @@ class SeatedPushUpTracker:
             self._seat_win.clear()
             self._settle.clear()
             self.state = State.READY
-            self.status_msg = "Face the camera - head, both hands and hips in frame"
+            self.status_msg = "Head, hips and hands in frame - front-on or side-on"
             return None
 
         if not hand_gaps(m):
@@ -455,6 +478,13 @@ class SeatedPushUpTracker:
             self.status_msg = "Keep both hands in view"
             return None
 
+        if self._sat_up_straighter(m):
+            # Shoulders up far more than the hips: sitting up after a slump,
+            # not a push. The next still second re-learns the seat upright.
+            self._settle.clear()
+            self.state = State.READY
+            self.status_msg = "Sit still a moment, then push up"
+            return None
         if self.lift < LIFT_MIN_TORSO or self._screen_rise(m) < SCREEN_RISE_MIN_TORSO:
             self._settle.clear()
             self.state = State.READY
@@ -503,50 +533,72 @@ class SeatedPushUpTracker:
 
     def _track_seat(self, m, now):
         """Learn where the hips sit, relative to each hand. A still stretch of
-        SEAT_STILL_S becomes the seat if there is none yet, or if it reads
-        LOWER than the one held - the lowest still sit is the seat, whatever
-        was seen first. A hand first seen during a still sit at the seat's
-        level is added to it."""
+        SEAT_STILL_S becomes the seat if there is none yet; a later one
+        corrects it (see the notes at the top): sitting lower, the hands
+        having moved, or having sat up straighter all re-learn it; a hand
+        the seat has no reading for is added to it."""
         win = self._seat_win
-        win.append((now, hand_gaps(m), m["torso"], m["hip_y"]))
+        win.append({"t": now, "gaps": hand_gaps(m), "torso": m["torso"],
+                    "hip": m["hip_y"], "trunk": m["hip_y"] - m["shoulder_y"]})
 
         def still():
             # Still against the hands AND on screen - standing then sitting
             # can leave the hands-to-hips gap unchanged.
-            band = SEAT_BAND_TORSO * np.median([t for _, _, t, _ in win])
-            if _band([y for _, _, _, y in win]) > band:
+            band = SEAT_BAND_TORSO * np.median([e["torso"] for e in win])
+            if _band([e["hip"] for e in win]) > band:
                 return False
-            return all(_band([g[s] for _, g, _, _ in win if s in g]) <= band for s in ARMS)
+            return all(_band([e["gaps"][s] for e in win if s in e["gaps"]]) <= band
+                       for s in ARMS)
 
         while len(win) > 1 and not still():
             win.popleft()
-        if win[-1][0] - win[0][0] < self.seat_still_s:
+        if win[-1]["t"] - win[0]["t"] < self.seat_still_s:
             return
         # A hand counts if it was in view for at least half the stretch.
         gaps = {}
         for s in ARMS:
-            vals = [g[s] for _, g, _, _ in win if s in g]
+            vals = [e["gaps"][s] for e in win if s in e["gaps"]]
             if 2 * len(vals) >= len(win):
                 gaps[s] = float(np.median(vals))
         if not gaps:
             return
-        torso = float(np.median([t for _, _, t, _ in win]))
-        hip_y = float(np.median([y for _, _, _, y in win]))
+        torso = float(np.median([e["torso"] for e in win]))
+        hip_y = float(np.median([e["hip"] for e in win]))
+        trunk = float(np.median([e["trunk"] for e in win]))
 
         if self.seat is None:
-            self._set_seat(gaps, torso, hip_y, m)
+            self._set_seat(gaps, torso, hip_y, trunk, m)
             return
         lift = self._lift_of(gaps)
         screen = (self.seat_hip_y - hip_y) / self.seat_torso
-        if lift is None or lift < -SEAT_BAND_TORSO:
-            # Sitting lower than the seat held (or only on hands it has no
-            # reading for): this is the seat now.
-            self._set_seat(gaps, torso, hip_y, m)
+        straighten = (trunk - self.seat_trunk) / self.seat_torso
+        if lift is None:
+            if screen < -SEAT_BAND_TORSO:
+                # Only hands the seat has no reading for - and sitting lower
+                # on screen than the seat: this is the seat now.
+                self._set_seat(gaps, torso, hip_y, trunk, m)
+            else:
+                # Only hands the seat has no reading for (it was learned on
+                # the other hand). Work out where each would read at the seat
+                # from how far the hips have moved on screen, rather than
+                # throwing the seat away - which made a student already up
+                # sit down and push again.
+                for s, g in gaps.items():
+                    self.seat[s] = g - screen * self.seat_torso
+                self.lift = self._lift_of(hand_gaps(m))
+        elif lift < -SEAT_BAND_TORSO:
+            # Sitting lower than the seat held: this is the seat now.
+            self._set_seat(gaps, torso, hip_y, trunk, m)
         elif abs(lift - screen) > HAND_MOVE_TORSO and screen <= SEAT_BAND_TORSO:
             # lift - screen is how far the hands moved on screen. They moved,
             # but the hips did not: the HANDS moved (lap -> supports, or a
             # re-grip), not the body. Learn it again.
-            self._set_seat(gaps, torso, hip_y, m)
+            self._set_seat(gaps, torso, hip_y, trunk, m)
+        elif straighten > TRUNK_STRAIGHTEN_TORSO and screen < SLUMP_MAX_RISE_TORSO:
+            # The shoulders rose well beyond the hips and the hips only a
+            # little: sat up straighter after slumping, not a push. Learn it
+            # again here, upright.
+            self._set_seat(gaps, torso, hip_y, trunk, m)
         elif abs(lift) <= SEAT_BAND_TORSO:
             for s, g in gaps.items():
                 if s not in self.seat:
@@ -557,8 +609,9 @@ class SeatedPushUpTracker:
             # stay in step.
             self.seat_hip_y = hip_y + lift * self.seat_torso
 
-    def _set_seat(self, gaps, torso, hip_y, m):
+    def _set_seat(self, gaps, torso, hip_y, trunk, m):
         self.seat, self.seat_torso, self.seat_hip_y = dict(gaps), torso, hip_y
+        self.seat_trunk = trunk
         self.lift = self._lift_of(hand_gaps(m))
         self._settle.clear()
 
@@ -611,6 +664,13 @@ class SeatedPushUpTracker:
     def _screen_rise(self, m):
         """How far the hips are above the seat on SCREEN, torso lengths."""
         return (self.seat_hip_y - m["hip_y"]) / self.seat_torso
+
+    def _sat_up_straighter(self, m):
+        """Shoulders risen well beyond the hips since the seat, with the hips
+        only a little up: straightening up out of a slump."""
+        straighten = ((m["hip_y"] - m["shoulder_y"]) - self.seat_trunk) / self.seat_torso
+        return (straighten > TRUNK_STRAIGHTEN_TORSO
+                and self._screen_rise(m) < SLUMP_MAX_RISE_TORSO)
 
     def _stood(self, m):
         """Hips risen past MAX_LIFT_TORSO - on screen, or against the hands."""

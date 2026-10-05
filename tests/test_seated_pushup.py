@@ -38,14 +38,16 @@ KEEP = object()        # "the hand is in view" (default)
 
 
 def body(lift=0.0, elbow_left=150.0, elbow_right=150.0, torso=TORSO,
-         wrist_left=KEEP, wrist_right=KEEP, camera=0.0):
+         wrist_left=KEEP, wrist_right=KEEP, camera=0.0, slump=0.0):
     """One frame's readings with the hips `lift` torso lengths above the seat.
     A hand is in view unless its wrist_* is None; an arm whose elbow is None
     is hidden but its hand may still be seen. `camera` shifts the whole
-    picture down by that many pixels, as a bumped phone would."""
+    picture down by that many pixels, as a bumped phone would. `slump`: the
+    shoulders that many torso lengths lower than sitting upright."""
     def hand(v):
         return None if v is None else (HAND_Y if v is KEEP else v) + camera
-    return {"hip_y": SEAT_Y - lift * TORSO + camera, "torso": torso,
+    hip = SEAT_Y - lift * TORSO + camera
+    return {"hip_y": hip, "shoulder_y": hip - TORSO + slump * TORSO, "torso": torso,
             "wrist_left": hand(wrist_left), "wrist_right": hand(wrist_right),
             "elbow_left": elbow_left, "elbow_right": elbow_right}
 
@@ -65,7 +67,7 @@ def feed(tracker, sequence, fps=20, t0=0.0, jitter=0.0, seed=1):
             f = b
             if f is not None and jitter:
                 f = dict(f)
-                for k in ("hip_y", "wrist_left", "wrist_right"):
+                for k in ("hip_y", "shoulder_y", "wrist_left", "wrist_right"):
                     if f[k] is not None:
                         f[k] += rnd.uniform(-jitter, jitter) * TORSO / 100
                 for k in ("elbow_left", "elbow_right"):
@@ -313,7 +315,7 @@ def stand(elbow=175.0):
     hanging ~0.35 torso below the hips - so against the hands it reads as an
     ordinary-looking lift."""
     hip = SEAT_Y - 1.0 * TORSO
-    return {"hip_y": hip, "torso": TORSO,
+    return {"hip_y": hip, "shoulder_y": hip - TORSO, "torso": TORSO,
             "wrist_left": hip + 0.35 * TORSO, "wrist_right": hip + 0.35 * TORSO,
             "elbow_left": elbow, "elbow_right": elbow}
 
@@ -500,6 +502,82 @@ def check_stop_ends_at_last_good_frame():
     feed(tr, [(2, SIT), (6, UP), (0.2, SIT)])
     res = tr.finish()
     assert res and abs(res["held_exact_s"] - 6.0) < 0.1, res
+
+
+def check_sitting_up_from_a_slump_is_not_a_lift():
+    # Sat down slumped - hips 0.10 torso (~4 cm) low, shoulders 0.30 lower
+    # still - and the seat was learned there. Then they sit up straight
+    # without pushing: the hips rise ~4 cm against the hands and on screen,
+    # which alone would pass for a lift. The shoulders rising far more than
+    # the hips gives it away.
+    slumped = body(-0.10, 150.0, 150.0, slump=0.30)
+    tr = sp.SeatedPushUpTracker()
+    t, _ = feed(tr, [(2, slumped), (6, SIT)], jitter=2)
+    assert tr.hold_start is None, (tr.state, tr.lift, tr.status_msg)
+    # The upright sit became the seat, so a real push from there is timed and
+    # sitting back down still ends it.
+    _, res = feed(tr, [(5, UP), (2, SIT)], t0=t, jitter=2)
+    assert res and res["hold_sec"] == 5, res
+    assert res["end_reason"] == sp.BREAK_WORDS["sink"], res
+
+
+def check_bigger_lift_that_straightens_still_counts():
+    # Slightly slouched on the seat, then a real 8 cm push that also brings
+    # the back upright: a lift, straightening or not.
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, body(0.0, 150.0, 150.0, slump=0.15)), (5, body(0.20, 176.0, 178.0)),
+                       (2, body(0.0, 150.0, 150.0, slump=0.15))], jitter=2)
+    assert res and res["hold_sec"] == 5, res
+
+
+def check_other_hand_when_lifted():
+    # Only the right hand seen while sitting, only the left once up. The left
+    # hand's seat is worked out from the hips' move on screen, so the hold is
+    # timed - before, the seat was thrown away and the student had to sit
+    # down and push again.
+    r_only = lambda lift, el=120.0: body(lift, None, el, wrist_left=None)
+    l_only = lambda lift, el=176.0: body(lift, el, None, wrist_right=None)
+    tr = sp.SeatedPushUpTracker()
+    _, res = feed(tr, [(2, r_only(0.0)), (8, l_only(0.30)), (3, l_only(0.0, 120.0))], jitter=2)
+    assert tr.hold_start is not None, tr.status_msg
+    assert res and res["end_reason"] == sp.BREAK_WORDS["sink"], res
+    # Started after the hand was worked out (one still second) and the
+    # settle second, so ~6-7 s of the 8 s up.
+    assert 5 <= res["hold_sec"] <= 8, res
+
+
+class _LM:
+    def __init__(self, x, y, vis=0.99):
+        self.x, self.y, self.visibility = x, y, vis
+
+
+def _landmarks(far_vis):
+    """A seated figure in normalised picture coordinates; the right side's
+    shoulder, hip, elbow and wrist get visibility `far_vis`."""
+    lms = [_LM(0.5, 0.5, 0.0) for _ in range(33)]
+    pts = {11: (0.48, 0.30), 12: (0.52, 0.30),      # shoulders
+           13: (0.47, 0.42), 14: (0.53, 0.42),      # elbows
+           15: (0.47, 0.55), 16: (0.53, 0.55),      # wrists
+           23: (0.49, 0.55), 24: (0.51, 0.55)}      # hips
+    for i, (x, y) in pts.items():
+        lms[i] = _LM(x, y, far_vis if i in (12, 14, 16, 24) else 0.99)
+    return lms
+
+
+def check_side_on_one_side_hidden():
+    # Front-on: both sides clear -> the mid-points.
+    m = sp.body_metrics(_landmarks(0.99), 1000, 1000)
+    assert m is not None and m["elbow_left"] and m["elbow_right"], m
+    # Side-on: the far shoulder and hip hidden behind the body. The visible
+    # side carries the reading instead of the frame being thrown away.
+    m = sp.body_metrics(_landmarks(0.2), 1000, 1000)
+    assert m is not None, "side-on frame was rejected"
+    assert abs(m["hip_y"] - 550) < 1 and abs(m["shoulder_y"] - 300) < 1, m
+    assert m["elbow_left"] is not None and m["elbow_right"] is None, m
+    # Nothing clear at all -> nothing.
+    lms = _landmarks(0.2)
+    lms[11].visibility = lms[23].visibility = 0.2
+    assert sp.body_metrics(lms, 1000, 1000) is None
 
 
 def check_sink_reason_wording():

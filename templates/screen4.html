@@ -688,7 +688,7 @@
                                  `R ${deg(state.elbow_right_deg, state.elbow_right_start_deg)}`);
                   } else {
                       lines.push(state.pose_detected
-                          ? 'Body not fully visible \u2014 face the camera, head to hips and both hands in frame'
+                          ? 'Body not fully visible \u2014 head, hips and hands in frame (front-on or side-on)'
                           : 'No participant detected');
                   }
                   if (state.resolved) {
