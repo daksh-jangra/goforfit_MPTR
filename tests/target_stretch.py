@@ -90,7 +90,9 @@ Hold rule
   for a second (the first held reading, counted from that second's start),
   so getting into position does not eat the time and one stray frame
   can't start the clock. The coach can end a side
-  early (NEXT). A side with no reading for 30 seconds is left unmeasured.
+  early (NEXT). A side the camera hasn't measured yet waits as long as it
+  takes - a student turning a wheelchair around for the second side can
+  need well over half a minute - until the coach presses NEXT or STOP.
 
 Usage
 -----
@@ -170,7 +172,6 @@ DEFAULT_JOINT = "shoulder_abduction"
 
 # ── Detection tuning ─────────────────────────────────────────────────────────────
 SIDE_WINDOW_S   = 10.0   # each side's time to reach and hold, from its first reading
-NO_READING_S    = 30.0   # a side never measured in this long is left unmeasured
 HOLD_GAP_S      = 0.5    # a longer gap between readings restarts the 1 s hold
 HOLD_PCTL       = 0.20   # the held angle = this percentile of the last HOLD_S
 MIN_HOLD_READS  = 4      # ... and only once the window has this many readings
@@ -654,11 +655,9 @@ class TargetStretchTracker:
     turns it into clock degrees and a 0/1/2 score. The engine decides the
     score; the coach can only end a side early (NEXT) or RESET the run."""
 
-    def __init__(self, joint, side_window_s=SIDE_WINDOW_S, no_reading_s=NO_READING_S,
-                 hold_s=HOLD_S):
+    def __init__(self, joint, side_window_s=SIDE_WINDOW_S, hold_s=HOLD_S):
         self.joint = JOINTS[joint] if isinstance(joint, str) else joint
         self.side_window_s = float(side_window_s)
-        self.no_reading_s = float(no_reading_s)
         self.hold_s = float(hold_s)
         self.reset()
 
@@ -678,7 +677,6 @@ class TargetStretchTracker:
         self.problem = None
         self._hold.reset()
         self._first_t = None      # start of the first steady second (starts the 10 s)
-        self._side_t0 = now       # when this side began (no-reading backstop)
         self._now = now
         self.status_msg = self._position_msg()
 
@@ -717,8 +715,6 @@ class TargetStretchTracker:
         self._now = now
         if self.resolved:
             return None
-        if self._side_t0 is None:
-            self._side_t0 = now
         self.problem = problem
 
         if extent is None:
@@ -751,8 +747,6 @@ class TargetStretchTracker:
     def _check_time(self, now):
         if self._first_t is not None and now - self._first_t >= self.side_window_s:
             return self._end_side(now, "time")
-        if self._first_t is None and now - self._side_t0 >= self.no_reading_s:
-            return self._end_side(now, "not seen")
         return None
 
     # ── ending sides ─────────────────────────────────────────────────────
