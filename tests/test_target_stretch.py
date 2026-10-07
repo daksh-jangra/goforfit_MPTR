@@ -274,10 +274,21 @@ def test_coach_next_and_unseen_side():
     t, _ = feed(tr, [(2.0, -5)])
     tr.next_side(now=t)
     assert tr.side == "right" and tr.results["left"].score == 2
-    # Right side never seen: unmeasured after the 30 s backstop.
-    t, out = feed(tr, [(31.0, None)], t0=t)
-    assert tr.resolved and out and out[0]["right_score"] is None
-    assert out[0]["left_score"] == 2
+    # Right side not seen for two minutes: it waits, it doesn't give up.
+    t, out = feed(tr, [(120.0, None)], t0=t)
+    assert not tr.resolved and not out and tr.side == "right"
+    # The coach gives up on it with NEXT: unmeasured, left kept.
+    out = tr.next_side(now=t)
+    assert tr.resolved and out["right_score"] is None and out["left_score"] == 2
+
+
+def test_slow_turn_around_still_measures_second_side():
+    # A wheelchair turned around slowly: 75 s before the right side is seen.
+    tr = ts.TargetStretchTracker("elbow_extension")
+    t, _ = feed(tr, [(11.0, -5)])
+    assert tr.side == "right"
+    t, out = feed(tr, [(75.0, None), (11.0, -20)], t0=t)
+    assert out and out[0]["left_score"] == 2 and out[0]["right_score"] == 1, out
 
 
 def test_stop_mid_run():
