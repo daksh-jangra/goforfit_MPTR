@@ -184,7 +184,7 @@ TARGET_STRETCH_JOINTS = {
     "shoulder_external_rotation": "Shoulder external rotation",
     "forearm_supination":         "Forearm supination",
     "forearm_pronation":          "Forearm pronation",
-    "knee_extension":             "Knee extension (seated)",
+    "knee_extension":             "Knee extension",
 }
 
 TESTS = {
@@ -668,7 +668,7 @@ TESTS = {
             "Range of motion at one joint. Pick the joint before pressing START: "
             "wrist extension, elbow extension, shoulder extension, shoulder "
             "abduction, shoulder external rotation, forearm supination, forearm "
-            "pronation or knee extension (seated). The participant moves as far as "
+            "pronation or knee extension. The participant moves as far as "
             "they can and holds the end position for at least 1 second; the camera "
             "reads the angle to the nearest 15\u00b0 and scores it 0, 1 or 2. The "
             "LEFT side is measured first, then the RIGHT, each with 10 seconds "
@@ -685,7 +685,9 @@ TESTS = {
             "student facing it. Every other joint: camera SIDE-ON with the tested "
             "side toward it \u2014 the student turns around for the second side. "
             "1.5-2 m away at the height of the joint, with the whole limb (and the "
-            "hip, for the shoulder) in frame. Only the student should be in frame."
+            "hip, for the shoulder) in frame. Knee: stand, or sit if the student "
+            "can't stand. Shoulder extension: no chair back behind the arm. Only "
+            "the student should be in frame."
         ),
         # The joint is picked on the AI screen, not here: the dashboard opens
         # that screen directly.

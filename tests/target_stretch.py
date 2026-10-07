@@ -27,9 +27,13 @@ Protocol (Brockport Physical Fitness Test Manual, pp. 94-100, form 5.1)
 
   Knee extension: the manual lies the participant on their side and the
   tester looks down from above. That needs the phone overhead, so this app
-  tests it SEATED with a side-on camera (owner's choice) - the knee angle is
-  the same angle, the manual allows a changed position as long as it is
-  noted.
+  tests it STANDING with a side-on camera, or SEATED for a student who can't
+  stand (owner's choice) - the knee angle is the same angle, and the manual
+  allows a changed position as long as it is noted. Standing is preferred:
+  like the manual's side-lying position it keeps the hip straight, so tight
+  hamstrings don't stop the knee straightening. Sitting folds the hip and a
+  student with tight hamstrings scores lower there than their knee deserves.
+  The measurement is identical either way - only the instruction differs.
 
 What the app scores vs. what the coach judges
 --------------------------------------------------------------------
@@ -53,7 +57,7 @@ How each joint is read from the camera
                         screen as it turns outward toward the lens - the
                         shortening gives the angle (cos). The full length is
                         learned from the start position itself
-    knee extension      seated; how straight the knee gets, like the elbow
+    knee extension      standing (or seated); how straight the knee gets
   FRONT-ON camera (the student faces the lens):
     shoulder abduction  upper arm against the trunk line, out to the side
     supination /        elbow bent, fist pointing at the lens, thumb up.
@@ -144,7 +148,7 @@ JOINTS = {
         "upper arm at the side, palm forward - straighten the elbow as far as it goes"),
     "shoulder_extension": Joint(
         "shoulder_extension", "Shoulder extension", VIEW_SIDE, 60, 30, False, False,
-        "arm at the side - swing the arm BACK as far as it goes, trunk upright"),
+        "arm at the side, no chair back behind it - swing it BACK as far as it goes, trunk upright"),
     "shoulder_abduction": Joint(
         "shoulder_abduction", "Shoulder abduction", VIEW_FRONT, 165, 120, False, False,
         "arm at the side - raise it out to the side and up as far as it goes"),
@@ -160,7 +164,7 @@ JOINTS = {
         "elbow bent, fist pointing at the camera thumb up - turn the palm DOWN as far as it goes"),
     "knee_extension": Joint(
         "knee_extension", "Knee extension", VIEW_SIDE, 0, -15, False, True,
-        "seated - straighten the knee as far as it goes"),
+        "stand (or sit if the student can't stand) - straighten the knee as far as it goes"),
 }
 DEFAULT_JOINT = "shoulder_abduction"
 
