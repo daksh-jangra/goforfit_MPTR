@@ -120,6 +120,21 @@
     >
       <div id="ai-action-row" class="hidden grid gap-1.5 w-full max-w-4xl mx-auto"></div>
 
+      {% if test.id == 'target_stretch' %}
+      <!-- Target Stretch: the joint is picked here, before START, because the
+           dashboard opens this screen directly. One joint per run. -->
+      <select
+        id="tst-joint"
+        onchange="onTstJointChange(this)"
+        class="w-full max-w-4xl mx-auto rounded-xl bg-white/10 text-white text-xs sm:text-sm font-bold px-3 py-2 border border-white/20"
+      >
+        <option value="" class="text-black">Pick the joint to test…</option>
+        {% for key, title in test.joints.items() %}
+        <option value="{{ key }}" class="text-black">{{ title }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
       <div class="grid grid-cols-2 gap-2 max-w-4xl mx-auto w-full">
         <button
           id="engine-btn"
@@ -715,6 +730,65 @@
                   return state.resolved
                       ? { seatedPushUpScore: state.seconds }
                       : null;
+              },
+          },
+          target_stretch: {
+              feedUrl:    '/api/target_stretch/feed',
+              stateUrl:   '/api/target_stretch/state',
+              actionUrl:  '/api/target_stretch/action',
+              browserCamera: true,
+              frameUrl:   '/api/target_stretch/frame',
+              // The coach holds or props the phone facing the student, screen
+              // toward the coach - the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              buttons: [
+                  { id: 'next',  label: 'NEXT SIDE', action: 'next',  color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET',     action: 'reset', color: 'bg-amber-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'next') return !state.running || state.resolved;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const deg = (v) => (v === null || v === undefined) ? '--'
+                      : ((state.straight && v > 0) ? '+' : '') + v + '\u00b0';
+                  const lines = [`${state.joint_title}`];
+                  if (!state.resolved) {
+                      lines.push(`${(state.side || '').toUpperCase()} side (${state.side_num} of 2)` +
+                                 ((state.seconds_left !== null && state.seconds_left !== undefined)
+                                     ? ` \u2014 ${state.seconds_left}s left`
+                                     : ` \u2014 ${state.side_window_s}s start once the joint is held steady`));
+                      lines.push(`Now: ${deg(state.current_deg)}   Held 1 s: ${deg(state.held_deg)}`);
+                      lines.push(state.best_deg !== null && state.best_deg !== undefined
+                          ? `Best held: ${deg(state.best_deg)} \u2192 score ${state.best_score}`
+                          : `Score 2 at ${deg(state.score2_deg)}, 1 at ${deg(state.score1_deg)}`);
+                  }
+                  const sideTxt = (s) => {
+                      if (state[`${s}_score`] !== null && state[`${s}_score`] !== undefined)
+                          return `${s.toUpperCase()}: ${deg(state[`${s}_deg`])} = ${state[`${s}_score`]}`;
+                      return `${s.toUpperCase()}: ${state[`${s}_done`] ? 'not measured' : 'to do'}`;
+                  };
+                  lines.push(`${sideTxt('left')}   ${sideTxt('right')}`);
+                  if (!state.pose_detected) lines.push('No student detected');
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              // A beep each time a side finishes, so the student knows to
+              // switch without looking at the screen. RESET is silent.
+              _prev: null,
+              onState(state) {
+                  const now = { left: !!state.left_done, right: !!state.right_done };
+                  const prev = this._prev;
+                  this._prev = now;
+                  if (!prev || !state.running) return;
+                  if (now.left && !prev.left) beep(660, 0.4);
+                  if (now.right && !prev.right) beep(440, 0.8);
+              },
+              syncFields(state) {
+                  // Not synced to the dashboard yet: the owner decides the
+                  // payload shape later (one joint gives TWO scores).
+                  return null;
               },
           },
           vertical_jump: {
@@ -1321,6 +1395,7 @@
           body[{{ param.name|tojson }}] = urlParams.get({{ param.name|tojson }});
           {% endfor %}
           if (sessionId) body['session_id'] = sessionId;
+          if (testId === 'target_stretch') body['joint'] = document.getElementById('tst-joint').value;
           
           try {
               const res = await fetch(`/api/launch/${testId}`, {
@@ -1412,6 +1487,23 @@
       }
 
       if (engineCfg) buildActionRow();
+
+      // Target Stretch joint picker: one joint per run, so it can't change
+      // mid-run. A ?joint= in the URL preselects it.
+      const tstJoint = document.getElementById('tst-joint');
+      if (tstJoint) {
+          const pre = urlParams.get('joint');
+          if (pre && [...tstJoint.options].some(o => o.value === pre)) tstJoint.value = pre;
+          tstJoint.dataset.current = tstJoint.value;
+      }
+      function onTstJointChange(sel) {
+          if (runActive) {
+              sel.value = sel.dataset.current || '';
+              alert('Press STOP / SAVE first, then pick the next joint and press START.');
+              return;
+          }
+          sel.dataset.current = sel.value;
+      }
     </script>
   </body>
 </html>

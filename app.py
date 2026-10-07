@@ -75,7 +75,7 @@ try:
         BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
         ShoulderStretchEngine, IsometricPushUpEngine,
-        SeatedPushUpEngine,
+        SeatedPushUpEngine, TargetStretchEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -85,6 +85,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     ShoulderStretchEngine = None
     IsometricPushUpEngine = None
     SeatedPushUpEngine = None
+    TargetStretchEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -124,6 +125,7 @@ _reverse_curl_engine = None
 _shoulder_stretch_engine = None
 _isometric_push_up_engine = None
 _seated_push_up_engine = None
+_target_stretch_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -172,6 +174,19 @@ async def _json_body(request: Request) -> dict:
 
 
 # ── Test registry ──────────────────────────────────────────────────────────
+# Target Stretch joints, in the order the AI screen's picker lists them.
+# Keys must match target_stretch.JOINTS (form 5.1 / table 5.3).
+TARGET_STRETCH_JOINTS = {
+    "wrist_extension":            "Wrist extension",
+    "elbow_extension":            "Elbow extension",
+    "shoulder_extension":         "Shoulder extension",
+    "shoulder_abduction":         "Shoulder abduction",
+    "shoulder_external_rotation": "Shoulder external rotation",
+    "forearm_supination":         "Forearm supination",
+    "forearm_pronation":          "Forearm pronation",
+    "knee_extension":             "Knee extension (seated)",
+}
+
 TESTS = {
     "bmi": {
         "id":          "bmi",
@@ -642,6 +657,43 @@ TESTS = {
         "unit":   "s",
         "live_feed":   True,
     },
+    "target_stretch": {
+        "id":          "target_stretch",
+        "title":       "Target Stretch",
+        "subtitle":    "How far one joint moves \u2014 left and right, scored 0 to 2",
+        "icon":        "\U0001f9d8",
+        "category":    "Musculoskeletal",
+        "script":      "target_stretch.py",
+        "description": (
+            "Range of motion at one joint. Pick the joint before pressing START: "
+            "wrist extension, elbow extension, shoulder extension, shoulder "
+            "abduction, shoulder external rotation, forearm supination, forearm "
+            "pronation or knee extension (seated). The participant moves as far as "
+            "they can and holds the end position for at least 1 second; the camera "
+            "reads the angle to the nearest 15\u00b0 and scores it 0, 1 or 2. The "
+            "LEFT side is measured first, then the RIGHT, each with 10 seconds "
+            "from when the camera first sees the joint held steady. The coach demonstrates the full "
+            "movement and helps the participant find their best position; the "
+            "camera decides the score."
+        ),
+        "controls": [
+            ("NEXT",  "End the side under way now (keeps its best hold)"),
+            ("RESET", "Start the run over (both sides)"),
+        ],
+        "tip": (
+            "Shoulder abduction, supination and pronation: camera IN FRONT, the "
+            "student facing it. Every other joint: camera SIDE-ON with the tested "
+            "side toward it \u2014 the student turns around for the second side. "
+            "1.5-2 m away at the height of the joint, with the whole limb (and the "
+            "hip, for the shoulder) in frame. Only the student should be in frame."
+        ),
+        # The joint is picked on the AI screen, not here: the dashboard opens
+        # that screen directly.
+        "joints": TARGET_STRETCH_JOINTS,
+        "params": [],
+        "unit":   "score",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -753,6 +805,8 @@ def _is_running(test_id: str) -> bool:
         return _isometric_push_up_engine.is_running()
     if test_id == "seated_push_up" and _seated_push_up_engine is not None:
         return _seated_push_up_engine.is_running()
+    if test_id == "target_stretch" and _target_stretch_engine is not None:
+        return _target_stretch_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -891,6 +945,17 @@ class SeatedPushUpSave(BaseModel):
     hold_sec: Optional[float] = None       # the score: seconds held, 0-20
     held_exact_s: Optional[float] = None
     end_reason: Optional[str] = None
+    rating: Optional[str] = None
+
+class TargetStretchSave(BaseModel):
+    session_id: Optional[int] = None
+    joint: Optional[str] = None
+    left_deg: Optional[float] = None       # clock degrees, nearest 15
+    left_score: Optional[int] = None       # 0-2, table 5.3
+    left_exact: Optional[float] = None
+    right_deg: Optional[float] = None
+    right_score: Optional[int] = None
+    right_exact: Optional[float] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -1136,6 +1201,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "seated_push_up" and SeatedPushUpEngine is not None:
         return await _launch_seated_push_up(request)
+
+    if test_id == "target_stretch" and TargetStretchEngine is not None:
+        return await _launch_target_stretch(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1537,6 +1605,40 @@ async def _launch_seated_push_up(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_target_stretch(request: Request):
+    global _target_stretch_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # The one thing to configure: which joint. Both sides are measured in
+    # the one run, left then right.
+    joint = str(body.get("joint") or "").strip().lower()
+    if joint not in TARGET_STRETCH_JOINTS:
+        return JSONResponse({"ok": False, "error": "Pick the joint to test first"},
+                            status_code=400)
+
+    def _stage(res):
+        _pending["target_stretch"] = {
+            "session_id": session_id, "joint": res["joint"],
+            "joint_title": res["joint_title"],
+            "left_deg": res["left_deg"], "left_score": res["left_score"],
+            "left_exact": res["left_exact"],
+            "right_deg": res["right_deg"], "right_score": res["right_score"],
+            "right_exact": res["right_exact"],
+            "rating": res["rating"],
+        }
+
+    try:
+        engine = TargetStretchEngine(session_id=session_id, on_stage=_stage, joint=joint)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _target_stretch_engine = engine
+    _pending.pop("target_stretch", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1664,7 +1766,7 @@ def engine_status():
                                "wall_toss",
                                "sit_reach", "trunk_lift", "reverse_curl",
                                "shoulder_stretch", "isometric_push_up",
-                               "seated_push_up",
+                               "seated_push_up", "target_stretch",
                                "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
@@ -1765,6 +1867,12 @@ def stop(test_id: str):
         # Same as the isometric push-up: the engine stages from its own
         # stop() hook, and nothing is staged if the clock never started.
         _seated_push_up_engine.stop()
+        return {"ok": True}
+    if test_id == "target_stretch" and _target_stretch_engine is not None:
+        # The engine stages from its own stop() hook: the side under way
+        # closes on its best hold, an unreached side stays unmeasured, and
+        # nothing measured stages nothing.
+        _target_stretch_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -1945,6 +2053,11 @@ async def isometric_push_up_frame(request: Request):
 @app.post("/api/seated_push_up/frame")
 async def seated_push_up_frame(request: Request):
     return await _receive_frame(_seated_push_up_engine, request)
+
+
+@app.post("/api/target_stretch/frame")
+async def target_stretch_frame(request: Request):
+    return await _receive_frame(_target_stretch_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -2498,6 +2611,44 @@ def seated_push_up_action(b: SeatedPushUpAction):
         _pending.pop("seated_push_up", None)
     return res
 
+# ── Target stretch live-feed control ───────────────────────────────────
+class TargetStretchAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/target_stretch/feed")
+def target_stretch_feed():
+    if _target_stretch_engine is None or not _target_stretch_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Target stretch test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _target_stretch_engine is not None and _target_stretch_engine.is_running():
+            jpg = _target_stretch_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/target_stretch/state")
+def target_stretch_state():
+    if _target_stretch_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_target_stretch_engine.get_state()}
+
+@app.post("/api/target_stretch/action")
+def target_stretch_action(b: TargetStretchAction):
+    if _target_stretch_engine is None or not _target_stretch_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Target stretch test isn't running"}, status_code=409)
+    res = _target_stretch_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # The run being thrown away may already have staged its scores.
+        _pending.pop("target_stretch", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -2860,6 +3011,36 @@ def save_seated_push_up(b: SeatedPushUpSave):
         held_exact_s = b.held_exact_s,
         end_reason   = b.end_reason,
         rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/target_stretch")
+def save_target_stretch(b: TargetStretchSave):
+    """Fields: session_id, joint, left_deg/left_score/left_exact,
+    right_deg/right_score/right_exact (a side may be missing if it was not
+    measured, but not both), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.joint not in TARGET_STRETCH_JOINTS:
+        return JSONResponse({"ok": False, "error": "Unknown joint"}, status_code=400)
+    if b.left_score is None and b.right_score is None:
+        return JSONResponse({"ok": False, "error": "Neither side was measured"},
+                            status_code=400)
+    for sc in (b.left_score, b.right_score):
+        if sc is not None and sc not in (0, 1, 2):
+            return JSONResponse({"ok": False, "error": "Scores are 0, 1 or 2"},
+                                status_code=400)
+    row_id = db.save_target_stretch(
+        session_id  = b.session_id,
+        joint       = b.joint,
+        left_deg    = None if b.left_deg is None else int(round(b.left_deg)),
+        left_score  = b.left_score,
+        left_exact  = b.left_exact,
+        right_deg   = None if b.right_deg is None else int(round(b.right_deg)),
+        right_score = b.right_score,
+        right_exact = b.right_exact,
+        rating      = b.rating or TARGET_STRETCH_JOINTS[b.joint],
     )
     return {"ok": True, "id": row_id}
 

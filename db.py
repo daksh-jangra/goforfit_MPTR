@@ -250,6 +250,26 @@ CREATE TABLE IF NOT EXISTS seated_push_up (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Target Stretch Test ───────────────────────────────────────────────────
+-- Range of motion at ONE joint per row (Brockport form 5.1), measured on the
+-- left and then the right side. *_deg is the angle held for 1 s, rounded to
+-- the nearest 15 degrees ("half hour" on the clock); *_score is 0/1/2 from
+-- table 5.3. Elbow and knee extension read 0 when straight and minus when
+-- short of straight. A side that was not measured is NULL.
+CREATE TABLE IF NOT EXISTS target_stretch (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    joint           TEXT NOT NULL,   -- e.g. 'shoulder_abduction'
+    left_deg        INTEGER,         -- clock degrees, nearest 15
+    left_score      INTEGER,         -- 0, 1 or 2
+    left_exact      REAL,            -- the camera's unrounded angle, for review
+    right_deg       INTEGER,
+    right_score     INTEGER,
+    right_exact     REAL,
+    rating          TEXT,            -- the joint's name
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -338,7 +358,13 @@ UNION ALL
 UNION ALL
     SELECT 'seated_push_up', sp.id, sp.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, sp.hold_sec, sp.rating, sp.recorded_at
-    FROM seated_push_up sp LEFT JOIN sessions s ON sp.session_id = s.id;
+    FROM seated_push_up sp LEFT JOIN sessions s ON sp.session_id = s.id
+UNION ALL
+    SELECT 'target_stretch', tst.id, tst.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL,
+           'L ' || COALESCE(tst.left_score, '-') || ' / R ' || COALESCE(tst.right_score, '-'),
+           tst.rating, tst.recorded_at
+    FROM target_stretch tst LEFT JOIN sessions s ON tst.session_id = s.id;
 """
 
 
@@ -735,6 +761,32 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Target Stretch ───────────────────────────────────────────────────
+
+    def save_target_stretch(
+        self,
+        session_id: int,
+        joint: str,
+        left_deg: int = None,
+        left_score: int = None,
+        left_exact: float = None,
+        right_deg: int = None,
+        right_score: int = None,
+        right_exact: float = None,
+        rating: str = None,
+    ) -> int:
+        """One joint, both sides: clock degrees and a 0-2 score per side."""
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO target_stretch (session_id, joint,
+                        left_deg, left_score, left_exact,
+                        right_deg, right_score, right_exact, rating)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (session_id, joint, left_deg, left_score, left_exact,
+                 right_deg, right_score, right_exact, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -780,7 +832,7 @@ class GoForFitDB:
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
-        "seated_push_up",
+        "seated_push_up", "target_stretch",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:

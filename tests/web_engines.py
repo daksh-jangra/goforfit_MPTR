@@ -22,6 +22,7 @@ SECTIONS IN THIS FILE
   4D. ShoulderStretchEngine  wraps shoulder_stretch.py  (shoulder stretch pass/fail)
   4E. IsometricPushUpEngine  wraps isometric_pushup.py  (isometric push-up hold time)
   4F. SeatedPushUpEngine     wraps seated_pushup.py     (seated push-up hold time)
+  4G. TargetStretchEngine    wraps target_stretch.py    (target stretch, 0-2 per side)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -3053,6 +3054,255 @@ class SeatedPushUpEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4G — TARGET STRETCH   (wraps target_stretch.py)
+# ════════════════════════════════════════════════════════════════════════
+import target_stretch as tst_mod  # noqa: E402
+
+_MODEL_TST_POSE = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+_MODEL_TST_HAND = os.path.join(_TESTS_DIR, "hand_landmarker.task")
+
+
+class TargetStretchEngine(BaseWebEngine):
+    """Live Brockport target stretch engine (form 5.1). The coach picks ONE
+    joint before START; the run measures it on the LEFT side and then the
+    RIGHT side. Each side's score is the best angle held for 1 second inside
+    its 10 seconds, rounded to 15 degrees and scored 0/1/2 from table 5.3.
+
+    The engine decides the scores - there is no coach override. The only
+    controls are NEXT (end the side under way now) and RESET. Stopping
+    mid-run stages whatever sides were measured; nothing measured stages
+    nothing.
+
+    Owns two MediaPipe detectors (pose + hands), like ShoulderStretchEngine;
+    the hand detector is only created for the joints that need it (wrist
+    extension, supination, pronation). All the geometry and the state machine
+    live in target_stretch.py - this class only replaces the desktop loop."""
+
+    def __init__(self, session_id=None, on_stage=None, joint=tst_mod.DEFAULT_JOINT,
+                 camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.joint = tst_mod.JOINTS[joint]
+        self.landmarker = None
+        self.hand_det = None
+        self.tracker = tst_mod.TargetStretchTracker(joint)
+        self.meter = tst_mod.JointMeter(joint)
+        self.pose_detected = False
+        self.last_save = None
+
+    # ── camera plumbing (same contract as IsometricPushUpEngine) ────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """Switching lens flips the mirror, and the mirror decides which side
+        of the picture is the student's left. An undecided run starts over;
+        a finished one keeps its scores."""
+        was = self.mirror_preview
+        super().set_facing(facing)
+        if was == self.mirror_preview:
+            return
+        with self._lock:
+            if not self.tracker.resolved:
+                self.tracker.reset()
+                self.meter.reset()
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_TST_POSE)
+        self.landmarker = tst_mod.PoseLandmarker.create_from_options(
+            tst_mod.PoseLandmarkerOptions(
+                base_options=tst_mod.BaseOptions(model_asset_path=_MODEL_TST_POSE),
+                running_mode=tst_mod.VisionRunningMode.VIDEO,
+                num_poses=1,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+                output_segmentation_masks=False,
+            ))
+        if self.joint.hand:
+            _ensure_pose_model(_MODEL_TST_HAND,
+                               url=tst_mod.MODEL_URLS["hand_landmarker.task"])
+            self.hand_det = tst_mod.HandLandmarker.create_from_options(
+                tst_mod.HandLandmarkerOptions(
+                    base_options=tst_mod.BaseOptions(model_asset_path=_MODEL_TST_HAND),
+                    running_mode=tst_mod.VisionRunningMode.VIDEO,
+                    num_hands=2,
+                    min_hand_detection_confidence=0.5,
+                    min_hand_presence_confidence=0.45,
+                    min_tracking_confidence=0.45,
+                ))
+
+    def _release_models(self):
+        for name in ("landmarker", "hand_det"):
+            det = getattr(self, name, None)
+            if det is not None:
+                try:
+                    det.close()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        j = self.joint
+
+        def rnd(v):
+            return None if v is None else int(round(v))
+
+        best = tst_mod.side_result(j, tr.best) if tr.best is not None else None
+        left = tr.time_left()
+        state = {
+            "state": tr.phase.name,
+            "joint": j.key,
+            "joint_title": j.title,
+            "view": j.view,
+            "straight": j.straight,
+            "score2_deg": j.score2,
+            "score1_deg": j.score1,
+            "side": tr.side,
+            "side_num": tr.side_idx + 1 if tr.side else None,
+            "pose_detected": self.pose_detected,
+            "current_deg": rnd(tr.current),
+            "held_deg": rnd(tr.held),
+            "best_deg": best.deg if best else None,
+            "best_score": best.score if best else None,
+            "seconds_left": None if left is None else int(math.ceil(left)),
+            "side_window_s": int(tr.side_window_s),
+            "resolved": tr.resolved,
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+        for s in tst_mod.SIDES:
+            r = tr.results[s]
+            state[f"{s}_deg"] = r.deg if r else None
+            state[f"{s}_score"] = r.score if r else None
+            state[f"{s}_done"] = tr.end_reasons[s] is not None
+        return state
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.meter.reset()
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action_next(self, value=None):
+        """End the side under way now, on the best it has held so far."""
+        with self._lock:
+            if self.tracker.resolved:
+                return {"ok": False, "error": "Both sides are already done"}
+            if self.tracker.next_side() is not None:
+                self._maybe_stage_locked()
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        handler = {
+            "reset": self.action_reset,
+            "next": self.action_next,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self):
+        """Stage once the run is over and at least one side was measured.
+        Called with self._lock held."""
+        if not self.tracker.resolved or not self.tracker.measured_any:
+            return
+        res = self.tracker.result()
+        self.last_save = " / ".join(
+            f"{s[0].upper()} {res[s + '_score']}" if res[s + "_score"] is not None
+            else f"{s[0].upper()} -" for s in tst_mod.SIDES)
+        self._safe_stage(res)
+
+    def _stage_on_stop(self):
+        """STOP pressed: the side under way closes on what it has held, a side
+        not reached stays unmeasured. Nothing measured stages nothing."""
+        with self._lock:
+            if self._staged:
+                return
+            if self.tracker.finish() is not None:
+                self._maybe_stage_locked()
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # share one pixel space. The meter is told which, because the
+                # mirror decides which side of the picture is the student's left.
+                mirrored = self.mirror_preview
+                frame = camera.mirror(frame, mirrored)
+                fh, fw = frame.shape[:2]
+                mp_image = tst_mod.mp.Image(
+                    image_format=tst_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                now = time.time()
+                ts = int((now - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+                lms = results.pose_landmarks[0] if results.pose_landmarks else None
+                hands = []
+                if self.hand_det is not None:
+                    hands = self.hand_det.detect_for_video(mp_image, ts).hand_landmarks or []
+
+                tst_mod.draw_pose(frame, lms)
+                tst_mod.draw_hand_points(frame, hands)
+
+                with self._lock:
+                    # Under the lock: RESET, NEXT and a lens change touch the
+                    # tracker from other threads.
+                    self.pose_detected = lms is not None
+                    segments = []
+                    if not self.tracker.resolved:
+                        rd = self.meter.measure(lms, hands, fw, fh, self.tracker.side, mirrored)
+                        segments = rd.segments
+                        if self.tracker.update(rd.extent, now=now, problem=rd.problem) is not None:
+                            self._maybe_stage_locked()
+                    tst_mod.draw_hud(frame, self.tracker, segments)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -3074,6 +3324,7 @@ __all__ = [
     "ShoulderStretchEngine",
     "IsometricPushUpEngine",
     "SeatedPushUpEngine",
+    "TargetStretchEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]
