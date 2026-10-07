@@ -301,20 +301,48 @@ def test_reset():
     assert tr.side == "left" and tr.results["left"] is None and tr.best is None
 
 
-def test_rotation_meter_learns_start_length():
-    """External rotation through JointMeter's length memory: the start length
-    is learned while the forearm points forward, then the turn reads cos."""
-    meter = ts.JointMeter("shoulder_external_rotation")
-    meter.start_len["left"] = None
-    # Simulate the length pipeline directly.
-    for L in (0.84, 0.85, 0.86, 0.85):
-        buf = meter._len_buf["left"]
-        buf.append(L)
-        med = sorted(buf)[len(buf) // 2]
-        meter.start_len["left"] = max(meter.start_len["left"] or 0, med)
-    assert 0.84 <= meter.start_len["left"] <= 0.86
-    a = ts.rotation_from_length(0.85 * math.cos(math.radians(75)), meter.start_len["left"])
+def test_rotation_start_length_is_a_steady_second():
+    """The start length comes from a steady second, not one long frame."""
+    sl = ts.StartLength()
+    assert sl.push(0.0, 0.85) is None                 # no second seen yet
+    t = 0.0
+    for k in range(12):                               # 1.1 s at 0.85, one spike
+        sl.push(t, 1.30 if k == 5 else 0.85)
+        t += 0.1
+    assert sl.value is not None and abs(sl.value - 0.85) < 1e-9, sl.value
+    a = ts.rotation_from_length(0.85 * math.cos(math.radians(75)), sl.value)
     assert ts.to_clock(a) == 75
+
+
+def _rotation_run(true_deg, noise, seed, fps=10):
+    """A whole side through StartLength + the tracker: 2 s at the start
+    position, 3 s turned out by true_deg, 2 s back. Length wobble `noise`."""
+    rnd = random.Random(seed)
+    tr = ts.TargetStretchTracker("shoulder_external_rotation")
+    sl = ts.StartLength()
+    t = 0.0
+    for d in [0] * (2 * fps) + [true_deg] * (3 * fps) + [0] * (2 * fps):
+        length = 0.85 * math.cos(math.radians(d)) * (1 + rnd.gauss(0, noise))
+        start = sl.push(t, length)
+        tr.update(None if start is None else ts.rotation_from_length(length, start), now=t)
+        t += 1.0 / fps
+    tr.next_side(now=t)
+    r = tr.results["left"]
+    return None if r is None else r.score
+
+
+def test_rotation_still_student_scores_zero_under_wobble():
+    # 4 % wobble in the forearm's on-screen length, the realistic case.
+    scores = [_rotation_run(0, 0.04, s) for s in range(100)]
+    assert scores.count(0) >= 99, scores
+    scores = [_rotation_run(15, 0.04, s) for s in range(100)]
+    assert scores.count(0) >= 95, scores
+
+
+def test_rotation_real_turns_still_score():
+    for true, want in ((35, 1), (60, 1), (80, 2)):
+        scores = [_rotation_run(true, 0.04, s) for s in range(50)]
+        assert scores.count(want) == 50, (true, scores)
 
 
 def main():
