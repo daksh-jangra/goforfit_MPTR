@@ -158,10 +158,10 @@ JOINTS = {
         "seated, elbow at the side bent 90, forearm forward - turn the hand OUT as far as it goes"),
     "forearm_supination": Joint(
         "forearm_supination", "Forearm supination", VIEW_FRONT, 90, 45, True, False,
-        "elbow bent, fist pointing at the camera thumb up - turn the palm UP as far as it goes"),
+        "elbow bent, fist at the camera, thumb up - turn the palm UP as far as it goes"),
     "forearm_pronation": Joint(
         "forearm_pronation", "Forearm pronation", VIEW_FRONT, 90, 45, True, False,
-        "elbow bent, fist pointing at the camera thumb up - turn the palm DOWN as far as it goes"),
+        "elbow bent, fist at the camera, thumb up - turn the palm DOWN as far as it goes"),
     "knee_extension": Joint(
         "knee_extension", "Knee extension", VIEW_SIDE, 0, -15, False, True,
         "stand (or sit if the student can't stand) - straighten the knee as far as it goes"),
@@ -514,7 +514,7 @@ class JointMeter:
 
         if j.view == VIEW_FRONT:
             if not front_on(_px(lms, NOSE, w, h), _px(lms, 11, w, h), _px(lms, 12, w, h)):
-                return Reading(None, "Face the camera", [])
+                return Reading(None, "FACE the camera (not your back)", [])
             lab = _front_label(lms, side, mirrored)
             facing = None
         else:
@@ -705,7 +705,7 @@ class TargetStretchTracker:
         if self.side is None:
             return ""
         where = ("side toward the camera" if self.joint.view == VIEW_SIDE
-                 else "arm - face the camera")
+                 else "arm - FACE the camera (not your back)")
         return f"{self.side.upper()} {where}: {self.joint.instruction}"
 
     # ── per-frame update ─────────────────────────────────────────────────
@@ -882,11 +882,22 @@ def draw_hud(frame, tracker, segments=None):
             line(f"{s.upper()}: not measured", C_BAD)
 
     if tr.status_msg:
-        msg = _ascii(tr.status_msg)
-        scale = 0.55 if len(msg) < 80 else 0.45
-        draw_panel(frame, 12, h - 54, w - 12, h - 12)
-        cv2.putText(frame, msg[:120], (24, h - 26), cv2.FONT_HERSHEY_SIMPLEX, scale, C_TEXT,
-                    2, cv2.LINE_AA)
+        # Wrapped to the frame width rather than cut off: the instructions
+        # are long, and the end of one is the part that says what to do.
+        scale, lines, cur = 0.55, [], ""
+        for word in _ascii(tr.status_msg).split():
+            trial = f"{cur} {word}".strip()
+            if cur and cv2.getTextSize(trial, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)[0][0] > w - 48:
+                lines.append(cur)
+                cur = word
+            else:
+                cur = trial
+        lines = (lines + [cur])[-3:]
+        top = h - 20 - 26 * len(lines) - 8
+        draw_panel(frame, 12, top, w - 12, h - 12)
+        for k, txt in enumerate(lines):
+            cv2.putText(frame, txt, (24, top + 30 + 26 * k), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                        C_TEXT, 2, cv2.LINE_AA)
 
     if tr.resolved and tr.measured_any:
         big = "   ".join(f"{s[0].upper()} {tr.results[s].score}" if tr.results[s]
