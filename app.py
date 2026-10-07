@@ -682,7 +682,9 @@ TESTS = {
         ],
         "tip": (
             "Shoulder abduction, supination and pronation: camera IN FRONT, the "
-            "student facing it. Every other joint: camera SIDE-ON with the tested "
+            "student FACING it \u2014 not their back (the PDF drawing for shoulder "
+            "abduction shows the back; don't copy that, the app would measure the "
+            "wrong arm). Every other joint: camera SIDE-ON with the tested "
             "side toward it \u2014 the student turns around for the second side. "
             "1.5-2 m away at the height of the joint, with the whole limb (and the "
             "hip, for the shoulder) in frame. Knee: stand, or sit if the student "
