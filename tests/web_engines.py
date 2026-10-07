@@ -3290,7 +3290,8 @@ class TargetStretchEngine(BaseWebEngine):
                     self.pose_detected = lms is not None
                     segments = []
                     if not self.tracker.resolved:
-                        rd = self.meter.measure(lms, hands, fw, fh, self.tracker.side, mirrored)
+                        rd = self.meter.measure(lms, hands, fw, fh, self.tracker.side, mirrored,
+                                                now=now)
                         segments = rd.segments
                         if self.tracker.update(rd.extent, now=now, problem=rd.problem) is not None:
                             self._maybe_stage_locked()

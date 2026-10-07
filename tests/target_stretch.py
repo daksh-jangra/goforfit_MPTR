@@ -190,11 +190,17 @@ FRONT_MIN = 0.80
 SIDE_MAX_SPREAD = 1.40
 
 # External rotation reads the forearm's on-screen length against its length
-# at the start (pointing forward). Lengths are in UPPER-ARM lengths so the
-# student stepping nearer the camera doesn't change them. The start length
-# is the running max of a 3-reading median, so one long jittery frame can't
-# inflate it.
-ROT_SMOOTH = 3
+# at the start (pointing forward) - the manual reads the turn "from the
+# starting position". Lengths are in UPPER-ARM lengths so the student
+# stepping nearer the camera doesn't change them. The start length is the
+# MEDIAN of a steady second (the longest such second seen on that side), not
+# the longest single frame: the longest frame is mostly camera wobble, and a
+# start length a few percent too long reads a still forearm as turned. In a
+# simulation at 4 % length wobble, the single-frame rule gave a student who
+# never turned a score of 1 in ~1 run in 12, and a 15 deg turn a 1 in ~1 in 3;
+# the steady-second rule: 0 / 300 and 1 / 300, with 30 and 75 deg turns
+# still scoring 1 and 2 every time.
+ROT_START_S = 1.0
 # Turning the hand IN (toward the belly) shortens the forearm on screen the
 # same way turning it OUT does. Turning out brings the wrist nearer the lens
 # than the elbow; MediaPipe's depth (z, smaller = nearer) tells them apart.
@@ -444,6 +450,31 @@ def _match_hand(hands, wrist_px, upper_arm_px, w, h):
     return best
 
 
+class StartLength:
+    """The forearm's length in the start position for one side: the median
+    of the last ROT_START_S of lengths, kept at its largest. None until a
+    steady second has been seen. A gap longer than HOLD_GAP_S restarts the
+    second, as it does for the hold."""
+
+    def __init__(self, span_s=ROT_START_S, gap_s=HOLD_GAP_S, min_reads=MIN_HOLD_READS):
+        self.span_s, self.gap_s, self.min_reads = float(span_s), float(gap_s), int(min_reads)
+        self.buf = deque()       # (t, length)
+        self.value = None
+
+    def push(self, t, length):
+        if self.buf and t - self.buf[-1][0] > self.gap_s:
+            self.buf.clear()
+        self.buf.append((t, float(length)))
+        while len(self.buf) >= 2 and self.buf[1][0] <= t - self.span_s:
+            self.buf.popleft()
+        if len(self.buf) >= self.min_reads and t - self.buf[0][0] >= self.span_s * 0.95:
+            vals = sorted(v for _, v in self.buf)
+            med = vals[len(vals) // 2]
+            if self.value is None or med > self.value:
+                self.value = med
+        return self.value
+
+
 class JointMeter:
     """Turns one frame's landmarks into one angle (the reading) for the joint
     and side under test. Holds the only per-side memory a measurement needs:
@@ -454,8 +485,7 @@ class JointMeter:
         self.reset()
 
     def reset(self):
-        self.start_len = {s: None for s in SIDES}
-        self._len_buf = {s: deque(maxlen=ROT_SMOOTH) for s in SIDES}
+        self.start_len = {s: StartLength() for s in SIDES}
 
     # The check every side-on joint shares: the right side faces the lens.
     def _side_view(self, lms, w, h, side, mirrored):
@@ -472,10 +502,13 @@ class JointMeter:
             return None, f"Turn around - the {side.upper()} side must face the camera"
         return facing, None
 
-    def measure(self, lms, hands, w, h, side, mirrored):
+    def measure(self, lms, hands, w, h, side, mirrored, now=None):
         """lms: one body's 33 pose landmarks (normalised) or None. hands: the
-        hand tracker's landmark lists (may be empty). Returns a Reading."""
+        hand tracker's landmark lists (may be empty). now: the frame's time
+        (the external-rotation start length needs a steady second). Returns
+        a Reading."""
         j = self.joint
+        now = time.time() if now is None else now
         if lms is None:
             return Reading(None, "No student detected", [])
 
@@ -543,12 +576,11 @@ class JointMeter:
             if not _vis_ok(lms, (sh_i, el_i, wr_i)) or upper < 1.0:
                 return Reading(None, "Arm not fully visible", [])
             length = float(np.hypot(*(wr - el))) / upper
-            buf = self._len_buf[side]
-            buf.append(length)
-            med = float(sorted(buf)[len(buf) // 2])
-            if self.start_len[side] is None or med > self.start_len[side]:
-                self.start_len[side] = med
-            a = rotation_from_length(length, self.start_len[side])
+            start = self.start_len[side].push(now, length)
+            if start is None:
+                return Reading(None, "Start position: forearm pointing forward - hold still",
+                               [(sh, el), (el, wr)])
+            a = rotation_from_length(length, start)
             if a is not None and a >= ROT_INWARD_MIN_DEG \
                     and lms[wr_i].z > lms[el_i].z + ROT_INWARD_Z:
                 return Reading(0.0, "That is turning IN - turn the hand OUT",
@@ -946,7 +978,7 @@ def main():
         draw_hand_points(frame, hands)
         segs = []
         if not tracker.resolved:
-            rd = meter.measure(lms, hands, fw, fh, tracker.side, mirrored)
+            rd = meter.measure(lms, hands, fw, fh, tracker.side, mirrored, now=now)
             segs = rd.segments
             if tracker.update(rd.extent, now=now, problem=rd.problem) is not None:
                 print(tracker.result())
