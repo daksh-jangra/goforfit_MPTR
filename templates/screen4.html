@@ -1388,6 +1388,7 @@
       }
 
       async function launchEngine() {
+          if (testId === 'target_stretch' && !(await tstOkToStart())) return;
           const btn = document.getElementById('engine-btn');
           btn.disabled = true; btn.innerText = '…';
           const body = {};
@@ -1496,10 +1497,26 @@
           if (pre && [...tstJoint.options].some(o => o.value === pre)) tstJoint.value = pre;
           tstJoint.dataset.current = tstJoint.value;
       }
+      // Only one unsaved result is kept per test, and START clears it. So a
+      // joint finished but not yet saved on the results screen would be lost
+      // by starting the next one - ask first.
+      async function tstOkToStart() {
+          let p = null;
+          try {
+              const d = await fetch('/api/pending/target_stretch').then(r => r.json());
+              p = d && d.pending;
+          } catch (e) { return true; }
+          if (!p) return true;
+          const sc = (s) => (p[`${s}_score`] ?? '-');
+          return confirm(`The last joint (${p.joint_title || p.joint}: left ${sc('left')}, ` +
+                         `right ${sc('right')}) hasn't been saved yet.\n\n` +
+                         `Press Cancel, go back and save it first. ` +
+                         `Press OK to start anyway and lose it.`);
+      }
       function onTstJointChange(sel) {
           if (runActive) {
               sel.value = sel.dataset.current || '';
-              alert('Press STOP / SAVE first, then pick the next joint and press START.');
+              alert('Press STOP / SAVE, go back and save this joint\'s result, then come back for the next joint.');
               return;
           }
           sel.dataset.current = sel.value;

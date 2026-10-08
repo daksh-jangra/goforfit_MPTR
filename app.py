@@ -687,7 +687,8 @@ TESTS = {
             "wrong arm). Every other joint: camera SIDE-ON with the tested "
             "side toward it \u2014 the student turns around for the second side. "
             "1.5-2 m away at the height of the joint, with the whole limb (and the "
-            "hip, for the shoulder) in frame. Knee: stand, or sit if the student "
+            "hip, for the shoulder) in frame, and the HEAD too \u2014 the app uses "
+            "the face to tell which way the student is facing. Knee: stand, or sit if the student "
             "can't stand. Shoulder extension: no chair back behind the arm. Only "
             "the student should be in frame."
         ),
