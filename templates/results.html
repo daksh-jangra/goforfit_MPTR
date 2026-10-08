@@ -34,6 +34,7 @@
     .badge-sit_reach   { background:#f3e8ff; color:#6b21a8; }
     .badge-vertical_jump { background:#dbeafe; color:#1e3a8a; }
     .badge-run_600m    { background:#fee2e2; color:#991b1b; }
+    .badge-target_stretch { background:#ccfbf1; color:#115e59; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -172,6 +173,7 @@
           <option value="sit_reach">🤸 Sit &amp; Reach</option>
           <option value="vertical_jump">🦘 Vertical Jump</option>
           <option value="run_600m">🏃‍♂️ 600 m Run</option>
+          <option value="target_stretch">🧘 Target Stretch</option>
         </select>
       </div>
       <div>
@@ -340,7 +342,20 @@ const TEST_META = {
   sit_reach:   { label: '🤸 Sit & Reach',    unit: 'cm',      extraFn: () => '' },
   vertical_jump: { label: '🦘 Vertical Jump', unit: 'cm', extraFn: () => '' },
   run_600m:    { label: '🏃‍♂️ 600 m Run',    unit: 'sec',     extraFn: () => '' },
+  // Result is text, "L 2 / R 1": the 0-2 score for each side of one joint
+  // (the joint's name is in the Rating column).
+  target_stretch: { label: '🧘 Target Stretch', unit: '', extraFn: () => '' },
 };
+
+// Target Stretch's result is text ("L 2 / R 1"), every other test's is a
+// number, and comparing the two scrambles the sort. Sort it by its two
+// scores added up, so it sits among the numbers.
+function sortKey(r) {
+  const v = r[sortCol];
+  if (sortCol === 'primary_result' && r.test === 'target_stretch' && typeof v === 'string')
+    return (v.match(/\d+/g) || []).reduce((sum, d) => sum + Number(d), 0);
+  return v ?? '';
+}
 
 // ── Fetch — always use the flat /api/results view ─────────────────────────
 // The individual /api/results/<test> tables don't have the unified columns
@@ -386,7 +401,7 @@ function applyFiltersAndRender() {
 
   // Sort
   rows.sort((a, b) => {
-    let av = a[sortCol] ?? '', bv = b[sortCol] ?? '';
+    let av = sortKey(a), bv = sortKey(b);
     if (typeof av === 'string') av = av.toLowerCase();
     if (typeof bv === 'string') bv = bv.toLowerCase();
     if (av < bv) return -sortDir;
