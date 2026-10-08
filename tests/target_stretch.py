@@ -202,6 +202,22 @@ SIDE_MAX_SPREAD = 1.40
 # the steady-second rule: 0 / 300 and 1 / 300, with 30 and 75 deg turns
 # still scoring 1 and 2 every time.
 ROT_START_S = 1.0
+# Turning OUT swings the hand TOWARD the lens, and nearer things look
+# bigger, so a plain cos() reads the turn too small: at 1.5 m a true 70 deg
+# turn scored 1, not 2 (and 25-30 deg scored 0, not 1). The correction needs
+# the forearm's length over the camera distance, which is its on-screen
+# start length over the lens's focal length. Phone main cameras and laptop
+# webcams all have a focal length of about 0.69-0.83 of the picture's long
+# side; 0.75 is the middle.
+LENS_FOCAL_LONG_SIDE = 0.75
+# ...but it is only applied to CLEAR turns (plain reading >= this). Near the
+# start the forearm shortens by only ~2 % by 22.5 deg - the size of camera
+# wobble - and the corrected reading turns that wobble into a score: at 3-4 %
+# wobble a student holding still scored 1 in 26-44 % of simulated runs.
+# Corrected from 35 deg up, 70 deg scores 2 every time and a still student
+# never scores; small 25-30 deg turns stay read low (score 0), which from
+# the side the camera can't tell apart from no turn at all.
+ROT_CORRECT_FROM_DEG = 35.0
 # Turning the hand IN (toward the belly) shortens the forearm on screen the
 # same way turning it OUT does. Turning out brings the wrist nearer the lens
 # than the elbow; MediaPipe's depth (z, smaller = nearer) tells them apart.
@@ -381,13 +397,40 @@ def wrist_extension_deg(elbow, wrist, hand_wrist, knuckle, facing):
     return None if a is None else -a * facing
 
 
-def rotation_from_length(length, start_length):
+def rotation_from_length(length, start_length, near=0.0):
     """External rotation from the forearm's on-screen length: pointing
-    forward (side-on) it shows its full length, turned by t it shows cos t."""
+    forward (side-on) it shows its full length, turned by t it shows cos t.
+
+    near = forearm length / camera distance. Turning out brings the wrist
+    that much nearer the lens, which magnifies it, so the on-screen ratio is
+    cos t / (1 - near * sin t). That rises a little above 1 for small turns
+    before it falls, so a ratio of 1 or more reads 0 and anything less is
+    solved on the falling side. near=0 is the plain cos t."""
     if start_length is None or start_length <= 1e-6:
         return None
-    r = max(0.0, min(1.0, length / start_length))
-    return math.degrees(math.acos(r))
+    r = max(0.0, length / start_length)
+    if r >= 1.0:
+        return 0.0
+    k = min(max(float(near), 0.0), 0.9)
+    if k == 0.0:
+        return math.degrees(math.acos(r))
+    lo, hi = math.asin(k), math.pi / 2
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        if math.cos(mid) / (1.0 - k * math.sin(mid)) > r:
+            lo = mid
+        else:
+            hi = mid
+    return math.degrees(0.5 * (lo + hi))
+
+
+def rotation_reading(length, start_length, near):
+    """The external-rotation angle the app uses: the plain cos reading, and
+    the perspective-corrected one once the turn is clearly under way."""
+    plain = rotation_from_length(length, start_length)
+    if plain is None or plain < ROT_CORRECT_FROM_DEG:
+        return plain
+    return rotation_from_length(length, start_length, near)
 
 
 def forearm_rotation_deg(pinky_knuckle, index_knuckle, lateral_sign):
@@ -581,7 +624,10 @@ class JointMeter:
             if start is None:
                 return Reading(None, "Start position: forearm pointing forward - hold still",
                                [(sh, el), (el, wr)])
-            a = rotation_from_length(length, start)
+            # Forearm length over camera distance = its on-screen start length
+            # over the lens's focal length (both in pixels).
+            near = start * upper / (LENS_FOCAL_LONG_SIDE * max(w, h))
+            a = rotation_reading(length, start, near)
             if a is not None and a >= ROT_INWARD_MIN_DEG \
                     and lms[wr_i].z > lms[el_i].z + ROT_INWARD_Z:
                 return Reading(0.0, "That is turning IN - turn the hand OUT",
