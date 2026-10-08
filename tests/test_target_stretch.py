@@ -325,7 +325,40 @@ def test_rotation_start_length_is_a_steady_second():
     assert ts.to_clock(a) == 75
 
 
-def _rotation_run(true_deg, noise, seed, fps=10):
+def _seen_ratio(theta, forearm_m, distance_m):
+    """What a pinhole camera at the student's side sees: the forearm's
+    forward reach shrinks with cos, while turning out brings the wrist
+    nearer the lens and magnifies it."""
+    t = math.radians(theta)
+    return math.cos(t) * distance_m / (distance_m - forearm_m * math.sin(t))
+
+
+def test_rotation_perspective_correction():
+    J_ = J["shoulder_external_rotation"]
+    # The full correction itself recovers the true angle away from the
+    # rounding lines, across distances, forearms and real lenses.
+    for d in (1.5, 2.0, 3.0):
+        for forearm in (0.18, 0.25):
+            for lens in (0.69, 0.75, 0.83):
+                near = (lens * forearm / d) / ts.LENS_FOCAL_LONG_SIDE
+                for true in range(30, 91, 5):
+                    a = ts.rotation_from_length(_seen_ratio(true, forearm, d), 1.0, near)
+                    assert abs(a - true) < 3.0, (d, forearm, lens, true, a)
+    # What the app uses: big turns corrected, so 70 deg scores 2 at 1.5 m
+    # where the plain reading gave 1 ...
+    near = 0.22 / 1.5
+    for true, want in ((40, 1), (60, 1), (70, 2), (75, 2), (90, 2)):
+        r = _seen_ratio(true, 0.22, 1.5)
+        a = ts.rotation_reading(r, 1.0, near)
+        assert ts.score_for(J_, ts.to_clock(a)) == want, (true, a)
+    assert ts.score_for(J_, ts.to_clock(ts.rotation_from_length(_seen_ratio(70, 0.22, 1.5), 1.0))) == 1
+    # ... and small turns are NOT corrected: a still forearm and wobble
+    # around it read the plain (small) angle.
+    for r in (1.0, 0.99, 0.97, 0.95):
+        assert ts.rotation_reading(r, 1.0, near) == ts.rotation_from_length(r, 1.0)
+
+
+def _rotation_run(true_deg, noise, seed, fps=10, near=0.0):
     """A whole side through StartLength + the tracker: 2 s at the start
     position, 3 s turned out by true_deg, 2 s back. Length wobble `noise`."""
     rnd = random.Random(seed)
@@ -333,9 +366,11 @@ def _rotation_run(true_deg, noise, seed, fps=10):
     sl = ts.StartLength()
     t = 0.0
     for d in [0] * (2 * fps) + [true_deg] * (3 * fps) + [0] * (2 * fps):
-        length = 0.85 * math.cos(math.radians(d)) * (1 + rnd.gauss(0, noise))
+        length = 0.85 * (_seen_ratio(d, near, 1.0) if near else math.cos(math.radians(d))) \
+            * (1 + rnd.gauss(0, noise))
         start = sl.push(t, length)
-        tr.update(None if start is None else ts.rotation_from_length(length, start), now=t)
+        tr.update(None if start is None else ts.rotation_reading(length, start, near),
+                  now=t)
         t += 1.0 / fps
     tr.next_side(now=t)
     r = tr.results["left"]
@@ -343,17 +378,20 @@ def _rotation_run(true_deg, noise, seed, fps=10):
 
 
 def test_rotation_still_student_scores_zero_under_wobble():
-    # 4 % wobble in the forearm's on-screen length, the realistic case.
-    scores = [_rotation_run(0, 0.04, s) for s in range(100)]
-    assert scores.count(0) >= 99, scores
-    scores = [_rotation_run(15, 0.04, s) for s in range(100)]
-    assert scores.count(0) >= 95, scores
+    # 4 % wobble in the forearm's on-screen length, the realistic case -
+    # without and with the perspective correction (forearm/distance 0.15).
+    for near in (0.0, 0.15):
+        scores = [_rotation_run(0, 0.04, s, near=near) for s in range(100)]
+        assert scores.count(0) >= 99, (near, scores)
+        scores = [_rotation_run(15, 0.04, s, near=near) for s in range(100)]
+        assert scores.count(0) >= 95, (near, scores)
 
 
 def test_rotation_real_turns_still_score():
-    for true, want in ((35, 1), (60, 1), (80, 2)):
-        scores = [_rotation_run(true, 0.04, s) for s in range(50)]
-        assert scores.count(want) == 50, (true, scores)
+    for near in (0.0, 0.15):
+        for true, want in ((40, 1), (60, 1), (70, 2), (80, 2)):
+            scores = [_rotation_run(true, 0.04, s, near=near) for s in range(50)]
+            assert scores.count(want) == 50, (near, true, scores)
 
 
 def main():
