@@ -183,6 +183,22 @@ def test_one_long_frame_does_not_stretch_the_upper_arm():
     assert test.count == 1, "a single bad length spoiled the next rep"
 
 
+def test_short_burst_of_bad_lengths_does_not_hide_the_next_reps():
+    # Tracking glitches come in bursts. Two or three frames in a row that
+    # make the upper arm look 2-4x longer got past the 3-frame median, went
+    # into the "longest upper arm" yardstick, and for 10 s every real press
+    # looked too low.
+    for fps, burst in ((30, 2), (30, 3), (30, 5), (15, 2), (15, 3), (8, 2), (8, 3)):
+        for bad in (200.0, 400.0):
+            test = started()
+            end, _ = feed(test, rep(), fps, 0.5)
+            end, _ = feed(test, [(0.6, IDLE, TOP)] + [(1 / fps, IDLE, (TOP * UA_PX, bad))] * burst
+                          + [(0.4, IDLE, TOP), (0.8, IDLE, START)], fps, end)
+            feed(test, rep() * 3, fps, end)
+            # rep 1, the press up to the held TOP, then 3 more
+            assert test.count == 5, f"{fps} fps, {burst} frames at {bad:.0f} px: {test.count} of 5"
+
+
 def test_upper_arm_follows_the_camera_moving_away():
     # Student wheels back: everything shrinks to 60%. After the window the
     # old, longer length is forgotten and full presses count again.

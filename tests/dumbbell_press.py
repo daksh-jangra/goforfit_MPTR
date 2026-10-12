@@ -38,8 +38,9 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
   1.5 counted it in only 3 of 9 runs and 1.3 counts all 9. Owner's choice
   (2026-10-12), over 1.4 (7 of 9) and keeping 1.5.
 
-  The upper-arm length used is the LONGEST it has looked in the last
-  UA_WINDOW_S seconds, not this frame's. Halfway up a forward press the
+  The upper-arm length used is the LONGEST it has looked (for at least
+  UA_SEEN_S in total, so a short tracking glitch doesn't count) in the
+  last UA_WINDOW_S seconds, not this frame's. Halfway up a forward press the
   elbow points at the camera and the upper arm looks very short; dividing
   by that made a bent-elbow half press (hand at forehead height) read
   3-6 upper arms high, so it counted. The bone can't change length - only
@@ -154,6 +155,11 @@ MAX_FRAME_DT   = 0.5    # most one frame may add to the rest clock (Wi-Fi gaps)
 UA_WINDOW_S    = 10.0   # upper-arm length = the longest seen this long back.
                         # Covers a slow 8 s press; short enough to follow the
                         # student moving the chair closer or further.
+UA_SEEN_S      = 0.4    # ...that it has shown for at least this long in total.
+                        # The single longest frame let a 2-3 frame tracking
+                        # glitch stretch the yardstick for 10 s and hide the
+                        # next reps. 0.4 s is more than 3 frames even at 8 fps;
+                        # the real length shows longer, at the bottom or top.
 
 SMOOTH_FRAMES  = 3      # median window, as in the other rep counters
 MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
@@ -263,10 +269,10 @@ class ArmCounter:
 
     def upper_ref(self, upper_px, now):
         """The upper arm's real on-screen length: the longest it has looked
-        in the last UA_WINDOW_S (see the docstring). The length is median-
-        smoothed first so one bad frame can't stretch it for 10 s — and only
-        a full median goes into the window: right after a dropout the
-        "median" is one frame, and one bad length there hid the next reps."""
+        for at least UA_SEEN_S in the last UA_WINDOW_S (see the docstring).
+        The length is median-smoothed first, and only a full median goes into
+        the window: right after a dropout the "median" is one frame, and one
+        bad length there hid the next reps."""
         v = self._su.push(upper_px)
         while self._lengths and now - self._lengths[0][0] > UA_WINDOW_S:
             self._lengths.popleft()
@@ -277,7 +283,23 @@ class ArmCounter:
             # than the window): use this frame, but don't keep it — one bad
             # length kept here hid the next reps for 10 s.
             return v
-        return max(x for _, x in self._lengths)
+        return self._longest_held()
+
+    def _longest_held(self):
+        """Longest length the arm has shown for UA_SEEN_S in total: walk the
+        lengths from longest down, adding up how long each was on screen
+        (time to the next sample, capped at MAX_FRAME_DT for gaps), and stop
+        once UA_SEEN_S is reached. A short glitch never adds up to that.
+        Falls back to the longest seen while the window is still shorter."""
+        items = list(self._lengths)
+        spans = [min(MAX_FRAME_DT, items[i + 1][0] - items[i][0]) for i in range(len(items) - 1)]
+        spans.append(spans[-1] if spans else 0.0)    # the newest: as long as the one before
+        total = 0.0
+        for length, span in sorted(zip((x for _, x in items), spans), reverse=True):
+            total += span
+            if total >= UA_SEEN_S:
+                return length
+        return max(x for _, x in items)
 
     def lost(self):
         """Tracking dropped. The phase is kept — the arm is still wherever it
