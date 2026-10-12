@@ -3317,11 +3317,19 @@ class DumbbellPressEngine(BaseWebEngine):
     START on "GO", each press that gets the hand well above the head counts
     (hand height, not the elbow angle — see dumbbell_press.py), and the test ends by itself at 50 reps or after a 4 s
     rest (dp_mod.DumbbellPressTest raises the end and the count is staged
-    right then). STOP ends it early. Both arms are watched until the first
-    rep locks the working one. Rep logic and HUD live in dumbbell_press.py."""
+    right then). STOP ends it early. In AUTO both arms are watched until the
+    first rep locks the working one; the coach can pin LEFT / RIGHT (the
+    student's own hand) instead, so a free hand raised first can't take
+    over. Rep logic and HUD live in dumbbell_press.py."""
 
-    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+    ARM_CHOICES = (dp_mod.ARM_AUTO, dp_mod.ARM_LEFT, dp_mod.ARM_RIGHT)
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True,
+                 arm=dp_mod.ARM_AUTO):
         super().__init__(session_id, on_stage, camera_source, mirror)
+        # The PERSON's side, as the coach picked it. Translated to MediaPipe's
+        # naming on every frame, so a lens change can't swap it.
+        self.requested_arm = arm if arm in self.ARM_CHOICES else dp_mod.ARM_AUTO
         # Browser-sourced camera: frames are POSTed to
         # /api/dumbbell_press/frame -> push_frame().
         self._frame_lock = threading.Lock()
@@ -3420,6 +3428,7 @@ class DumbbellPressEngine(BaseWebEngine):
             "elapsed_sec": round(t.elapsed(), 1),
             "arm": self._person(arm),
             "arm_locked": t.arm is not None,
+            "requested_arm": self.requested_arm,
             "phase": c.phase if c else None,
             "wrist_up": round(c.wrist_up, 2) if (c and c.wrist_up is not None) else None,
             "wrist_up_needed": dp_mod.WRIST_UP_UA,
@@ -3439,6 +3448,18 @@ class DumbbellPressEngine(BaseWebEngine):
                 return {"ok": False, "error": "Test already started"}
             return {"ok": True}
 
+    def action_arm(self, value=None):
+        """The coach pins the arm (or goes back to auto). Only before START:
+        changing it mid-trial would move a count between hands. RESET first."""
+        arm = str(value or "").strip().lower()
+        if arm not in self.ARM_CHOICES:
+            return {"ok": False, "error": "Pick auto, left or right"}
+        with self._lock:
+            if self.test.started:
+                return {"ok": False, "error": "Press RESET before changing the arm"}
+            self.requested_arm = arm
+            return {"ok": True}
+
     def action_reset(self, value=None):
         with self._lock:
             self.test.reset()
@@ -3451,6 +3472,7 @@ class DumbbellPressEngine(BaseWebEngine):
         handler = {
             "start": self.action_start,
             "reset": self.action_reset,
+            "arm": self.action_arm,
         }.get(name)
         if handler is None:
             return {"ok": False, "error": f"Unknown action: {name}"}
@@ -3515,6 +3537,8 @@ class DumbbellPressEngine(BaseWebEngine):
                     readings = {a: dp_mod.arm_reading(lms, a, fw, fh) for a in dp_mod.ARMS}
 
                 with self._lock:
+                    readings = dp_mod.pick_readings(
+                        readings, self._person(self.requested_arm))   # person -> MediaPipe: same swap
                     ended = self.test.update(readings)
                     if ended and not self._staged:
                         # The test's own end (50 reps / 4 s rest) is how it

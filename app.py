@@ -680,10 +680,13 @@ TESTS = {
             "score is the number of reps."
         ),
         "controls": [
+            ("ARM",   "Auto (the first arm to press), or pin the student's left / right hand"),
             ("START", "Start counting (the 'GO' signal)"),
             ("RESET", "Start the trial over (clears the count)"),
         ],
         "tip": (
+            "If the student might lift the free hand first, pick their pressing "
+            "hand before START. "
             "Camera FRONT-ON at chest height, 2-3 m away, with the head and both "
             "arms in frame, the weight overhead included. The spotter stands "
             "BEHIND the chair \u2014 not between the camera and the student, "
@@ -1698,6 +1701,12 @@ async def _launch_dumbbell_press(request: Request):
     body = await _json_body(request)
     session_id = body.get("session_id")
 
+    # The coach may pin the student's arm (left / right); auto = the first arm
+    # to press. It can also be changed later, before START, via the action.
+    arm = str(body.get("arm") or "auto").strip().lower()
+    if arm not in ("auto", "left", "right"):
+        arm = "auto"
+
     def _stage(reps, arm, duration_sec, end_reason):
         _pending["dumbbell_press"] = {
             "session_id": session_id, "reps": reps, "arm": arm,
@@ -1705,7 +1714,7 @@ async def _launch_dumbbell_press(request: Request):
         }
 
     try:
-        engine = DumbbellPressEngine(session_id=session_id, on_stage=_stage)
+        engine = DumbbellPressEngine(session_id=session_id, on_stage=_stage, arm=arm)
         engine.start()
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)

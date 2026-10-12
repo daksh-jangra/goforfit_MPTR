@@ -135,6 +135,21 @@
       </select>
       {% endif %}
 
+      {% if test.id == 'dumbbell_press' %}
+      <!-- Dumbbell Press: which hand presses. Auto = the first arm to press
+           (a free hand raised first would take over); pin it when in doubt.
+           Can be changed until START, and again after RESET. -->
+      <select
+        id="dbp-arm"
+        onchange="onDbpArmChange(this)"
+        class="w-full max-w-4xl mx-auto rounded-xl bg-white/10 text-white text-xs sm:text-sm font-bold px-3 py-2 border border-white/20"
+      >
+        <option value="auto" class="text-black">Pressing hand: Auto (first arm to press)</option>
+        <option value="left" class="text-black">Pressing hand: student's LEFT</option>
+        <option value="right" class="text-black">Pressing hand: student's RIGHT</option>
+      </select>
+      {% endif %}
+
       <div class="grid grid-cols-2 gap-2 max-w-4xl mx-auto w-full">
         <button
           id="engine-btn"
@@ -752,9 +767,12 @@
               },
               renderStatus(state) {
                   const lines = [`Count: ${state.count} / ${state.max_reps}`];
-                  const armTxt = state.arm
-                      ? `${state.arm}${state.arm_locked ? ' (locked)' : ''}`
-                      : 'whichever arm presses first';
+                  const pinned = state.requested_arm && state.requested_arm !== 'auto';
+                  const armTxt = pinned
+                      ? `${state.requested_arm} (picked by coach)`
+                      : state.arm
+                          ? `${state.arm}${state.arm_locked ? ' (locked)' : ''}`
+                          : 'whichever arm presses first';
                   lines.push(`Arm: ${armTxt}`);
                   if (state.arm_tracked && state.wrist_up !== null && state.wrist_up !== undefined) {
                       lines.push(`Hand above shoulder: ${state.wrist_up.toFixed(1)} upper arms (need ${state.wrist_up_needed})`);
@@ -1449,6 +1467,7 @@
           {% endfor %}
           if (sessionId) body['session_id'] = sessionId;
           if (testId === 'target_stretch') body['joint'] = document.getElementById('tst-joint').value;
+          if (testId === 'dumbbell_press') body['arm'] = document.getElementById('dbp-arm').value;
           
           try {
               const res = await fetch(`/api/launch/${testId}`, {
@@ -1565,6 +1584,29 @@
                          `right ${sc('right')}) hasn't been saved yet.\n\n` +
                          `Press Cancel, go back and save it first. ` +
                          `Press OK to start anyway and lose it.`);
+      }
+      // Dumbbell Press arm picker. Before the camera starts it just rides
+      // along with the launch; once running it's sent straight away, and the
+      // engine refuses it after START (it would move a count between hands).
+      const dbpArm = document.getElementById('dbp-arm');
+      if (dbpArm) dbpArm.dataset.current = dbpArm.value;
+      async function onDbpArmChange(sel) {
+          if (!runActive || !engineCfg) { sel.dataset.current = sel.value; return; }
+          let data = null;
+          try {
+              const res = await fetch(engineCfg.actionUrl, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action: 'arm', value: sel.value })
+              });
+              data = await res.json();
+          } catch (e) {}
+          if (data && data.ok) {
+              sel.dataset.current = sel.value;
+          } else {
+              sel.value = sel.dataset.current || 'auto';
+              alert((data && data.error) || 'Could not change the arm');
+          }
+          pollState();
       }
       function onTstJointChange(sel) {
           if (runActive) {

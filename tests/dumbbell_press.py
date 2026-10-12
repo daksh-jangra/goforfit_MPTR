@@ -84,9 +84,14 @@ What the coach judges (not scored here)
 
 Which arm
 --------------------------------------------------------------------
-  The dominant hand, which the participant picks. Both arms are watched
-  until the first counted rep; that arm is locked for the rest of the
-  trial, so the other hand can't add reps.
+  The dominant hand, which the participant picks. In AUTO (the default)
+  both arms are watched until the first counted rep; that arm is locked for
+  the rest of the trial, so the other hand can't add reps. The catch: if
+  the FREE hand goes overhead first (a wave), it is the one locked, and the
+  real presses are ignored. So the coach can pin the arm instead (LEFT /
+  RIGHT, the student's own hand); then the other arm is never looked at.
+  pick_readings() applies that. Owner's choice (2026-10-12): a picker with
+  AUTO as the default, over always-pick and switching arms automatically.
 
 Camera placement
 ----------------
@@ -99,6 +104,7 @@ Usage
 -----
   python dumbbell_press.py
   python dumbbell_press.py --source clip.mp4 --debug
+  python dumbbell_press.py --arm right    # watch only the right arm
 
   Keys : SPACE = start counting ("GO")
          R     = reset
@@ -149,6 +155,7 @@ MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
 
 ARM_LEFT, ARM_RIGHT = "left", "right"
 ARMS = (ARM_LEFT, ARM_RIGHT)
+ARM_AUTO = "auto"
 
 # Landmark indices (33-point BlazePose topology)
 ARM_IDX = {
@@ -183,6 +190,15 @@ C_TEXT  = (245, 245, 245)
 def lm_px(lms, idx, w, h):
     lm = lms[idx]
     return np.array([lm.x * w, lm.y * h], dtype=np.float32)
+
+
+def pick_readings(readings, arm):
+    """With an arm pinned (ARM_LEFT / ARM_RIGHT, MediaPipe naming) only that
+    arm's reading goes through; the other arm reads as not seen, so it can
+    never lock the test or add reps. ARM_AUTO (or None) passes both."""
+    if arm not in ARMS:
+        return readings
+    return {a: (readings.get(a) if a == arm else None) for a in ARMS}
 
 
 def arm_reading(lms, arm, w, h):
@@ -553,6 +569,8 @@ def main():
     parser.add_argument("--source", default="0")
     parser.add_argument("--model", default="pose_landmarker_full.task",
                         help="Path to MediaPipe PoseLandmarker .task model file")
+    parser.add_argument("--arm", choices=[ARM_AUTO, ARM_LEFT, ARM_RIGHT], default=ARM_AUTO,
+                        help="Watch only this arm (default: the first arm to press)")
     parser.add_argument("--debug", action="store_true",
                         help="Print per-frame numbers to the console")
     parser.add_argument("--session-id", type=int, default=None,
@@ -623,7 +641,8 @@ def main():
                                  (int(lms[i].x * fw), int(lms[i].y * fh)),
                                  (int(lms[j].x * fw), int(lms[j].y * fh)),
                                  (200, 200, 200), 2, cv2.LINE_AA)
-                readings = {a: arm_reading(lms, a, fw, fh) for a in ARMS}
+                readings = pick_readings(
+                    {a: arm_reading(lms, a, fw, fh) for a in ARMS}, args.arm)
 
             ended = test.update(readings, now=now)
             if ended and not staged and args.session_id:
