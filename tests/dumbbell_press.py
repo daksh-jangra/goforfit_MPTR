@@ -217,6 +217,10 @@ class MedianSmoother:
     def reset(self):
         self.buf.clear()
 
+    @property
+    def full(self):
+        return len(self.buf) == self.buf.maxlen
+
 
 class ArmCounter:
     """Rep phases for ONE arm. Pure state machine: feed it smoothed numbers
@@ -239,11 +243,15 @@ class ArmCounter:
     def upper_ref(self, upper_px, now):
         """The upper arm's real on-screen length: the longest it has looked
         in the last UA_WINDOW_S (see the docstring). The length is median-
-        smoothed first so one bad frame can't stretch it for 10 s."""
-        self._lengths.append((now, self._su.push(upper_px)))
+        smoothed first so one bad frame can't stretch it for 10 s — and only
+        a full median goes into the window: right after a dropout the
+        "median" is one frame, and one bad length there hid the next reps."""
+        v = self._su.push(upper_px)
         while self._lengths and now - self._lengths[0][0] > UA_WINDOW_S:
             self._lengths.popleft()
-        return max(v for _, v in self._lengths)
+        if self._su.full or not self._lengths:
+            self._lengths.append((now, v))
+        return max(x for _, x in self._lengths)
 
     def lost(self):
         """Tracking dropped. The phase is kept — the arm is still wherever it
@@ -255,7 +263,14 @@ class ArmCounter:
     def update(self, rise_px, upper_px, now, counting):
         """Returns "rep", "armed", "short", or None."""
         wrist_up = rise_px / self.upper_ref(upper_px, now)
-        wu = self.wrist_up = self._sw.push(wrist_up)
+        wu = self._sw.push(wrist_up)
+        if not self._sw.full:
+            # Just back from a dropout (or just seen): the median is still
+            # one or two frames, so one wild frame would decide on its own —
+            # it counted a rep that never happened. Wait for a full window;
+            # until then the arm reads as not tracked.
+            return None
+        self.wrist_up = wu
         is_up = wu >= WRIST_UP_UA
         is_down = wu <= WRIST_DOWN_UA
 
@@ -413,8 +428,8 @@ class DumbbellPressTest:
         if ev == "short":
             self.status_msg = "Not counted - weight not pressed all the way up"
 
-        if readings.get(self.arm) is None:
-            return None      # can't tell whether they are working
+        if c.wrist_up is None:
+            return None      # not seen (or just back): can't tell if working
         # Climbing counts from the start position itself, not only once out
         # of the "down" zone, so a slow press is working from its first
         # centimetres. The high persists across short presses, so pressing
