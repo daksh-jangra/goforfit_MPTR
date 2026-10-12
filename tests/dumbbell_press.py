@@ -20,15 +20,28 @@ Protocol (Brockport Physical Fitness Test Manual p.73)
 
 What counts as a rep - the HAND HEIGHT, not the elbow angle
 --------------------------------------------------------------------
-  UP    the wrist at least WRIST_UP_UA (1.5) upper-arm lengths above the
+  UP    the wrist at least WRIST_UP_UA (1.3) upper-arm lengths above the
         shoulder. Counted the moment it gets there.
   DOWN  the wrist back within WRIST_DOWN_UA (0.5) of shoulder height.
         Needed before the next rep can count.
 
   Height is in upper-arm lengths so it doesn't depend on camera distance.
   It stands in for "complete elbow extension": with the upper arm upright,
-  a straight arm puts the wrist ~1.85 above the shoulder, a 90 deg elbow
-  ~1.0, so 1.5 means a nearly straight arm overhead.
+  a straight arm puts the wrist ~1.85 above the shoulder, a 110 deg elbow
+  ~1.3, a 90 deg elbow ~1.0. So 1.3 rejects a half press but accepts the
+  manual's own raised photo, whose arm is not fully straight (the spotter
+  holds the wrist): in the live engine it peaks at 1.34-1.58 per run, so
+  1.5 counted it in only 3 of 9 runs and 1.3 counts all 9. Owner's choice
+  (2026-10-12), over 1.4 (7 of 9) and keeping 1.5.
+
+  The upper-arm length used is the LONGEST it has looked in the last
+  UA_WINDOW_S seconds, not this frame's. Halfway up a forward press the
+  elbow points at the camera and the upper arm looks very short; dividing
+  by that made a bent-elbow half press (hand at forehead height) read
+  3-6 upper arms high, so it counted. The bone can't change length - only
+  its picture shrinks - and it is seen full length at the start, where it
+  hangs down. On the manual's photos the upper arm reads about the same at
+  the start (80 px) and raised (72 px).
 
   Why not the elbow angle: the press is shoulder FLEXION - the weight goes
   forward and up - so from the front the forearm points at the camera and
@@ -36,6 +49,8 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
   engine, the manual's own photos read:
     fig 5.9a start   elbow   5-30 deg (really ~90), wrist -0.3..+0.1
     fig 5.9b raised  elbow 95-135 deg (never 140),  wrist +1.5..+2.3
+                     (against that frame's upper arm; 1.28-1.58 against the
+                     longest one, which is what is used now)
     idle arm on the armrest: elbow ~145 deg, wrist -1.1..-1.6
   So the elbow says nothing useful front-on - it even reads "straight" on
   the idle arm and "bent" on the raised one - while the wrist height is
@@ -110,9 +125,10 @@ MAX_REPS = 50
 REST_S   = 4.0     # "rests for more than 4 seconds between repetitions"
 
 # ── Detection tuning ─────────────────────────────────────────────────────────────
-WRIST_UP_UA    = 1.5    # wrist this many upper arms above the shoulder = arm
-                        # extended overhead. The raised photo reads 1.5-2.3;
-                        # a 90 deg elbow with the upper arm upright ~1.0.
+WRIST_UP_UA    = 1.3    # wrist this many upper arms above the shoulder = arm
+                        # extended overhead. The raised photo peaks at
+                        # 1.34-1.58; a 90 deg elbow with the upper arm
+                        # upright ~1.0. See the docstring.
 WRIST_DOWN_UA  = 0.5    # wrist back within this of shoulder height = back at
                         # the start. The start photo reads -0.3..+0.1.
 PROGRESS_UA    = 0.25   # wrist rising this much counts as still working,
@@ -121,6 +137,9 @@ PROGRESS_UA    = 0.25   # wrist rising this much counts as still working,
                         # engine, and a climb measured from the bottom of a
                         # wobble let one frame push the 4 s end out to ~5.5 s.
 MAX_FRAME_DT   = 0.5    # most one frame may add to the rest clock (Wi-Fi gaps)
+UA_WINDOW_S    = 10.0   # upper-arm length = the longest seen this long back.
+                        # Covers a slow 8 s press; short enough to follow the
+                        # student moving the chair closer or further.
 
 SMOOTH_FRAMES  = 3      # median window, as in the other rep counters
 MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
@@ -164,8 +183,10 @@ def lm_px(lms, idx, w, h):
 
 
 def arm_reading(lms, arm, w, h):
-    """The wrist's height above the shoulder in upper-arm lengths for one
-    arm, or None if the joints aren't clear or aren't in the picture."""
+    """(rise_px, upper_px) for one arm: how far the wrist is above the
+    shoulder, and how long the upper arm looks, both in pixels. None if the
+    joints aren't clear or aren't in the picture. The counter turns these
+    into upper-arm lengths against the longest upper arm it has seen."""
     idxs = ARM_IDX[arm]
     if not all(lms[i].visibility >= MIN_VIS for i in idxs):
         return None
@@ -177,7 +198,7 @@ def arm_reading(lms, arm, w, h):
     upper = float(np.linalg.norm(s - e))
     if upper < 1.0:
         return None
-    return float(s[1] - wr[1]) / upper
+    return float(s[1] - wr[1]), upper
 
 
 class MedianSmoother:
@@ -209,15 +230,28 @@ class ArmCounter:
         self.short_presses = 0
         self.wrist_up = None
         self._sw = MedianSmoother()
+        self._su = MedianSmoother()
+        self._lengths = deque()    # (t, smoothed upper-arm px), last UA_WINDOW_S
+
+    def upper_ref(self, upper_px, now):
+        """The upper arm's real on-screen length: the longest it has looked
+        in the last UA_WINDOW_S (see the docstring). The length is median-
+        smoothed first so one bad frame can't stretch it for 10 s."""
+        self._lengths.append((now, self._su.push(upper_px)))
+        while self._lengths and now - self._lengths[0][0] > UA_WINDOW_S:
+            self._lengths.popleft()
+        return max(v for _, v in self._lengths)
 
     def lost(self):
         """Tracking dropped. The phase is kept — the arm is still wherever it
         was — but stale frames must not blend into the next reading."""
         self._sw.reset()
+        self._su.reset()
         self.wrist_up = None
 
-    def update(self, wrist_up, counting):
+    def update(self, rise_px, upper_px, now, counting):
         """Returns "rep", "armed", "short", or None."""
+        wrist_up = rise_px / self.upper_ref(upper_px, now)
         wu = self.wrist_up = self._sw.push(wrist_up)
         is_up = wu >= WRIST_UP_UA
         is_down = wu <= WRIST_DOWN_UA
@@ -325,7 +359,7 @@ class DumbbellPressTest:
 
     # ── per frame ───────────────────────────────────────────────────────
     def update(self, readings, now=None):
-        """readings: {ARM_LEFT: wrist_up|None, ARM_RIGHT: ...}.
+        """readings: {ARM_LEFT: (rise_px, upper_px)|None, ARM_RIGHT: ...}.
         Returns the end reason on the frame the test ends, else None."""
         now = time.time() if now is None else now
         dt = 0.0 if self._last_t is None else min(MAX_FRAME_DT, max(0.0, now - self._last_t))
@@ -341,7 +375,7 @@ class DumbbellPressTest:
                 self.counters[a].lost()
                 events[a] = None
                 continue
-            events[a] = self.counters[a].update(r, counting)
+            events[a] = self.counters[a].update(r[0], r[1], now, counting)
 
         if self.arm is None:
             # Before the first rep: nothing to rest from. The first arm to
