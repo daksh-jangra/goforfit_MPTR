@@ -776,7 +776,12 @@
                   return lines;
               },
               syncFields(state) {
-                  return (state.count !== null && state.count !== undefined) ? { dumbbellPressScore: state.count } : null;
+                  // Only a trial that was started: STOP/SAVE without START (or
+                  // after RESET) must not send the student a 0 they never earned.
+                  // A started trial with no reps is a real 0 and is sent.
+                  return (state.test_started && state.count !== null && state.count !== undefined)
+                      ? { dumbbellPressScore: state.count }
+                      : null;
               },
           },
           target_stretch: {
