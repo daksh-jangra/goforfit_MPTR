@@ -3537,8 +3537,11 @@ class DumbbellPressEngine(BaseWebEngine):
                     readings = {a: dp_mod.arm_reading(lms, a, fw, fh) for a in dp_mod.ARMS}
 
                 with self._lock:
-                    readings = dp_mod.pick_readings(
-                        readings, self._person(self.requested_arm))   # person -> MediaPipe: same swap
+                    # The coach's arm is the PERSON's side; MediaPipe's name
+                    # for it depends on the mirror (person -> MediaPipe is the
+                    # same swap), so it is re-translated every frame.
+                    pinned = self._person(self.requested_arm)
+                    self.test.pinned = pinned if pinned in dp_mod.ARMS else None
                     ended = self.test.update(readings)
                     if ended and not self._staged:
                         # The test's own end (50 reps / 4 s rest) is how it

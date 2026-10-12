@@ -158,6 +158,65 @@ def test_bent_elbow_pointing_at_the_camera_does_not_count():
         assert test.count == 0, f"half press at {flexion} deg flexion counted"
 
 
+def press_path(a, b, secs, steps=12, other=IDLE):
+    """The right arm moving smoothly between two (elbow, flexion) poses of a
+    forward press, with the free arm resting (seen full length)."""
+    import math
+    out = []
+    for k in range(1, steps + 1):
+        f = (1 - math.cos(math.pi * k / steps)) / 2
+        e = a[0] + (b[0] - a[0]) * f
+        th = a[1] + (b[1] - a[1]) * f
+        out.append((secs / steps, other, forward_press(e, th)))
+    return out
+
+
+def half_presses(start, top, n=4, pinned=None, other=IDLE):
+    test = dp.DumbbellPressTest()
+    test.pinned = pinned
+    feed(test, [(2.0, other, forward_press(*start))], 20)
+    test.start(now=2.0)
+    seq = []
+    for _ in range(n):
+        seq += [(0.8, other, forward_press(*start))]
+        seq += press_path(start, top, 1.5, other=other) + press_path(top, start, 1.5, other=other)
+    feed(test, seq, 20, 2.0)
+    return test
+
+
+def test_half_press_from_an_elbow_forward_start_does_not_count():
+    # Elbow pushed forward at the start: the pressing upper arm is never seen
+    # full length, so measured against itself the yardstick was short and a
+    # half press (elbow still at 95) read high enough to count, 4 of 4. The
+    # free arm, resting, shows the real length.
+    for flexion in (30, 45, 60):
+        for pinned in (None, R):
+            test = half_presses((70, flexion), (95, 115), pinned=pinned)
+            assert test.count == 0, (f"start flexion {flexion}, pinned {pinned}: "
+                                     f"{test.count} half presses counted")
+
+
+def test_full_press_from_an_elbow_forward_start_still_counts():
+    for flexion in (30, 45, 60):
+        for pinned in (None, R):
+            test = half_presses((70, flexion), (175, 165), pinned=pinned)
+            assert test.count == 4, f"start flexion {flexion}, pinned {pinned}: {test.count} of 4"
+
+
+def test_free_arm_looking_a_bit_longer_still_counts_the_manual_photo():
+    # On the manual's photos the free arm reads up to 12% longer than the
+    # pressing one; the raised photo must still count.
+    start, raised = (-12.0, 80.0), (139.0, 72.0)
+    free = (-150.0, 90.0)
+    for pinned in (None, R):
+        test = dp.DumbbellPressTest()
+        test.pinned = pinned
+        feed(test, [(0.5, free, start)], 15)
+        test.start(now=0.5)
+        feed(test, [(1.0, free, start), (1.0, free, raised), (1.0, free, start)], 15, 0.5)
+        assert test.count == 1, f"pinned {pinned}: {test.count}"
+
+
 def test_forward_press_to_a_straight_arm_still_counts():
     test = started()
     feed(test, [(1.0, IDLE, START), (0.4, IDLE, forward_press(90, 90)),
@@ -207,9 +266,10 @@ def test_upper_arm_follows_the_camera_moving_away():
     test = dp.DumbbellPressTest(rest_s=60.0)     # don't end while they move
     feed(test, [(0.5, IDLE, START)], 30)
     test.start(now=0.5)
-    feed(test, rep() + [(11.0, IDLE, far(START))]
-         + [(1.0, IDLE, far(START)), (0.6, IDLE, far(MID)), (0.6, IDLE, far(TOP)),
-            (0.4, IDLE, far(MID)), (0.8, IDLE, far(START))], 30, 0.5)
+    # Both arms shrink - the free arm is a yardstick too.
+    feed(test, rep() + [(11.0, far(IDLE), far(START))]
+         + [(1.0, far(IDLE), far(START)), (0.6, far(IDLE), far(MID)), (0.6, far(IDLE), far(TOP)),
+            (0.4, far(IDLE), far(MID)), (0.8, far(IDLE), far(START))], 30, 0.5)
     assert test.count == 2, f"counted {test.count} of 2 after moving away"
 
 
@@ -337,27 +397,22 @@ def test_free_hand_raised_first_takes_over_in_auto():
 
 def test_pinned_arm_ignores_the_free_hand():
     test = dp.DumbbellPressTest()
-    seq = [(0.5, IDLE, START)]
-    seq_start = [(1.0, START, START), (0.5, MID, START), (0.5, TOP, START),
-                 (1.0, IDLE, START)] + rep() * 3
-    t = 0.0
-    for duration, left, right in seq:
-        for _ in range(int(round(duration * 30))):
-            test.update(dp.pick_readings({L: px(left), R: px(right)}, R), now=t)
-            t += 1 / 30
-    test.start(now=t)
-    for duration, left, right in seq_start:
-        for _ in range(max(1, int(round(duration * 30)))):
-            test.update(dp.pick_readings({L: px(left), R: px(right)}, R), now=t)
-            t += 1 / 30
+    test.pinned = R
+    feed(test, [(0.5, IDLE, START)], 30)
+    test.start(now=0.5)
+    feed(test, [(1.0, START, START), (0.5, MID, START), (0.5, TOP, START),
+                (1.0, IDLE, START)] + rep() * 3, 30, 0.5)
     assert test.arm == R and test.count == 3, f"arm {test.arm}, {test.count} reps"
     assert not test.stopped
 
 
-def test_pick_readings_auto_passes_both():
-    r = {L: px(TOP), R: px(START)}
-    assert dp.pick_readings(r, dp.ARM_AUTO) == r
-    assert dp.pick_readings(r, L) == {L: px(TOP), R: None}
+def test_pinned_free_hand_reps_never_count_or_lock():
+    test = dp.DumbbellPressTest()
+    test.pinned = R
+    feed(test, [(0.5, START, START)], 30)
+    test.start(now=0.5)
+    feed(test, [(1.0, START, START), (0.6, TOP, START), (1.0, START, START)] * 3, 30, 0.5)
+    assert test.arm is None and test.count == 0
 
 
 # ── ending ───────────────────────────────────────────────────────────────────

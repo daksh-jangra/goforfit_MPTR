@@ -48,6 +48,15 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
   hangs down. On the manual's photos the upper arm reads about the same at
   the start (80 px) and raised (72 px).
 
+  The pressing arm is measured against the LONGER of its own upper-arm
+  length and the FREE arm's. With the elbow pushed forward at the start and
+  only half presses, the pressing upper arm is never seen full length, so
+  its own yardstick stayed short and a half press with the elbow at 95 deg
+  counted (4 of 4). The free arm usually rests on the armrest or lap and is
+  seen full length. On the manual's photos it reads 0-12% longer than the
+  pressing arm, and the raised photo still counts. If the free arm is out of
+  view the pressing arm's own length is all there is.
+
   Why not the elbow angle: the press is shoulder FLEXION - the weight goes
   forward and up - so from the front the forearm points at the camera and
   the 2-D elbow angle is squashed. Played through the live (video-mode)
@@ -94,9 +103,10 @@ Which arm
   the rest of the trial, so the other hand can't add reps. The catch: if
   the FREE hand goes overhead first (a wave), it is the one locked, and the
   real presses are ignored. So the coach can pin the arm instead (LEFT /
-  RIGHT, the student's own hand); then the other arm is never looked at.
-  pick_readings() applies that. Owner's choice (2026-10-12): a picker with
-  AUTO as the default, over always-pick and switching arms automatically.
+  RIGHT, the student's own hand, DumbbellPressTest.pinned); then the other
+  arm's movements are never looked at - only its upper-arm length (below).
+  Owner's choice (2026-10-12): a picker with AUTO as the default, over
+  always-pick and switching arms automatically.
 
 Camera placement
 ----------------
@@ -203,15 +213,6 @@ def lm_px(lms, idx, w, h):
     return np.array([lm.x * w, lm.y * h], dtype=np.float32)
 
 
-def pick_readings(readings, arm):
-    """With an arm pinned (ARM_LEFT / ARM_RIGHT, MediaPipe naming) only that
-    arm's reading goes through; the other arm reads as not seen, so it can
-    never lock the test or add reps. ARM_AUTO (or None) passes both."""
-    if arm not in ARMS:
-        return readings
-    return {a: (readings.get(a) if a == arm else None) for a in ARMS}
-
-
 def arm_reading(lms, arm, w, h):
     """(rise_px, upper_px) for one arm: how far the wrist is above the
     shoulder, and how long the upper arm looks, both in pixels. None if the
@@ -301,6 +302,13 @@ class ArmCounter:
                 return length
         return max(x for _, x in items)
 
+    def held(self, now):
+        """This arm's settled upper-arm length right now, or None if there is
+        none in the window - for the OTHER arm to use as a yardstick."""
+        while self._lengths and now - self._lengths[0][0] > UA_WINDOW_S:
+            self._lengths.popleft()
+        return self._longest_held() if self._lengths else None
+
     def lost(self):
         """Tracking dropped. The phase is kept — the arm is still wherever it
         was — but stale frames must not blend into the next reading."""
@@ -308,9 +316,19 @@ class ArmCounter:
         self._su.reset()
         self.wrist_up = None
 
-    def update(self, rise_px, upper_px, now, counting):
-        """Returns "rep", "armed", "short", or None."""
-        wrist_up = rise_px / self.upper_ref(upper_px, now)
+    def forget_reps(self):
+        """Drop this arm's phase and reps (the other arm was locked), but keep
+        its upper-arm lengths: they are still the other arm's yardstick."""
+        self.phase = PH_UNKNOWN
+        self.count = 0
+        self.short_presses = 0
+        self._sw.reset()
+        self.wrist_up = None
+
+    def update(self, rise_px, ref_px, counting):
+        """ref_px is the yardstick (DumbbellPressTest picks it, see
+        upper_ref). Returns "rep", "armed", "short", or None."""
+        wrist_up = rise_px / ref_px
         wu = self._sw.push(wrist_up)
         if not self._sw.full:
             # Just back from a dropout (or just seen): the median is still
@@ -361,11 +379,14 @@ class DumbbellPressTest:
     def __init__(self, rest_s=REST_S, max_reps=MAX_REPS):
         self.rest_s = float(rest_s)
         self.max_reps = int(max_reps)
+        self.pinned = None         # ARM_LEFT / ARM_RIGHT pinned by the coach
         self.reset()
 
     def reset(self):
         self.counters = {a: ArmCounter() for a in ARMS}
         self.arm = None            # locked working arm (MediaPipe naming)
+        # self.pinned (the coach's arm, MediaPipe naming, or None for auto) is
+        # deliberately NOT reset: it is set from outside and survives RESET.
         self.started = False
         self.start_t = None
         self.end_t = None
@@ -436,14 +457,28 @@ class DumbbellPressTest:
             return None
         counting = self.started
 
-        events = {}
+        # Each arm's own upper-arm yardstick first, then each is measured
+        # against the longer of its own and the other arm's (see docstring).
+        own = {}
         for a in ARMS:
             r = readings.get(a)
             if r is None:
                 self.counters[a].lost()
-                events[a] = None
+                own[a] = None
+            else:
+                own[a] = self.counters[a].upper_ref(r[1], now)
+        events = {a: None for a in ARMS}
+        for a in ARMS:
+            if own[a] is None:
                 continue
-            events[a] = self.counters[a].update(r[0], r[1], now, counting)
+            if self.pinned in ARMS and a != self.pinned:
+                # The coach pinned the other arm: this one only lends its
+                # length. Its movements never lock the test or add reps.
+                self.counters[a].wrist_up = None
+                continue
+            other = self.counters[ARM_RIGHT if a == ARM_LEFT else ARM_LEFT].held(now)
+            ref = own[a] if other is None else max(own[a], other)
+            events[a] = self.counters[a].update(readings[a][0], ref, counting)
 
         if self.arm is None:
             # Before the first rep: nothing to rest from. The first arm to
@@ -455,7 +490,7 @@ class DumbbellPressTest:
             if self.arm is None:
                 return None
             other = ARM_RIGHT if self.arm == ARM_LEFT else ARM_LEFT
-            self.counters[other].reset()   # its stray reps never count
+            self.counters[other].forget_reps()   # its stray reps never count
 
         c = self.counters[self.arm]
         ev = events[self.arm]
@@ -636,6 +671,7 @@ def main():
           "R = reset, Q = quit\n")
 
     test = DumbbellPressTest()
+    test.pinned = args.arm if args.arm in ARMS else None
     staged = False
     stream_start = time.time()
     frame_no = 0
@@ -682,8 +718,7 @@ def main():
                                  (int(lms[i].x * fw), int(lms[i].y * fh)),
                                  (int(lms[j].x * fw), int(lms[j].y * fh)),
                                  (200, 200, 200), 2, cv2.LINE_AA)
-                readings = pick_readings(
-                    {a: arm_reading(lms, a, fw, fh) for a in ARMS}, args.arm)
+                readings = {a: arm_reading(lms, a, fw, fh) for a in ARMS}
 
             ended = test.update(readings, now=now)
             if ended and not staged and args.session_id:
