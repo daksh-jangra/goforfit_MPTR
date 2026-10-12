@@ -22,8 +22,12 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
 --------------------------------------------------------------------
   UP    the wrist at least WRIST_UP_UA (1.3) upper-arm lengths above the
         shoulder. Counted the moment it gets there.
-  DOWN  the wrist back within WRIST_DOWN_UA (0.5) of shoulder height.
-        Needed before the next rep can count.
+  DOWN  the wrist back within WRIST_DOWN_UA (0.8) of shoulder height.
+        Needed before the next rep can count. 0.8, not lower: with the
+        elbow pushed forward at the start the hand sits at about chin
+        height (0.6+), and at 0.5 such a student never re-armed, so nothing
+        counted. The manual's start photo already reads up to 0.44. A student
+        who only lowers to the chin between reps is the coach's call.
 
   Height is in upper-arm lengths so it doesn't depend on camera distance.
   It stands in for "complete elbow extension": with the upper arm upright,
@@ -138,8 +142,9 @@ WRIST_UP_UA    = 1.3    # wrist this many upper arms above the shoulder = arm
                         # extended overhead. The raised photo peaks at
                         # 1.34-1.58; a 90 deg elbow with the upper arm
                         # upright ~1.0. See the docstring.
-WRIST_DOWN_UA  = 0.5    # wrist back within this of shoulder height = back at
-                        # the start. The start photo reads -0.3..+0.1.
+WRIST_DOWN_UA  = 0.8    # wrist back within this of shoulder height = back at
+                        # the start. The start photo reads -0.3..+0.44; an
+                        # elbow-forward start ~0.6. Owner's choice (2026-10-12).
 PROGRESS_UA    = 0.25   # wrist rising this much counts as still working,
                         # measured from shoulder height at the lowest: a still
                         # arm at the start wobbles about +-0.25 in the live
@@ -265,8 +270,13 @@ class ArmCounter:
         v = self._su.push(upper_px)
         while self._lengths and now - self._lengths[0][0] > UA_WINDOW_S:
             self._lengths.popleft()
-        if self._su.full or not self._lengths:
+        if self._su.full:
             self._lengths.append((now, v))
+        elif not self._lengths:
+            # Nothing settled to go on (first sight, or out of view longer
+            # than the window): use this frame, but don't keep it — one bad
+            # length kept here hid the next reps for 10 s.
+            return v
         return max(x for _, x in self._lengths)
 
     def lost(self):
@@ -343,6 +353,7 @@ class DumbbellPressTest:
         self._last_t = None
         self._best = None          # highest wrist since back at the start
         self._low = None           # lowest wrist since the last rep
+        self._climbed = False      # credited a climb since back at the start
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -439,6 +450,7 @@ class DumbbellPressTest:
         if ev == "armed":
             self.rest_elapsed = 0.0
             self._best = max(c.wrist_up, 0.0)    # see PROGRESS_UA
+            self._climbed = False
             self._low = None
             return None
         if ev == "short":
@@ -451,8 +463,15 @@ class DumbbellPressTest:
         # centimetres. The high persists across short presses, so pressing
         # to the same height over and over isn't progress.
         if c.phase != PH_UP and self._best is not None:
-            if c.wrist_up >= self._best + PROGRESS_UA:
+            if not self._climbed and c.wrist_up < self._best:
+                # Still coming down into the start position: the climb is
+                # measured from the real bottom, not from where the hand
+                # crossed the "back down" line - from there a slow press got
+                # no credit for most of the way up and timed out.
+                self._best = max(c.wrist_up, 0.0)
+            elif c.wrist_up >= self._best + PROGRESS_UA:
                 self._best = c.wrist_up
+                self._climbed = True
                 self.rest_elapsed = 0.0
                 return None
         # Coming back down after a rep is working too: a slow, controlled
