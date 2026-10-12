@@ -732,6 +732,53 @@
                       : null;
               },
           },
+          dumbbell_press: {
+              feedUrl:    '/api/dumbbell_press/feed',
+              stateUrl:   '/api/dumbbell_press/state',
+              actionUrl:  '/api/dumbbell_press/action',
+              browserCamera: true,
+              frameUrl:   '/api/dumbbell_press/frame',
+              // The phone faces the seated participant, screen toward the
+              // coach — the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              buttons: [
+                  { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'start') return !state.running || state.test_started;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [`Count: ${state.count} / ${state.max_reps}`];
+                  const armTxt = state.arm
+                      ? `${state.arm}${state.arm_locked ? ' (locked)' : ''}`
+                      : 'whichever arm presses first';
+                  lines.push(`Arm: ${armTxt}`);
+                  if (state.arm_tracked && state.wrist_up !== null && state.wrist_up !== undefined) {
+                      lines.push(`Hand above shoulder: ${state.wrist_up.toFixed(1)} upper arms (need ${state.wrist_up_needed})`);
+                  } else {
+                      lines.push(state.pose_detected
+                          ? 'Arm not clearly visible \u2014 front-on, head and both arms in frame'
+                          : 'No participant detected \u2014 is the spotter in front of the student?');
+                  }
+                  if (state.test_done) {
+                      lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
+                  } else if (state.test_started) {
+                      lines.push(`${state.elapsed_sec}s elapsed` +
+                                 (state.count > 0 ? `   Rest: ${state.rest_s} / ${state.rest_limit_s} s` : ''));
+                  } else {
+                      lines.push('Tap START as you call "GO"');
+                  }
+                  if (state.short_presses) lines.push(`Not counted (not pressed all the way up): ${state.short_presses}`);
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              syncFields(state) {
+                  return (state.count !== null && state.count !== undefined) ? { dumbbellPressScore: state.count } : null;
+              },
+          },
           target_stretch: {
               feedUrl:    '/api/target_stretch/feed',
               stateUrl:   '/api/target_stretch/state',
@@ -1464,6 +1511,7 @@
               shoulder_stretch:'ShoulderStretch',
               isometric_push_up:'IsometricPushUp',
               seated_push_up:'SeatedPushUp',
+              dumbbell_press:'DumbbellPress',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
