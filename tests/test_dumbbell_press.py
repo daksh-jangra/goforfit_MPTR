@@ -216,6 +216,37 @@ def test_dropout_mid_press_still_counts_once():
 
 
 # ── which arm ────────────────────────────────────────────────────────────────
+def test_one_bad_frame_after_a_dropout_is_not_a_rep():
+    # Tracking comes back (the spotter stepped past) with one wild frame.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    feed(test, [(1.0, IDLE, START), (0.5, IDLE, None), (1 / 30, IDLE, 1.7),
+                (1.0, IDLE, START)], 30, end)
+    assert test.count == 1, f"a phantom rep was counted ({test.count})"
+
+
+def test_one_bad_length_after_a_dropout_does_not_spoil_the_next_reps():
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    feed(test, [(1.0, IDLE, START), (0.5, IDLE, None), (1 / 30, IDLE, (0.0, 400.0))]
+         + rep() * 2, 30, end)
+    assert test.count == 3, f"counted {test.count} of 3 after a bad length"
+
+
+def test_one_bad_frame_after_a_dropout_does_not_stall_a_slow_press():
+    # A wild high frame mid-press must not become the "highest so far" a
+    # slow press then has to beat to count as still working.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    seq = [(1.0, IDLE, START), (0.4, IDLE, 0.3), (0.4, IDLE, 0.6),
+           (0.3, IDLE, None), (1 / 30, IDLE, 1.25)]
+    seq += [(0.8, IDLE, 0.6 + 0.1 * k) for k in range(1, 9)]
+    seq += [(0.5, IDLE, TOP), (0.8, IDLE, START)]
+    feed(test, seq, 30, end)
+    assert not test.stopped, f"the slow press timed out ({test.end_reason})"
+    assert test.count == 2
+
+
 def test_first_arm_to_rep_is_locked_and_the_other_is_ignored():
     test = started()
     end, _ = feed(test, rep(arm=L), 30, 0.5)
