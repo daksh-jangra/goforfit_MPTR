@@ -215,6 +215,61 @@ def test_dropout_mid_press_still_counts_once():
     assert test.count == 1
 
 
+def ramp(a, b, secs, steps=10, other=IDLE):
+    """The right hand moving smoothly from a to b, as a real arm does —
+    the step sequences above jump between positions."""
+    return [(secs / steps, other, a + (b - a) * k / steps) for k in range(1, steps + 1)]
+
+
+def test_start_position_with_the_hand_at_chin_height_counts():
+    # The elbow pushed forward at the start raises the hand. At 0.6 the
+    # 0.5 "back down" line was never reached and nothing counted.
+    for low in (0.0, 0.4, 0.6, 0.75):
+        test = dp.DumbbellPressTest()
+        feed(test, [(1.0, IDLE, low)], 30)
+        test.start(now=1.0)
+        seq = []
+        for _ in range(4):
+            seq += ramp(low, 1.85, 1.2) + [(0.3, IDLE, 1.85)] + ramp(1.85, low, 1.2) + [(0.6, IDLE, low)]
+        feed(test, seq, 30, 1.0)
+        assert test.count == 4, f"bottom at {low}: counted {test.count} of 4"
+
+
+def test_slow_press_after_a_smooth_lowering_does_not_time_out():
+    # Lowered smoothly to the shoulder, a pause, then 6 s to press back up.
+    # The climb must get credit from the shoulder, not from where the hand
+    # crossed the "back down" line on the way down.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    seq = ramp(0.0, 1.85, 1.2) + [(0.3, IDLE, 1.85)] + ramp(1.85, 0.0, 1.2)
+    seq += [(1.5, IDLE, 0.0)] + ramp(0.0, 1.5, 6.0, steps=30) + ramp(1.5, 0.0, 1.0)
+    feed(test, seq, 30, end)
+    assert not test.stopped, f"slow press timed out ({test.end_reason})"
+    assert test.count == 3
+
+
+def test_smooth_short_presses_still_end_the_test():
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    seq = []
+    for _ in range(4):
+        seq += ramp(0.0, 1.1, 1.0) + ramp(1.1, 0.0, 1.0) + [(0.5, IDLE, 0.0)]
+    feed(test, seq, 30, end)
+    assert test.stopped and test.end_reason == dp.END_REST
+    assert test.count == 1
+
+
+def test_bad_length_after_a_long_dropout_does_not_spoil_the_next_reps():
+    # Out of sight longer than the 10 s window (the spotter in front), then
+    # one wild upper-arm length as tracking comes back.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    end, _ = feed(test, [(1.0, IDLE, START), (12.0, IDLE, None),
+                         (1 / 30, IDLE, (0.0, 400.0))], 30, end)
+    feed(test, rep() * 2, 30, end)
+    assert test.count == 3, f"counted {test.count} of 3 after a long dropout"
+
+
 # ── which arm ────────────────────────────────────────────────────────────────
 def test_one_bad_frame_after_a_dropout_is_not_a_rep():
     # Tracking comes back (the spotter stepped past) with one wild frame.
