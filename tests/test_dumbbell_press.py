@@ -264,6 +264,40 @@ def test_slow_press_that_keeps_climbing_does_not_time_out():
     assert test.count == 2
 
 
+def test_slow_lowering_does_not_time_out():
+    # Up, a short pause at the top, then 4.5 s to bring the weight down —
+    # still working, and the next rep must still count.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    slow = [(1.0, IDLE, START), (0.6, IDLE, MID), (0.6, IDLE, TOP), (0.5, IDLE, TOP)]
+    slow += [(0.45, IDLE, TOP - 0.15 * k) for k in range(1, 11)]
+    slow += [(0.5, IDLE, START)] + rep()
+    feed(test, slow, 30, end)
+    assert not test.stopped, f"slow lowering ended the test ({test.end_reason})"
+    assert test.count == 3
+
+
+def test_stopped_partway_down_is_rest():
+    test = started()
+    end, _ = feed(test, rep()[:3], 30, 0.5)
+    _, ended = feed(test, [(0.5, IDLE, 1.6), (6.0, IDLE, 1.0)], 30, end)
+    assert test.stopped and test.end_reason == dp.END_REST
+    assert ended[0][0] - end <= 4.6, f"ended {ended[0][0] - end:.1f} s after the rep"
+
+
+def test_wobble_at_the_top_still_ends():
+    # Holding the weight up while the reading wobbles, as the live engine
+    # does on the manual's raised photo (1.28-1.58).
+    for seed in range(20):
+        test = started()
+        end, _ = feed(test, rep()[:2] + [(1 / 30, IDLE, 1.31)], 30, 0.5)
+        rng = random.Random(seed)
+        seq = [(1 / 30, IDLE, rng.uniform(1.28, 1.58)) for _ in range(30 * 6)]
+        _, ended = feed(test, seq, 30, end)
+        assert ended, f"seed {seed}: never ended"
+        assert ended[0][0] - end <= 4.3, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the hold"
+
+
 def test_repeated_short_presses_end_the_test():
     # "No longer able to lift the weight with complete elbow extension".
     test = started()

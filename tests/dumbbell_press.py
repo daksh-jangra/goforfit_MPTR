@@ -64,11 +64,14 @@ When the test ends
   * 50 reps.
   * REST_S (4 s) without the arm working, counted from the first rep on.
     "Working" means a new rep, getting back down to the start after a rep,
-    or a press still climbing (the wrist rising another PROGRESS_UA beyond
-    the highest it has been since the arm was last back at the start). So
-    a slow press that keeps going never times out, while sitting still - at the bottom or
-    holding the weight up - does, and so does a string of short presses
-    that never get any higher (the protocol's "no longer able to lift").
+    a press still climbing (the wrist rising another PROGRESS_UA beyond
+    the highest it has been since the arm was last back at the start), or
+    the weight still coming down after a rep (the wrist dropping another
+    PROGRESS_UA below the lowest it has been since that rep). So a slow
+    press or a slow lowering that keeps going never times out, while
+    sitting still - at the bottom, holding the weight up, or stopped
+    partway down - does, and so does a string of short presses that never
+    get any higher (the protocol's "no longer able to lift").
   * The coach presses STOP.
 
   The rest clock only runs on frames where the arm is actually seen, and
@@ -308,6 +311,7 @@ class DumbbellPressTest:
         self.rest_elapsed = 0.0
         self._last_t = None
         self._best = None          # highest wrist since back at the start
+        self._low = None           # lowest wrist since the last rep
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -394,6 +398,7 @@ class DumbbellPressTest:
         if ev == "rep":
             self.rest_elapsed = 0.0
             self._best = None       # nothing to climb until it's back down
+            self._low = c.wrist_up  # the lowering is measured from here
             self.status_msg = f"Rep {c.count}"
             if c.count >= self.max_reps:
                 self.stop(END_MAX, now)
@@ -403,6 +408,7 @@ class DumbbellPressTest:
         if ev == "armed":
             self.rest_elapsed = 0.0
             self._best = max(c.wrist_up, 0.0)    # see PROGRESS_UA
+            self._low = None
             return None
         if ev == "short":
             self.status_msg = "Not counted - weight not pressed all the way up"
@@ -416,6 +422,14 @@ class DumbbellPressTest:
         if c.phase != PH_UP and self._best is not None:
             if c.wrist_up >= self._best + PROGRESS_UA:
                 self._best = c.wrist_up
+                self.rest_elapsed = 0.0
+                return None
+        # Coming back down after a rep is working too: a slow, controlled
+        # lowering took longer than 4 s and ended the test mid-rep. Same
+        # ratchet, downward, so stopping partway down is still rest.
+        if c.phase == PH_UP and self._low is not None:
+            if c.wrist_up <= self._low - PROGRESS_UA:
+                self._low = c.wrist_up
                 self.rest_elapsed = 0.0
                 return None
         self.rest_elapsed += dt
