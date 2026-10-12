@@ -255,6 +255,40 @@ def test_first_arm_to_rep_is_locked_and_the_other_is_ignored():
     assert test.count == 1, f"the other hand added reps ({test.count})"
 
 
+def test_free_hand_raised_first_takes_over_in_auto():
+    # The known AUTO behaviour the arm picker exists for.
+    test = started()
+    end, _ = feed(test, [(1.0, START, START), (0.5, MID, START), (0.5, TOP, START),
+                         (1.0, IDLE, START)], 30, 0.5)
+    feed(test, rep() * 3, 30, end)
+    assert test.arm == L
+
+
+def test_pinned_arm_ignores_the_free_hand():
+    test = dp.DumbbellPressTest()
+    seq = [(0.5, IDLE, START)]
+    seq_start = [(1.0, START, START), (0.5, MID, START), (0.5, TOP, START),
+                 (1.0, IDLE, START)] + rep() * 3
+    t = 0.0
+    for duration, left, right in seq:
+        for _ in range(int(round(duration * 30))):
+            test.update(dp.pick_readings({L: px(left), R: px(right)}, R), now=t)
+            t += 1 / 30
+    test.start(now=t)
+    for duration, left, right in seq_start:
+        for _ in range(max(1, int(round(duration * 30)))):
+            test.update(dp.pick_readings({L: px(left), R: px(right)}, R), now=t)
+            t += 1 / 30
+    assert test.arm == R and test.count == 3, f"arm {test.arm}, {test.count} reps"
+    assert not test.stopped
+
+
+def test_pick_readings_auto_passes_both():
+    r = {L: px(TOP), R: px(START)}
+    assert dp.pick_readings(r, dp.ARM_AUTO) == r
+    assert dp.pick_readings(r, L) == {L: px(TOP), R: None}
+
+
 # ── ending ───────────────────────────────────────────────────────────────────
 def test_rest_after_the_last_rep_ends_at_four_seconds():
     for fps in (10, 30):
