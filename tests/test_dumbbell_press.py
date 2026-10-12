@@ -40,7 +40,18 @@ START  = 0.0     # weight at the shoulder (fig 5.9a)
 MID    = 1.0     # on the way up
 TOP    = 2.0     # extended overhead (fig 5.9b)
 IDLE   = -1.4    # the other arm resting on the armrest
-HALF   = 1.3     # a press that stops short
+HALF   = 1.1     # a press that stops short
+
+
+UA_PX = 100.0   # the upper arm seen full length
+
+
+def px(r):
+    """A reading as the engine hands it over, (rise_px, upper_px). A plain
+    number is a wrist height with the upper arm seen full length."""
+    if r is None or isinstance(r, tuple):
+        return r
+    return (r * UA_PX, UA_PX)
 
 
 def feed(test, sequence, fps, t0=0.0):
@@ -51,7 +62,7 @@ def feed(test, sequence, fps, t0=0.0):
     ended = []
     for duration, left, right in sequence:
         for _ in range(max(1, int(round(duration / dt)))):
-            out = test.update({L: left, R: right}, now=t)
+            out = test.update({L: px(left), R: px(right)}, now=t)
             if out:
                 ended.append((t, out))
             t += dt
@@ -121,6 +132,69 @@ def test_just_short_of_the_line_does_not_count():
     assert test.count == 0
     feed(test, rep(top=dp.WRIST_UP_UA + 0.05), 30, 4.0)
     assert test.count == 1
+
+
+def forward_press(elbow_deg, flexion_deg, ua=UA_PX):
+    """A press straight forward-and-up seen from the front: the upper arm at
+    flexion_deg (0 hanging, 90 pointing at the camera, 180 straight up),
+    the elbow bent to elbow_deg. Returns the (rise_px, upper_px) reading."""
+    import math
+    th = math.radians(flexion_deg)
+    fore = math.radians(flexion_deg + 180 - elbow_deg)
+    rise = ua * (-math.cos(th) - 0.85 * math.cos(fore))
+    return (rise, max(1.0, ua * abs(math.cos(th))))
+
+
+def test_bent_elbow_pointing_at_the_camera_does_not_count():
+    # Halfway up a forward press the upper arm looks very short. Elbow still
+    # at 90, hand at forehead height: measured against the on-screen upper
+    # arm this read 3-6 upper arms high and counted.
+    for flexion in (80, 90, 100, 110, 120):
+        test = started()
+        mid = forward_press(90, flexion)
+        feed(test, [(1.0, IDLE, START), (0.4, IDLE, forward_press(90, 60)),
+                    (1.0, IDLE, mid), (0.4, IDLE, forward_press(90, 60)),
+                    (1.0, IDLE, START)], 30, 0.5)
+        assert test.count == 0, f"half press at {flexion} deg flexion counted"
+
+
+def test_forward_press_to_a_straight_arm_still_counts():
+    test = started()
+    feed(test, [(1.0, IDLE, START), (0.4, IDLE, forward_press(90, 90)),
+                (0.6, IDLE, forward_press(175, 165)), (0.4, IDLE, forward_press(90, 90)),
+                (1.0, IDLE, START)], 30, 0.5)
+    assert test.count == 1
+
+
+def test_manual_photo_lengths_still_count():
+    # fig 5.9 at 2x: upper arm 80 px at the start, 72 px raised, wrist 139 px
+    # above the shoulder raised.
+    start, raised = (-12.0, 80.0), (139.0, 72.0)
+    test = dp.DumbbellPressTest()
+    feed(test, [(0.5, IDLE, start)], 15)
+    test.start(now=0.5)
+    feed(test, [(1.0, IDLE, start), (1.0, IDLE, raised), (1.0, IDLE, start)], 15, 0.5)
+    assert test.count == 1
+
+
+def test_one_long_frame_does_not_stretch_the_upper_arm():
+    test = started()
+    feed(test, [(1.0, IDLE, START), (1 / 30, IDLE, (0.0, 400.0))] + rep(), 30, 0.5)
+    assert test.count == 1, "a single bad length spoiled the next rep"
+
+
+def test_upper_arm_follows_the_camera_moving_away():
+    # Student wheels back: everything shrinks to 60%. After the window the
+    # old, longer length is forgotten and full presses count again.
+    def far(v):
+        return (v * 60.0, 60.0)
+    test = dp.DumbbellPressTest(rest_s=60.0)     # don't end while they move
+    feed(test, [(0.5, IDLE, START)], 30)
+    test.start(now=0.5)
+    feed(test, rep() + [(11.0, IDLE, far(START))]
+         + [(1.0, IDLE, far(START)), (0.6, IDLE, far(MID)), (0.6, IDLE, far(TOP)),
+            (0.4, IDLE, far(MID)), (0.8, IDLE, far(START))], 30, 0.5)
+    assert test.count == 2, f"counted {test.count} of 2 after moving away"
 
 
 def test_jitter_at_the_top_counts_once():
@@ -216,7 +290,7 @@ def test_untracked_arm_does_not_run_the_rest_clock():
 def test_a_long_frame_gap_adds_at_most_half_a_second():
     test = started()
     end, _ = feed(test, rep(), 30, 0.5)
-    test.update({L: IDLE, R: START}, now=end + 6.0)
+    test.update({L: px(IDLE), R: px(START)}, now=end + 6.0)
     assert not test.stopped, "a 6 s Wi-Fi gap ended the test"
     assert test.rest_elapsed <= 1.4
 
@@ -267,8 +341,8 @@ def test_arm_reading_geometry():
     # Right arm straight up: shoulder, elbow 0.1 above, wrist 0.2 above.
     for i, (x, y) in {12: (0.40, 0.50), 14: (0.40, 0.40), 16: (0.40, 0.30)}.items():
         lms[i] = types.SimpleNamespace(x=x, y=y, visibility=0.9)
-    up = dp.arm_reading(lms, R, 640, 480)
-    assert abs(up - 2.0) < 0.01
+    rise, upper = dp.arm_reading(lms, R, 640, 480)
+    assert abs(rise / upper - 2.0) < 0.01
     assert dp.arm_reading(lms, L, 640, 480) is None      # not visible
     lms[16] = types.SimpleNamespace(x=0.40, y=-0.05, visibility=0.9)
     assert dp.arm_reading(lms, R, 640, 480) is None      # wrist off the picture
