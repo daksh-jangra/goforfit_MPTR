@@ -75,7 +75,7 @@ try:
         BmiEngine, CurlUpEngine, PullUpEngine, FullPullUpEngine, WallTossEngine,
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
         ShoulderStretchEngine, IsometricPushUpEngine,
-        SeatedPushUpEngine, TargetStretchEngine,
+        SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -86,6 +86,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     IsometricPushUpEngine = None
     SeatedPushUpEngine = None
     TargetStretchEngine = None
+    DumbbellPressEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -126,6 +127,7 @@ _shoulder_stretch_engine = None
 _isometric_push_up_engine = None
 _seated_push_up_engine = None
 _target_stretch_engine = None
+_dumbbell_press_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -657,6 +659,40 @@ TESTS = {
         "unit":   "s",
         "live_feed":   True,
     },
+    "dumbbell_press": {
+        "id":          "dumbbell_press",
+        "title":       "Dumbbell Press",
+        "subtitle":    "Press a 15 lb dumbbell overhead \u2014 max reps, up to 50",
+        "icon":        "\U0001f3cb\ufe0f",
+        "category":    "Muscular Endurance",
+        "script":      "dumbbell_press.py",
+        "description": (
+            "Arm and shoulder strength and endurance. Seated in a wheelchair or "
+            "sturdy chair, the participant holds a 15 lb (6.8 kg) dumbbell in the "
+            "dominant hand at the shoulder and presses it straight up until the "
+            "elbow is extended, then brings it back to the shoulder, at a steady "
+            "3-4 seconds per rep. A rep counts when the hand is pressed well "
+            "above the head (one and a half upper-arm lengths above the shoulder, "
+            "about a straight arm); the weight must come back down to the "
+            "shoulder before the next one counts. Tap START on 'GO'. The test "
+            "ends by itself at 50 reps or after a rest of 4 seconds \u2014 a "
+            "slow press that is still going up is not a rest. One trial; the "
+            "score is the number of reps."
+        ),
+        "controls": [
+            ("START", "Start counting (the 'GO' signal)"),
+            ("RESET", "Start the trial over (clears the count)"),
+        ],
+        "tip": (
+            "Camera FRONT-ON at chest height, 2-3 m away, with the head and both "
+            "arms in frame, the weight overhead included. The spotter stands "
+            "BEHIND the chair \u2014 not between the camera and the student, "
+            "or the camera loses the student."
+        ),
+        "params": [],
+        "unit":   "reps",
+        "live_feed":   True,
+    },
     "target_stretch": {
         "id":          "target_stretch",
         "title":       "Target Stretch",
@@ -812,6 +848,8 @@ def _is_running(test_id: str) -> bool:
         return _seated_push_up_engine.is_running()
     if test_id == "target_stretch" and _target_stretch_engine is not None:
         return _target_stretch_engine.is_running()
+    if test_id == "dumbbell_press" and _dumbbell_press_engine is not None:
+        return _dumbbell_press_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -961,6 +999,14 @@ class TargetStretchSave(BaseModel):
     right_deg: Optional[float] = None
     right_score: Optional[int] = None
     right_exact: Optional[float] = None
+    rating: Optional[str] = None
+
+class DumbbellPressSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None             # the score: 0-50
+    arm: Optional[str] = None
+    duration_sec: Optional[float] = None
+    end_reason: Optional[str] = None
     rating: Optional[str] = None
 
 class VerticalJumpSave(BaseModel):
@@ -1209,6 +1255,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "target_stretch" and TargetStretchEngine is not None:
         return await _launch_target_stretch(request)
+
+    if test_id == "dumbbell_press" and DumbbellPressEngine is not None:
+        return await _launch_dumbbell_press(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1644,6 +1693,28 @@ async def _launch_target_stretch(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_dumbbell_press(request: Request):
+    global _dumbbell_press_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    def _stage(reps, arm, duration_sec, end_reason):
+        _pending["dumbbell_press"] = {
+            "session_id": session_id, "reps": reps, "arm": arm,
+            "duration_sec": duration_sec, "end_reason": end_reason,
+        }
+
+    try:
+        engine = DumbbellPressEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _dumbbell_press_engine = engine
+    _pending.pop("dumbbell_press", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1772,7 +1843,7 @@ def engine_status():
                                "sit_reach", "trunk_lift", "reverse_curl",
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
-                               "vertical_jump"],
+                               "dumbbell_press", "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -1878,6 +1949,11 @@ def stop(test_id: str):
         # closes on its best hold, an unreached side stays unmeasured, and
         # nothing measured stages nothing.
         _target_stretch_engine.stop()
+        return {"ok": True}
+    if test_id == "dumbbell_press" and _dumbbell_press_engine is not None:
+        # Like the pull-ups: the engine stages the count from its own stop()
+        # hook if the coach stops before 50 reps or a 4 s rest ended it.
+        _dumbbell_press_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -2063,6 +2139,11 @@ async def seated_push_up_frame(request: Request):
 @app.post("/api/target_stretch/frame")
 async def target_stretch_frame(request: Request):
     return await _receive_frame(_target_stretch_engine, request)
+
+
+@app.post("/api/dumbbell_press/frame")
+async def dumbbell_press_frame(request: Request):
+    return await _receive_frame(_dumbbell_press_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -2654,6 +2735,44 @@ def target_stretch_action(b: TargetStretchAction):
         _pending.pop("target_stretch", None)
     return res
 
+# ── Dumbbell press live-feed control ───────────────────────────────────
+class DumbbellPressAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/dumbbell_press/feed")
+def dumbbell_press_feed():
+    if _dumbbell_press_engine is None or not _dumbbell_press_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Dumbbell press test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _dumbbell_press_engine is not None and _dumbbell_press_engine.is_running():
+            jpg = _dumbbell_press_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/dumbbell_press/state")
+def dumbbell_press_state():
+    if _dumbbell_press_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_dumbbell_press_engine.get_state()}
+
+@app.post("/api/dumbbell_press/action")
+def dumbbell_press_action(b: DumbbellPressAction):
+    if _dumbbell_press_engine is None or not _dumbbell_press_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Dumbbell press test isn't running"}, status_code=409)
+    res = _dumbbell_press_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # Drop a count staged by the attempt being thrown away.
+        _pending.pop("dumbbell_press", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -3046,6 +3165,25 @@ def save_target_stretch(b: TargetStretchSave):
         right_score = b.right_score,
         right_exact = b.right_exact,
         rating      = b.rating or TARGET_STRETCH_JOINTS[b.joint],
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/dumbbell_press")
+def save_dumbbell_press(b: DumbbellPressSave):
+    """Fields: session_id, reps (0-50), arm (opt), duration_sec (opt),
+    end_reason (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.reps is None or not (0 <= b.reps <= 50):
+        return JSONResponse({"ok": False, "error": "Reps must be 0 to 50"}, status_code=400)
+    row_id = db.save_dumbbell_press(
+        session_id   = b.session_id,
+        reps         = b.reps,
+        arm          = b.arm,
+        duration_sec = b.duration_sec,
+        end_reason   = b.end_reason,
+        rating       = b.rating,
     )
     return {"ok": True, "id": row_id}
 

@@ -1,0 +1,299 @@
+"""
+Logic checks for the Dumbbell Press counter — no camera, no participant.
+=========================================================================
+
+WHY THIS FILE EXISTS
+--------------------
+  The score depends on things the coach can't see go wrong: whether a press
+  reached the extended position, whether the arm came back down before the
+  next one, which arm is working, and the 4-second rest that ends the test.
+  Break one and nothing looks wrong — the count just comes out low, or the
+  test ends early on a student who was still working.
+
+  Everything here drives DumbbellPressTest directly with made-up arm
+  readings and an injected clock.
+
+HOW TO RUN IT
+-------------
+      python3 tests/test_dumbbell_press.py
+      pytest tests/test_dumbbell_press.py
+
+WHAT IT DOES NOT COVER
+----------------------
+  Landmark extraction and the HUD.
+"""
+
+import os
+import sys
+import random
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+
+import dumbbell_press as dp  # noqa: E402
+
+L, R = dp.ARM_LEFT, dp.ARM_RIGHT
+
+# Wrist height above the shoulder, in upper arms — from the manual's photos
+START  = 0.0     # weight at the shoulder (fig 5.9a)
+MID    = 1.0     # on the way up
+TOP    = 2.0     # extended overhead (fig 5.9b)
+IDLE   = -1.4    # the other arm resting on the armrest
+HALF   = 1.3     # a press that stops short
+
+
+def feed(test, sequence, fps, t0=0.0):
+    """Drive the test through (duration_s, left_reading, right_reading) steps
+    at a fixed frame rate. Returns (end_time, [(t, end_reason), ...])."""
+    t = t0
+    dt = 1.0 / fps
+    ended = []
+    for duration, left, right in sequence:
+        for _ in range(max(1, int(round(duration / dt)))):
+            out = test.update({L: left, R: right}, now=t)
+            if out:
+                ended.append((t, out))
+            t += dt
+    return t, ended
+
+
+def rep(arm=R, top=TOP, other=IDLE):
+    """Start -> up -> back to start: one press, ~3.4 s (the manual's pace)."""
+    def step(d, r):
+        return (d, other, r) if arm == R else (d, r, other)
+    return [step(1.0, START), step(0.6, MID), step(0.6, top),
+            step(0.4, MID), step(0.8, START)]
+
+
+def started(t0=0.0):
+    test = dp.DumbbellPressTest()
+    feed(test, [(0.5, IDLE, START)], 30, t0)
+    test.start(now=t0 + 0.5)
+    return test
+
+
+# ── counting ─────────────────────────────────────────────────────────────────
+def test_full_reps_count_at_every_frame_rate():
+    for fps in (8, 10, 15, 30):
+        test = started()
+        feed(test, rep() * 5, fps, 0.5)
+        assert test.count == 5, f"{fps} fps: counted {test.count} of 5"
+        assert not test.stopped, f"{fps} fps: ended mid-set ({test.end_reason})"
+
+
+def test_reps_before_start_do_not_count():
+    test = dp.DumbbellPressTest()
+    feed(test, rep() * 3, 30)
+    assert test.count == 0 and test.arm is None
+    test.start(now=11.0)
+    feed(test, rep() * 2, 30, 11.0)
+    assert test.count == 2, f"counted {test.count} of 2 after START"
+
+
+def test_already_up_at_start_must_come_down_first():
+    test = dp.DumbbellPressTest()
+    feed(test, [(0.5, IDLE, TOP)], 30)
+    test.start(now=0.5)
+    feed(test, [(1.0, IDLE, TOP)], 30, 0.5)
+    assert test.count == 0, "a weight already overhead at START counted"
+    feed(test, rep(), 30, 1.5)
+    assert test.count == 1
+
+
+def test_half_press_does_not_count():
+    test = started()
+    feed(test, rep(), 30, 0.5)
+    feed(test, rep(top=HALF), 30, 4.0)
+    assert test.count == 1, f"a short press counted ({test.count})"
+    assert test.short_presses == 1
+
+
+def test_idle_arm_never_counts():
+    test = started()
+    feed(test, [(1.0, START, IDLE), (1.0, IDLE, IDLE)] * 4, 30, 0.5)
+    assert test.count == 0 and test.arm is None
+
+
+def test_just_short_of_the_line_does_not_count():
+    test = started()
+    feed(test, rep(top=dp.WRIST_UP_UA - 0.05), 30, 0.5)
+    assert test.count == 0
+    feed(test, rep(top=dp.WRIST_UP_UA + 0.05), 30, 4.0)
+    assert test.count == 1
+
+
+def test_jitter_at_the_top_counts_once():
+    test = started()
+    rng = random.Random(3)
+    seq = [(1.0, IDLE, START), (0.5, IDLE, MID)]
+    seq += [(1 / 30, IDLE, rng.uniform(1.4, 2.2)) for _ in range(45)]
+    seq += [(0.5, IDLE, MID), (1.0, IDLE, START)]
+    feed(test, seq, 30, 0.5)
+    assert test.count == 1, f"one wobbly top counted {test.count} times"
+
+
+def test_dropout_mid_press_still_counts_once():
+    test = started()
+    feed(test, [(1.0, IDLE, START), (0.3, IDLE, MID), (0.4, IDLE, None),
+                (0.5, IDLE, TOP), (0.3, None, None), (0.5, IDLE, TOP),
+                (0.8, IDLE, START)], 30, 0.5)
+    assert test.count == 1
+
+
+# ── which arm ────────────────────────────────────────────────────────────────
+def test_first_arm_to_rep_is_locked_and_the_other_is_ignored():
+    test = started()
+    end, _ = feed(test, rep(arm=L), 30, 0.5)
+    assert test.arm == L
+    feed(test, rep(arm=R, other=START) * 3, 30, end)
+    assert test.count == 1, f"the other hand added reps ({test.count})"
+
+
+# ── ending ───────────────────────────────────────────────────────────────────
+def test_rest_after_the_last_rep_ends_at_four_seconds():
+    for fps in (10, 30):
+        test = started()
+        end, _ = feed(test, rep() * 3, fps, 0.5)
+        _, ended = feed(test, [(6.0, IDLE, START)], fps, end)
+        assert test.stopped and test.end_reason == dp.END_REST, f"{fps} fps: never ended"
+        # The last rep's 0.8 s at the start already counts as rest.
+        t_end = ended[0][0]
+        assert 2.8 <= t_end - end <= 3.6, f"{fps} fps: ended {t_end - end:.2f} s into the rest"
+        assert test.count == 3
+
+
+def test_no_end_before_the_first_rep():
+    test = started()
+    feed(test, [(20.0, IDLE, START)], 15, 0.5)
+    assert not test.stopped, "ended before any rep"
+
+
+def test_holding_the_weight_up_is_rest():
+    test = started()
+    feed(test, rep()[:3], 30, 0.5)
+    feed(test, [(5.0, IDLE, TOP)], 30, 2.7)
+    assert test.stopped and test.end_reason == dp.END_REST
+    assert test.count == 1
+
+
+def test_slow_press_that_keeps_climbing_does_not_time_out():
+    # 8 s from the start position to extended, still climbing the whole way
+    # — allowed for a student who needs longer.
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    slow = [(1.0, IDLE, START)]
+    slow += [(0.8, IDLE, 0.15 * k) for k in range(1, 11)]
+    slow += [(0.5, IDLE, TOP), (0.8, IDLE, START)]
+    feed(test, slow, 30, end)
+    assert not test.stopped, f"slow press ended the test ({test.end_reason})"
+    assert test.count == 2
+
+
+def test_repeated_short_presses_end_the_test():
+    # "No longer able to lift the weight with complete elbow extension".
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    feed(test, rep(top=HALF) * 4, 30, end)
+    assert test.stopped and test.end_reason == dp.END_REST
+    assert test.count == 1
+
+
+def test_fifty_reps_ends_the_test():
+    test = started()
+    _, ended = feed(test, rep() * 52, 15, 0.5)
+    assert test.count == 50 and test.end_reason == dp.END_MAX
+    assert len(ended) == 1
+
+
+def test_untracked_arm_does_not_run_the_rest_clock():
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    feed(test, [(8.0, IDLE, None)], 30, end)
+    assert not test.stopped, "lost tracking ended the test"
+
+
+def test_a_long_frame_gap_adds_at_most_half_a_second():
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    test.update({L: IDLE, R: START}, now=end + 6.0)
+    assert not test.stopped, "a 6 s Wi-Fi gap ended the test"
+    assert test.rest_elapsed <= 1.4
+
+
+def test_still_at_the_bottom_with_jitter_still_ends():
+    test = started()
+    end, _ = feed(test, rep(), 30, 0.5)
+    rng = random.Random(7)
+    seq = [(1 / 30, IDLE, rng.uniform(-0.15, 0.15)) for _ in range(30 * 7)]
+    feed(test, seq, 30, end)
+    assert test.stopped and test.end_reason == dp.END_REST
+    assert test.count == 1
+
+
+def test_live_engine_wobble_at_the_bottom_ends_near_four_seconds():
+    # The live engine reads a still start position anywhere in -0.3..+0.2,
+    # and the low end can be where the arm was re-armed.
+    for seed in range(20):
+        test = started()
+        end, _ = feed(test, rep()[:4] + [(1 / 30, IDLE, -0.3)], 30, 0.5)
+        rng = random.Random(seed)
+        seq = [(1 / 30, IDLE, rng.uniform(-0.3, 0.2)) for _ in range(30 * 6)]
+        _, ended = feed(test, seq, 30, end)
+        assert ended, f"seed {seed}: never ended"
+        assert ended[0][0] - end <= 4.3, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the rest"
+
+
+def test_stop_records_the_coach():
+    test = started()
+    end, _ = feed(test, rep() * 2, 30, 0.5)
+    test.stop(now=end)
+    res = test.result(now=end)
+    assert res["reps"] == 2 and res["end_reason"] == dp.END_STOPPED
+    assert res["arm"] == R and res["duration_sec"] > 6
+
+
+def test_reset_clears_everything():
+    test = started()
+    feed(test, rep() * 2, 30, 0.5)
+    test.reset()
+    assert test.count == 0 and test.arm is None and not test.started
+
+
+# ── geometry ─────────────────────────────────────────────────────────────────
+def test_arm_reading_geometry():
+    import types
+    lms = [types.SimpleNamespace(x=0.5, y=0.5, visibility=0.0) for _ in range(33)]
+    # Right arm straight up: shoulder, elbow 0.1 above, wrist 0.2 above.
+    for i, (x, y) in {12: (0.40, 0.50), 14: (0.40, 0.40), 16: (0.40, 0.30)}.items():
+        lms[i] = types.SimpleNamespace(x=x, y=y, visibility=0.9)
+    up = dp.arm_reading(lms, R, 640, 480)
+    assert abs(up - 2.0) < 0.01
+    assert dp.arm_reading(lms, L, 640, 480) is None      # not visible
+    lms[16] = types.SimpleNamespace(x=0.40, y=-0.05, visibility=0.9)
+    assert dp.arm_reading(lms, R, 640, 480) is None      # wrist off the picture
+
+
+# ── standalone runner (so this works without pytest) ─────────────────────────
+def _main():
+    checks = [(n, f) for n, f in sorted(globals().items())
+              if n.startswith("test_") and callable(f)]
+    failed = []
+    for name, fn in checks:
+        try:
+            fn()
+        except AssertionError as exc:
+            failed.append(name)
+            print(f"  FAIL  {name}\n          {exc}")
+        except Exception as exc:                       # noqa: BLE001
+            failed.append(name)
+            print(f"  ERROR {name}\n          {exc.__class__.__name__}: {exc}")
+        else:
+            print(f"  PASS  {name}")
+    print(f"\n{len(checks) - len(failed)}/{len(checks)} checks passed"
+          + (f" — FAILED: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())

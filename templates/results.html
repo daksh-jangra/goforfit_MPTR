@@ -35,6 +35,7 @@
     .badge-vertical_jump { background:#dbeafe; color:#1e3a8a; }
     .badge-run_600m    { background:#fee2e2; color:#991b1b; }
     .badge-target_stretch { background:#ccfbf1; color:#115e59; }
+    .badge-dumbbell_press { background:#ede9fe; color:#5b21b6; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -174,6 +175,7 @@
           <option value="vertical_jump">🦘 Vertical Jump</option>
           <option value="run_600m">🏃‍♂️ 600 m Run</option>
           <option value="target_stretch">🧘 Target Stretch</option>
+          <option value="dumbbell_press">🏋️ Dumbbell Press</option>
         </select>
       </div>
       <div>
@@ -345,6 +347,7 @@ const TEST_META = {
   // Result is text, "L 2 / R 1": the 0-2 score for each side of one joint
   // (the joint's name is in the Rating column).
   target_stretch: { label: '🧘 Target Stretch', unit: '', extraFn: () => '' },
+  dumbbell_press: { label: '🏋️ Dumbbell Press', unit: 'reps', extraFn: () => '' },
 };
 
 // Target Stretch's result is text ("L 2 / R 1"), every other test's is a
