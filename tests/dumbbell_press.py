@@ -81,7 +81,8 @@ When the test ends
     a press still climbing (the wrist rising another PROGRESS_UA beyond
     the highest it has been since the arm was last back at the start), or
     the weight still coming down after a rep (the wrist dropping another
-    PROGRESS_UA below the lowest it has been since that rep). So a slow
+    PROGRESS_UA below the lowest it has been since that rep - all the way
+    to the real bottom, not just to the "back down" line). So a slow
     press or a slow lowering that keeps going never times out, while
     sitting still - at the bottom, holding the weight up, or stopped
     partway down - does, and so does a string of short presses that never
@@ -508,7 +509,7 @@ class DumbbellPressTest:
             self.rest_elapsed = 0.0
             self._best = max(c.wrist_up, 0.0)    # see PROGRESS_UA
             self._climbed = False
-            self._low = None
+            # _low is kept: the weight is usually still coming down here.
             return None
         if ev == "short":
             self.status_msg = "Not counted - weight not pressed all the way up"
@@ -533,8 +534,15 @@ class DumbbellPressTest:
                 return None
         # Coming back down after a rep is working too: a slow, controlled
         # lowering took longer than 4 s and ended the test mid-rep. Same
-        # ratchet, downward, so stopping partway down is still rest.
-        if c.phase == PH_UP and self._low is not None:
+        # ratchet, downward, so stopping partway down is still rest. It runs
+        # on past the "back down" line until the next press starts: the
+        # last stretch down to the shoulder counted as rest, and a slow
+        # student pausing ~2 s at the bottom was cut off mid-set. Not below
+        # shoulder height, though (the same floor the climb uses): the
+        # reading wobbles about +-0.25 at the bottom, and crediting that
+        # pushed the end of a still student out to ~5.5 s.
+        if (c.phase == PH_UP or (not self._climbed and c.wrist_up >= 0.0)) \
+                and self._low is not None:
             if c.wrist_up <= self._low - PROGRESS_UA:
                 self._low = c.wrist_up
                 self.rest_elapsed = 0.0

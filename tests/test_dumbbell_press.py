@@ -468,6 +468,47 @@ def test_slow_lowering_does_not_time_out():
     assert test.count == 3
 
 
+def smooth(a, b, secs, fps=20, other=IDLE):
+    """The right hand easing from a to b (slow start and finish, like a real
+    arm), one step per frame."""
+    import math
+    n = max(1, round(secs * fps))
+    return [(1 / fps, other, a + (b - a) * (1 - math.cos(math.pi * k / n)) / 2)
+            for k in range(1, n + 1)]
+
+
+def test_slow_student_who_pauses_at_the_bottom_is_not_cut_off():
+    # From the stress test: lower over 2.9 s, pause at the shoulder, press
+    # over 2.4 s. The end of the lowering, below the 0.8 "back down" line,
+    # counted as rest (~1.5 s of it), so a 2.2 s pause - well under the 4 s
+    # the protocol allows - cut the student off mid-set.
+    for fps in (10, 20, 30):
+        test = started()
+        end, _ = feed(test, rep(), fps, 0.5)
+        seq = []
+        for _ in range(4):
+            seq += smooth(-0.3, 1.8, 2.4, fps) + [(0.12, IDLE, 1.8)]
+            seq += smooth(1.8, -0.3, 2.9, fps) + [(2.2, IDLE, -0.3)]
+        feed(test, seq, fps, end)
+        assert not test.stopped or test.count == 5, (
+            f"{fps} fps: cut off after {test.count} reps ({test.end_reason})")
+        assert test.count == 5, f"{fps} fps: {test.count} of 5"
+
+
+def test_sitting_still_after_a_slow_lowering_still_ends():
+    test = started()
+    end, _ = feed(test, rep(), 20, 0.5)
+    seq = smooth(-0.3, 1.8, 1.5) + smooth(1.8, -0.3, 2.9)
+    end2, _ = feed(test, seq, 20, end)
+    _, ended = feed(test, [(8.0, IDLE, -0.3)], 20, end2)
+    assert ended and ended[0][1] == dp.END_REST
+    # The rest is counted from when the hand gets back to shoulder height (the
+    # start position), so the last bit of the lowering below the shoulder is
+    # in it: ~3 s after the hand fully stops here. It was 2.6 s, counted from
+    # the 0.8 "back down" line.
+    assert 2.8 <= ended[0][0] - end2 <= 4.2, f"ended {ended[0][0] - end2:.1f} s after the lowering"
+
+
 def test_stopped_partway_down_is_rest():
     test = started()
     end, _ = feed(test, rep()[:3], 30, 0.5)
@@ -540,7 +581,9 @@ def test_live_engine_wobble_at_the_bottom_ends_near_four_seconds():
         seq = [(1 / 30, IDLE, rng.uniform(-0.3, 0.2)) for _ in range(30 * 6)]
         _, ended = feed(test, seq, 30, end)
         assert ended, f"seed {seed}: never ended"
-        assert ended[0][0] - end <= 4.3, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the rest"
+        # The lowering gets credit down to shoulder height, so a wobble right
+        # there can add a fraction of a second (worst seed 4.6 s).
+        assert ended[0][0] - end <= 4.8, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the rest"
 
 
 def test_stop_records_the_coach():
