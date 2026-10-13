@@ -3440,6 +3440,8 @@ class DumbbellPressEngine(BaseWebEngine):
             "status_msg": t.status_msg,
             "turned": t.turned,
             "turn_deg": round(t.turn_deg) if t.turn_deg is not None else None,
+            "no_room": t.no_room,
+            "room_ua": round(t.room_ua, 2) if t.room_ua is not None else None,
             "last_save": self.last_save,
         }
 
@@ -3549,6 +3551,8 @@ class DumbbellPressEngine(BaseWebEngine):
                     pinned = self._person(self.requested_arm)
                     self.test.pinned = pinned if pinned in dp_mod.ARMS else None
                     ended = self.test.update(readings)
+                    # Room above the head for a full press; warn if not.
+                    self.test.note_room(dp_mod.shoulder_top_px(lms, fh) if lms is not None else None)
                     if ended and not self._staged:
                         # The test's own end (50 reps / 4 s rest) is how it
                         # normally finishes — stage now, so screen3 has the

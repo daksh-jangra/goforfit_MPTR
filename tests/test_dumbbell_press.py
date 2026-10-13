@@ -690,6 +690,58 @@ def test_one_odd_frame_does_not_warn():
     assert not test.turned
 
 
+def room_feed(test, seq, fps=15, t0=0.0, ua=100.0):
+    """seq: (secs, headroom in upper arms). The yardstick is a plain 100 px
+    upper arm seen on both arms, so the shoulder sits headroom*100 px down."""
+    t = t0
+    for secs, room in seq:
+        for _ in range(max(1, round(secs * fps))):
+            test.update({L: (0.0, ua), R: (0.0, ua)}, now=t)
+            test.note_room(room * ua, now=t)
+            t += 1 / fps
+    return t
+
+
+def test_plenty_of_room_above_the_head_never_warns():
+    rng = random.Random(2)
+    test = dp.DumbbellPressTest()
+    t = 0.0
+    for _ in range(15 * 20):
+        test.update({L: (0.0, 100.0), R: (0.0, 100.0)}, now=t)
+        test.note_room(rng.uniform(2.4, 4.3) * 100.0, now=t)
+        t += 1 / 15
+        assert not test.no_room, f"warned at {test.room_ua:.2f}"
+
+
+def test_too_little_room_above_the_head_warns_and_clears():
+    # On the manual's photos counting failed with 1.52 upper arms of room or
+    # less (the hand left the top of the picture); a straight arm needs ~1.9.
+    test = dp.DumbbellPressTest()
+    t = room_feed(test, [(2.0, 3.0)])
+    assert not test.no_room
+    t = room_feed(test, [(2.0, 1.5)], t0=t)
+    assert test.no_room and test.room_ua < 2.0
+    t = room_feed(test, [(2.0, 2.6)], t0=t)
+    assert not test.no_room, "the warning didn't clear after moving the phone"
+
+
+def test_one_odd_room_frame_does_not_warn():
+    test = dp.DumbbellPressTest()
+    room_feed(test, [(2.0, 3.0), (1 / 15, 0.5), (1.0, 3.0)])
+    assert not test.no_room
+
+
+def test_room_needs_a_yardstick_and_never_changes_the_count():
+    test = dp.DumbbellPressTest()
+    test.note_room(50.0, now=0.0)            # no upper arm seen yet
+    assert not test.no_room and test.room_ua is None
+    test = started()
+    end, _ = feed(test, rep() * 2, 30, 0.5)
+    for k in range(40):
+        test.note_room(120.0, now=end + k / 30)
+    assert test.no_room and test.count == 2
+
+
 def test_body_turn_from_world_shoulders():
     import types, math
     def pose(turn):
