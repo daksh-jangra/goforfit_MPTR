@@ -89,6 +89,15 @@ When the test ends
     get any higher (the protocol's "no longer able to lift").
   * The coach presses STOP.
 
+  Each "still working" step (a climb or a lowering of PROGRESS_UA) only
+  counts if the hand has also really TRAVELLED that way: TRAVEL_UA over
+  the last TRAVEL_S, comparing TRAVEL_AVG_S averages at each end. Tracking
+  jitter (+-0.25 at the bottom in the live engine) went back and forth
+  across a step boundary and kept restarting the 4 s, so with jittery
+  tracking the test stopped late (stress test: ~3% of runs, some never
+  stopped by themselves; now ~0.1%). Jitter nets out; a slow, real press
+  or lowering doesn't.
+
   The rest clock only runs on frames where the arm is actually seen, and
   each frame adds at most MAX_FRAME_DT: a Wi-Fi gap or the spotter stepping
   in front can't end the test by itself.
@@ -163,6 +172,12 @@ PROGRESS_UA    = 0.25   # wrist rising this much counts as still working,
                         # engine, and a climb measured from the bottom of a
                         # wobble let one frame push the 4 s end out to ~5.5 s.
 MAX_FRAME_DT   = 0.5    # most one frame may add to the rest clock (Wi-Fi gaps)
+TRAVEL_S       = 1.2    # a "still working" step also needs the hand to have
+TRAVEL_UA      = 0.15   # travelled this far that way over this long
+TRAVEL_AVG_S   = 0.5    # (each end averaged over this long). See the docstring.
+                        # Tuned on the stress test: 0.12/0.3 s left a 7.5 s
+                        # worst case; stricter than 0.15 changed nothing. A
+                        # slow press of 0.15 upper arms per 0.8 s still counts.
 UA_WINDOW_S    = 10.0   # upper-arm length = the longest seen this long back.
                         # Covers a slow 8 s press; short enough to follow the
                         # student moving the chair closer or further.
@@ -398,6 +413,7 @@ class DumbbellPressTest:
         self._best = None          # highest wrist since back at the start
         self._low = None           # lowest wrist since the last rep
         self._climbed = False      # credited a climb since back at the start
+        self._trail = deque()      # (t, wrist) of the working arm, last TRAVEL_S + avg
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -495,6 +511,11 @@ class DumbbellPressTest:
 
         c = self.counters[self.arm]
         ev = events[self.arm]
+        if c.wrist_up is not None:
+            # Kept across a short dropout: the hand really did move meanwhile.
+            self._trail.append((now, c.wrist_up))
+        while self._trail and now - self._trail[0][0] > TRAVEL_S + TRAVEL_AVG_S:
+            self._trail.popleft()
         if ev == "rep":
             self.rest_elapsed = 0.0
             self._best = None       # nothing to climb until it's back down
@@ -527,7 +548,7 @@ class DumbbellPressTest:
                 # crossed the "back down" line - from there a slow press got
                 # no credit for most of the way up and timed out.
                 self._best = max(c.wrist_up, 0.0)
-            elif c.wrist_up >= self._best + PROGRESS_UA:
+            elif c.wrist_up >= self._best + PROGRESS_UA and self._travelled(now) >= TRAVEL_UA:
                 self._best = c.wrist_up
                 self._climbed = True
                 self.rest_elapsed = 0.0
@@ -543,7 +564,7 @@ class DumbbellPressTest:
         # pushed the end of a still student out to ~5.5 s.
         if (c.phase == PH_UP or (not self._climbed and c.wrist_up >= 0.0)) \
                 and self._low is not None:
-            if c.wrist_up <= self._low - PROGRESS_UA:
+            if c.wrist_up <= self._low - PROGRESS_UA and self._travelled(now) <= -TRAVEL_UA:
                 self._low = c.wrist_up
                 self.rest_elapsed = 0.0
                 return None
@@ -553,6 +574,19 @@ class DumbbellPressTest:
             self.status_msg = f"Rested {self.rest_s:.0f} s - test over"
             return END_REST
         return None
+
+    def _travelled(self, now):
+        """How far the hand has really moved over the last TRAVEL_S: the mean
+        of the last TRAVEL_AVG_S minus the mean TRAVEL_S before that. Up is
+        positive. Jitter goes back and forth and nets out near 0; a slow,
+        real press or lowering doesn't. 0 until there is enough history."""
+        if not self._trail or now - self._trail[0][0] < TRAVEL_S:
+            return 0.0
+        recent = [v for t, v in self._trail if t >= now - TRAVEL_AVG_S]
+        old = [v for t, v in self._trail if t <= now - TRAVEL_S]
+        if not recent or not old:
+            return 0.0
+        return sum(recent) / len(recent) - sum(old) / len(old)
 
     def result(self, now=None):
         return {
