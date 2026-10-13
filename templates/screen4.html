@@ -766,7 +766,13 @@
                   return !state.running;
               },
               renderStatus(state) {
-                  const lines = [`Count: ${state.count} / ${state.max_reps}`];
+                  const lines = [];
+                  // Sitting turned makes presses read low, so it comes first.
+                  if (state.turned) {
+                      lines.push(`\u26a0 Student is turned ~${state.turn_deg}\u00b0 \u2014 ` +
+                                 'turn the chair to face the camera squarely');
+                  }
+                  lines.push(`Count: ${state.count} / ${state.max_reps}`);
                   const pinned = state.requested_arm && state.requested_arm !== 'auto';
                   const armTxt = pinned
                       ? `${state.requested_arm} (picked by coach)`
@@ -779,7 +785,7 @@
                   } else {
                       lines.push(state.pose_detected
                           ? 'Arm not clearly visible \u2014 front-on, head and both arms in frame'
-                          : 'No participant detected \u2014 is the spotter in front of the student?');
+                          : 'No participant detected \u2014 is the spotter in front of the student, or the student turned away?');
                   }
                   if (state.test_done) {
                       lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);

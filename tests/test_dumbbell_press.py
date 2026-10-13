@@ -652,6 +652,62 @@ def test_reset_clears_everything():
     assert test.count == 0 and test.arm is None and not test.started
 
 
+# ── the "student is turned" warning ─────────────────────────────────────────
+def turn_feed(test, seq, fps=15, t0=0.0):
+    t = t0
+    for secs, deg in seq:
+        for _ in range(max(1, round(secs * fps))):
+            test.note_turn(deg, now=t)
+            t += 1 / fps
+    return t
+
+
+def test_front_on_student_never_warns():
+    # The manual's front-on photos read 5-11 deg; jitter on top of that.
+    rng = random.Random(1)
+    test = dp.DumbbellPressTest()
+    t = 0.0
+    for _ in range(15 * 20):
+        test.note_turn(rng.uniform(2, 16), now=t)
+        t += 1 / 15
+        assert not test.turned, f"warned at {test.turn_deg:.0f} deg"
+
+
+def test_turned_student_warns_and_clears():
+    # A visibly turned student read 50 deg, side-on 78.
+    test = dp.DumbbellPressTest()
+    t = turn_feed(test, [(2.0, 8.0)])
+    assert not test.turned
+    t = turn_feed(test, [(2.0, 45.0)], t0=t)
+    assert test.turned and test.turn_deg >= 40
+    t = turn_feed(test, [(2.0, 8.0)], t0=t)
+    assert not test.turned, "the warning didn't clear after facing the camera"
+
+
+def test_one_odd_frame_does_not_warn():
+    test = dp.DumbbellPressTest()
+    t = turn_feed(test, [(2.0, 8.0), (1 / 15, 70.0), (1.0, 8.0)])
+    assert not test.turned
+
+
+def test_body_turn_from_world_shoulders():
+    import types, math
+    def pose(turn):
+        w = [types.SimpleNamespace(x=0.0, y=0.0, z=0.0) for _ in range(33)]
+        im = [types.SimpleNamespace(x=0.5, y=0.5, visibility=0.9) for _ in range(33)]
+        r = math.radians(turn)
+        w[11] = types.SimpleNamespace(x=0.18 * math.cos(r), y=-0.4, z=0.18 * math.sin(r))
+        w[12] = types.SimpleNamespace(x=-0.18 * math.cos(r), y=-0.4, z=-0.18 * math.sin(r))
+        return w, im
+    for turn in (0, 20, 45, 80):
+        assert abs(dp.body_turn_deg(*pose(turn)) - turn) < 0.5
+    w, im = pose(80)
+    im[11] = types.SimpleNamespace(x=0.5, y=0.5, visibility=0.1)
+    assert abs(dp.body_turn_deg(w, im) - 80) < 0.5   # side-on: far shoulder hidden
+    im[12] = types.SimpleNamespace(x=0.5, y=0.5, visibility=0.1)
+    assert dp.body_turn_deg(w, im) is None           # neither shoulder seen
+
+
 # ── geometry ─────────────────────────────────────────────────────────────────
 def test_arm_reading_geometry():
     import types
