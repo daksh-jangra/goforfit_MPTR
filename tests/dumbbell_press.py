@@ -22,6 +22,16 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
 --------------------------------------------------------------------
   UP    the wrist at least WRIST_UP_UA (1.3) upper-arm lengths above the
         shoulder. Counted the moment it gets there.
+  A hand that JUMPS into either zone (more than JUMP_UA in one reading) must
+  then stay there a moment: UP_HOLD_S (0.15 s) above the line, DOWN_HOLD_S
+  (0.3 s) back down. Two bad tracking frames in a row get past the 3-frame
+  median; at the top they read the hand as back at the shoulder and the
+  press counted twice, at the bottom they counted a rep that never
+  happened (stress test: 7 in 3000). Those bad frames jump 1.5-2 upper
+  arms; a real press moves at most ~0.5 per reading even at 8 fps, so it
+  still counts the moment it gets there. (Waiting on every entry instead
+  lost the top of presses cut short by a dropout: missed reps tripled.)
+
   DOWN  the wrist back within WRIST_DOWN_UA (0.8) of shoulder height.
         Needed before the next rep can count. 0.8, not lower: with the
         elbow pushed forward at the start the hand sits at about chin
@@ -187,6 +197,11 @@ UA_SEEN_S      = 0.4    # ...that it has shown for at least this long in total.
                         # next reps. 0.4 s is more than 3 frames even at 8 fps;
                         # the real length shows longer, at the bottom or top.
 
+JUMP_UA        = 0.8    # a reading this far from the last one is a jump...
+UP_HOLD_S      = 0.15   # ...and after a jump above the line the hand must stay
+DOWN_HOLD_S    = 0.3    # there this long (back down: this long) to count.
+                        # More than 2 frames even at 8 fps.
+
 SMOOTH_FRAMES  = 3      # median window, as in the other rep counters
 MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
 
@@ -280,6 +295,10 @@ class ArmCounter:
         self.count = 0
         self.short_presses = 0
         self.wrist_up = None
+        self._zone = None          # (zone, since): where the hand is and since when
+        self._confirmed = None     # the last zone it stayed in long enough
+        self._fresh = True         # first settled reading since a dropout
+        self._prev_wu = None       # last settled reading, to spot a jump
         self._sw = MedianSmoother()
         self._su = MedianSmoother()
         self._lengths = deque()    # (t, smoothed upper-arm px), last UA_WINDOW_S
@@ -331,6 +350,8 @@ class ArmCounter:
         self._sw.reset()
         self._su.reset()
         self.wrist_up = None
+        self._fresh = True
+        self._prev_wu = None
 
     def forget_reps(self):
         """Drop this arm's phase and reps (the other arm was locked), but keep
@@ -341,7 +362,7 @@ class ArmCounter:
         self._sw.reset()
         self.wrist_up = None
 
-    def update(self, rise_px, ref_px, counting):
+    def update(self, rise_px, ref_px, now, counting):
         """ref_px is the yardstick (DumbbellPressTest picks it, see
         upper_ref). Returns "rep", "armed", "short", or None."""
         wrist_up = rise_px / ref_px
@@ -353,8 +374,24 @@ class ArmCounter:
             # until then the arm reads as not tracked.
             return None
         self.wrist_up = wu
-        is_up = wu >= WRIST_UP_UA
-        is_down = wu <= WRIST_DOWN_UA
+        zone = "up" if wu >= WRIST_UP_UA else "down" if wu <= WRIST_DOWN_UA else "mid"
+        if self._zone is None or self._zone[0] != zone:
+            jumped = self._prev_wu is not None and abs(wu - self._prev_wu) > JUMP_UA
+            # A steady move counts at once; only a jump has to hold.
+            self._zone = (zone, now, jumped)
+        self._prev_wu = wu
+        # A zone only counts once the hand has stayed in it (see UP_HOLD_S);
+        # until then it is still where it last was. In between needs no wait.
+        need = {"up": UP_HOLD_S, "down": DOWN_HOLD_S}.get(zone, 0.0) if self._zone[2] else 0.0
+        if self._fresh or now - self._zone[1] >= need - 1e-6:
+            # Back from a dropout: take the zone as seen. The 3-frame settle
+            # already guards this frame, and waiting on top of it lost the
+            # top (or bottom) of presses half hidden by the dropout - in the
+            # stress test missed reps tripled.
+            self._confirmed = zone
+        self._fresh = False
+        is_up = self._confirmed == "up"
+        is_down = self._confirmed == "down"
 
         if self.phase == PH_UNKNOWN:
             if is_down:
@@ -495,7 +532,7 @@ class DumbbellPressTest:
                 continue
             other = self.counters[ARM_RIGHT if a == ARM_LEFT else ARM_LEFT].held(now)
             ref = own[a] if other is None else max(own[a], other)
-            events[a] = self.counters[a].update(readings[a][0], ref, counting)
+            events[a] = self.counters[a].update(readings[a][0], ref, now, counting)
 
         if self.arm is None:
             # Before the first rep: nothing to rest from. The first arm to
