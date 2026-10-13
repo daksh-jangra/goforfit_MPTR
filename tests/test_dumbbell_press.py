@@ -283,6 +283,32 @@ def test_jitter_at_the_top_counts_once():
     assert test.count == 1, f"one wobbly top counted {test.count} times"
 
 
+def test_two_wild_low_frames_at_the_top_do_not_count_twice():
+    # From the stress test: two bad frames in a row at the top read the hand
+    # as back at the shoulder, so the press re-armed and the next frame at
+    # the top counted it again.
+    for fps in (8, 15, 30):
+        for burst in (2, 3):
+            test = started()
+            end, _ = feed(test, rep(), fps, 0.5)
+            feed(test, [(1.0, IDLE, START), (0.6, IDLE, MID), (0.4, IDLE, TOP)]
+                 + [(1 / fps, IDLE, -0.3)] * burst
+                 + [(0.4, IDLE, TOP), (0.4, IDLE, MID), (1.0, IDLE, START)], fps, end)
+            assert test.count == 2, f"{fps} fps, {burst} wild frames: {test.count} of 2"
+
+
+def test_two_wild_high_frames_at_the_bottom_are_not_a_rep():
+    # 3 frames in a row at 8 fps last 0.375 s - as long as a brief real top,
+    # so that case is only checked at higher frame rates.
+    for fps, burst in ((8, 2), (15, 2), (15, 3), (30, 2), (30, 3)):
+        if True:
+            test = started()
+            end, _ = feed(test, rep(), fps, 0.5)
+            feed(test, [(1.0, IDLE, START)] + [(1 / fps, IDLE, 2.0)] * burst
+                 + [(1.5, IDLE, START)], fps, end)
+            assert test.count == 1, f"{fps} fps, {burst} wild frames: {test.count} of 1"
+
+
 def test_dropout_mid_press_still_counts_once():
     test = started()
     feed(test, [(1.0, IDLE, START), (0.3, IDLE, MID), (0.4, IDLE, None),
@@ -422,9 +448,11 @@ def test_rest_after_the_last_rep_ends_at_four_seconds():
         end, _ = feed(test, rep() * 3, fps, 0.5)
         _, ended = feed(test, [(6.0, IDLE, START)], fps, end)
         assert test.stopped and test.end_reason == dp.END_REST, f"{fps} fps: never ended"
-        # The last rep's 0.8 s at the start already counts as rest.
+        # The last rep's 0.8 s at the start already counts as rest, less the
+        # DOWN_HOLD_S the hand must stay there: these steps JUMP from MID to
+        # START, and a jump has to hold (a smooth lowering doesn't wait).
         t_end = ended[0][0]
-        assert 2.8 <= t_end - end <= 3.6, f"{fps} fps: ended {t_end - end:.2f} s into the rest"
+        assert 2.8 <= t_end - end <= 3.9, f"{fps} fps: ended {t_end - end:.2f} s into the rest"
         assert test.count == 3
 
 
@@ -533,8 +561,9 @@ def test_stopped_partway_down_is_rest():
     _, ended = feed(test, [(0.5, IDLE, 1.6), (6.0, IDLE, 1.0)], 30, end)
     assert test.stopped and test.end_reason == dp.END_REST
     # The drop to 1.0 is a lowering step; it needs a few frames to show as
-    # real travel, so the clock starts a touch later (4.7 s).
-    assert ended[0][0] - end <= 4.8, f"ended {ended[0][0] - end:.1f} s after the rep"
+    # real travel, and the step up to TOP is a jump, so the rep is confirmed
+    # UP_HOLD_S late (4.9 s).
+    assert ended[0][0] - end <= 5.0, f"ended {ended[0][0] - end:.1f} s after the rep"
 
 
 def test_wobble_at_the_top_still_ends():
@@ -602,8 +631,9 @@ def test_live_engine_wobble_at_the_bottom_ends_near_four_seconds():
         _, ended = feed(test, seq, 30, end)
         assert ended, f"seed {seed}: never ended"
         # The lowering gets credit down to shoulder height, so a wobble right
-        # there can add a fraction of a second (worst seed 4.6 s).
-        assert ended[0][0] - end <= 4.8, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the rest"
+        # there can add a fraction of a second, and the jump down to the
+        # wobble must hold DOWN_HOLD_S before it counts as back (worst 4.9 s).
+        assert ended[0][0] - end <= 5.0, f"seed {seed}: ended {ended[0][0] - end:.1f} s into the rest"
 
 
 def test_stop_records_the_coach():
