@@ -772,6 +772,11 @@
                       lines.push(`\u26a0 Student is turned ~${state.turn_deg}\u00b0 \u2014 ` +
                                  'turn the chair to face the camera squarely');
                   }
+                  // The hand leaving the top of the picture counts nothing.
+                  if (state.no_room) {
+                      lines.push('\u26a0 Not enough room above the head \u2014 ' +
+                                 'tilt the phone up or move it back');
+                  }
                   lines.push(`Count: ${state.count} / ${state.max_reps}`);
                   const pinned = state.requested_arm && state.requested_arm !== 'auto';
                   const armTxt = pinned

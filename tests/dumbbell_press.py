@@ -146,6 +146,16 @@ Camera placement
   picture's depth estimate was too noisy: 43 deg on a front-on photo.)
   The warning never changes the count; the coach turns the chair.
 
+  ROOM ABOVE THE HEAD. If the phone is too close or tilted down, the hand
+  leaves the top of the picture at the top of a press. The pose model then
+  GUESSES a wrist inside the picture, so the arm still reads as tracked but
+  at nonsense heights: no reps counted and nothing on screen said why. So
+  the screen also WARNS when the room above the higher shoulder is less
+  than ROOM_WARN_UA upper arms (the same yardstick the reps use). On the
+  manual's photos with the top cut off, counting worked with 1.60+ and
+  failed at 1.52 or less; a straight arm needs ~1.9, hence 2.0 (owner's
+  choice, 2026-10-13). This too never changes the count.
+
 Usage
 -----
   python dumbbell_press.py
@@ -217,6 +227,10 @@ TURN_WARN_DEG  = 30.0   # body turned this much (middle value of the last
 TURN_CLEAR_DEG = 22.0   # TURN_WINDOW_S) shows the warning; it clears below
 TURN_WINDOW_S  = 1.5    # TURN_CLEAR_DEG, so it doesn't flicker. See docstring.
 
+ROOM_WARN_UA   = 2.0    # room above the shoulder (middle value of the last
+ROOM_CLEAR_UA  = 2.2    # TURN_WINDOW_S) below this warns; it clears above
+                        # ROOM_CLEAR_UA. In upper arms. See the docstring.
+
 SMOOTH_FRAMES  = 3      # median window, as in the other rep counters
 MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
 
@@ -272,6 +286,13 @@ def body_turn_deg(world_lms, lms):
     if abs(dx) < 1e-6 and abs(dz) < 1e-6:
         return None
     return float(np.degrees(np.arctan2(abs(dz), abs(dx))))
+
+
+def shoulder_top_px(lms, h):
+    """How far the higher shoulder is below the top of the picture, in
+    pixels, or None if neither shoulder is clearly seen."""
+    ys = [lms[i].y * h for i in (11, 12) if lms[i].visibility >= MIN_VIS]
+    return min(ys) if ys else None
 
 
 def arm_reading(lms, arm, w, h):
@@ -480,6 +501,9 @@ class DumbbellPressTest:
         self.turned = False        # the "student is turned" warning is showing
         self.turn_deg = None       # middle turn reading of the last TURN_WINDOW_S
         self._turns = deque()      # (t, deg)
+        self.no_room = False       # the "not enough room above the head" warning
+        self.room_ua = None        # middle room reading of the last TURN_WINDOW_S
+        self._rooms = deque()      # (t, upper arms)
         self._best = None          # highest wrist since back at the start
         self._low = None           # lowest wrist since the last rep
         self._climbed = False      # credited a climb since back at the start
@@ -550,6 +574,28 @@ class DumbbellPressTest:
             self.turned = True
         elif self.turn_deg < TURN_CLEAR_DEG:
             self.turned = False
+
+    def note_room(self, shoulder_top_px, now=None):
+        """Feed the height of the HIGHER shoulder above the top of the
+        picture, in pixels (None if neither shoulder is seen). Sets .no_room
+        / .room_ua for the warning, in the same upper-arm yardstick the reps
+        use; never touches the count."""
+        now = time.time() if now is None else now
+        lengths = [c.held(now) for c in self.counters.values()]
+        lengths = [x for x in lengths if x]
+        if shoulder_top_px is not None and lengths:
+            self._rooms.append((now, float(shoulder_top_px) / max(lengths)))
+        while self._rooms and now - self._rooms[0][0] > TURN_WINDOW_S:
+            self._rooms.popleft()
+        if not self._rooms:
+            self.room_ua = None
+            self.no_room = False
+            return
+        self.room_ua = float(np.median([r for _, r in self._rooms]))
+        if self.room_ua < ROOM_WARN_UA:
+            self.no_room = True
+        elif self.room_ua >= ROOM_CLEAR_UA:
+            self.no_room = False
 
     # ── per frame ───────────────────────────────────────────────────────
     def update(self, readings, now=None):
@@ -748,6 +794,15 @@ def draw_hud(frame, test, arm_label=None, arm_pts=None, now=None):
         cv2.putText(frame, warn, (x0 + 14, 242), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                     C_TEXT, 2, cv2.LINE_AA)
 
+    if test.no_room:
+        warn = "Not enough room above the head - tilt the phone up or move it back"
+        size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
+        x0 = max(12, (w - size[0]) // 2 - 14)
+        y0 = 262 if test.turned else 214
+        draw_panel(frame, x0, y0, min(w - 12, x0 + size[0] + 28), y0 + 40, C_BAD, 0.8)
+        cv2.putText(frame, warn, (x0 + 14, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    C_TEXT, 2, cv2.LINE_AA)
+
     if test.status_msg:
         msg = _hud_text(test.status_msg)
         draw_panel(frame, 12, h - 54, min(w - 12, 12 + 13 * len(msg) + 24), h - 12)
@@ -813,6 +868,7 @@ def main():
     test.pinned = args.arm if args.arm in ARMS else None
     staged = False
     stream_start = time.time()
+    last_now = stream_start    # time of the last frame - a recording's own clock
     frame_no = 0
     last_ts = -1
 
@@ -862,6 +918,8 @@ def main():
                            if lms is not None and results.pose_world_landmarks else None, now=now)
 
             ended = test.update(readings, now=now)
+            test.note_room(shoulder_top_px(lms, fh) if lms is not None else None, now=now)
+            last_now = now
             if ended and not staged and args.session_id:
                 _stage_dumbbell_press(args.session_id, test.result(now), test.arm)
                 staged = True
@@ -890,8 +948,11 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
 
-    test.stop(END_STOPPED)
-    res = test.result()
+    # The last frame's time, not the wall clock: for a recording the wall
+    # clock is how long the computer took, not the participant (the summary
+    # said 3.1 s for an 11 s clip).
+    test.stop(END_STOPPED, now=last_now)
+    res = test.result(now=last_now)
     if test.started and not staged and args.session_id:
         _stage_dumbbell_press(args.session_id, res, test.arm)
     print("\n── Dumbbell Press ───────────────────────────")

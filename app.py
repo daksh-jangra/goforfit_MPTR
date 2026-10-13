@@ -686,12 +686,12 @@ TESTS = {
         ],
         "tip": (
             "If the student might lift the free hand first, pick their pressing "
-            "hand before START. "
-            "Camera FRONT-ON at chest height, 2-3 m away, with the student facing "
-            "it squarely (the screen warns if the chair is turned), the head and both "
-            "arms in frame, the weight overhead included. The spotter stands "
-            "BEHIND the chair \u2014 not between the camera and the student, "
-            "or the camera loses the student."
+            "hand before START. Camera FRONT-ON at chest height, 2-3 m away, the "
+            "student facing it squarely, with the head, both arms and plenty of room "
+            "above the head for the weight overhead in frame \u2014 the screen warns "
+            "if the chair is turned or there isn't enough room. The spotter stands "
+            "BEHIND the chair \u2014 not between the camera and the student, or the "
+            "camera loses the student."
         ),
         "params": [],
         "unit":   "reps",
