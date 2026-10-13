@@ -676,7 +676,8 @@ TESTS = {
             "straight arm); the weight must come back down to the "
             "shoulder before the next one counts. Tap START on 'GO'. The test "
             "ends by itself at 50 reps or after a rest of 4 seconds \u2014 a "
-            "slow press that is still going up is not a rest. One trial; the "
+            "slow press that is still going up, or a slow lowering still coming "
+            "down, is not a rest. One trial; the "
             "score is the number of reps."
         ),
         "controls": [

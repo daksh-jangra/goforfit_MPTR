@@ -91,8 +91,9 @@ When the test ends
     a press still climbing (the wrist rising another PROGRESS_UA beyond
     the highest it has been since the arm was last back at the start), or
     the weight still coming down after a rep (the wrist dropping another
-    PROGRESS_UA below the lowest it has been since that rep - all the way
-    to the real bottom, not just to the "back down" line). So a slow
+    PROGRESS_UA below the lowest it has been since that rep - on past the
+    "back down" line, down to shoulder height; not below it, where the
+    reading's jitter would count as movement). So a slow
     press or a slow lowering that keeps going never times out, while
     sitting still - at the bottom, holding the weight up, or stopped
     partway down - does, and so does a string of short presses that never
