@@ -509,12 +509,32 @@ def test_sitting_still_after_a_slow_lowering_still_ends():
     assert 2.8 <= ended[0][0] - end2 <= 4.2, f"ended {ended[0][0] - end2:.1f} s after the lowering"
 
 
+def test_jitter_after_a_lowering_does_not_drag_the_end_out():
+    # Bug 4: with jittery tracking (as in the live engine) a frame or two of
+    # jitter looked like the press or the lowering still going and kept
+    # restarting the 4 s - up to 8.6 s after the hand stopped.
+    for fps in (12, 20, 30):
+        worst = 0.0
+        for seed in range(30):
+            rng = random.Random(seed)
+            test = started()
+            end, _ = feed(test, rep(), fps, 0.5)
+            end2, _ = feed(test, smooth(0.2, 1.8, 1.5, fps) + smooth(1.8, 0.2, 1.5, fps), fps, end)
+            seq = [(1 / fps, IDLE, rng.gauss(0.2, 0.1)) for _ in range(fps * 9)]
+            _, ended = feed(test, seq, fps, end2)
+            assert ended, f"{fps} fps, seed {seed}: never stopped by itself"
+            worst = max(worst, ended[0][0] - end2)
+        assert worst <= 5.5, f"{fps} fps: stopped {worst:.1f} s after the hand did (worst of 30)"
+
+
 def test_stopped_partway_down_is_rest():
     test = started()
     end, _ = feed(test, rep()[:3], 30, 0.5)
     _, ended = feed(test, [(0.5, IDLE, 1.6), (6.0, IDLE, 1.0)], 30, end)
     assert test.stopped and test.end_reason == dp.END_REST
-    assert ended[0][0] - end <= 4.6, f"ended {ended[0][0] - end:.1f} s after the rep"
+    # The drop to 1.0 is a lowering step; it needs a few frames to show as
+    # real travel, so the clock starts a touch later (4.7 s).
+    assert ended[0][0] - end <= 4.8, f"ended {ended[0][0] - end:.1f} s after the rep"
 
 
 def test_wobble_at_the_top_still_ends():
