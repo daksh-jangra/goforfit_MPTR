@@ -3438,6 +3438,8 @@ class DumbbellPressEngine(BaseWebEngine):
             "pose_detected": self.pose_detected,
             "arm_tracked": self.arm_tracked,
             "status_msg": t.status_msg,
+            "turned": t.turned,
+            "turn_deg": round(t.turn_deg) if t.turn_deg is not None else None,
             "last_save": self.last_save,
         }
 
@@ -3535,8 +3537,12 @@ class DumbbellPressEngine(BaseWebEngine):
                             p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
                             cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
                     readings = {a: dp_mod.arm_reading(lms, a, fw, fh) for a in dp_mod.ARMS}
+                turn = (dp_mod.body_turn_deg(results.pose_world_landmarks[0], lms)
+                        if lms is not None and results.pose_world_landmarks else None)
 
                 with self._lock:
+                    # Front-on matters for the score; warn the coach if not.
+                    self.test.note_turn(turn)
                     # The coach's arm is the PERSON's side; MediaPipe's name
                     # for it depends on the mirror (person -> MediaPipe is the
                     # same swap), so it is re-translated every frame.

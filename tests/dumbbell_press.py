@@ -135,6 +135,17 @@ Camera placement
   in front of the student, as in the manual's photos, the pose model found
   no one at all.
 
+  Front-on matters for the score: presses are measured against the longer
+  of the two upper arms, and a student sitting turned makes the free arm
+  look longer (nearer the lens), so presses read low - in the stress test
+  a 12-30% difference lost reps in ~3% of runs. So the screen WARNS when
+  the body is turned TURN_WARN_DEG or more (owner's choice, 2026-10-13,
+  over capping the free arm or only a stronger tip). The turn comes from
+  the pose model's 3-D shoulder positions: the manual's front-on photos
+  read 5-11 deg, a visibly turned student 50, side-on 78. (The flat
+  picture's depth estimate was too noisy: 43 deg on a front-on photo.)
+  The warning never changes the count; the coach turns the chair.
+
 Usage
 -----
   python dumbbell_press.py
@@ -202,6 +213,10 @@ UP_HOLD_S      = 0.15   # ...and after a jump above the line the hand must stay
 DOWN_HOLD_S    = 0.3    # there this long (back down: this long) to count.
                         # More than 2 frames even at 8 fps.
 
+TURN_WARN_DEG  = 30.0   # body turned this much (middle value of the last
+TURN_CLEAR_DEG = 22.0   # TURN_WINDOW_S) shows the warning; it clears below
+TURN_WINDOW_S  = 1.5    # TURN_CLEAR_DEG, so it doesn't flicker. See docstring.
+
 SMOOTH_FRAMES  = 3      # median window, as in the other rep counters
 MIN_VIS        = 0.50   # landmark visibility floor for the arm joints
 
@@ -242,6 +257,21 @@ C_TEXT  = (245, 245, 245)
 def lm_px(lms, idx, w, h):
     lm = lms[idx]
     return np.array([lm.x * w, lm.y * h], dtype=np.float32)
+
+
+def body_turn_deg(world_lms, lms):
+    """How far the shoulders are turned away from facing the camera, in
+    degrees (0 = square on, 90 = side-on), from the pose model's 3-D world
+    landmarks. Needs only ONE shoulder clearly seen: side-on the far one is
+    hidden (that is the point), and the model still places it - the
+    side-on wheelchair photo reads 78 deg. None if neither is seen."""
+    if not any(lms[i].visibility >= MIN_VIS for i in (11, 12)):
+        return None
+    dx = world_lms[11].x - world_lms[12].x
+    dz = world_lms[11].z - world_lms[12].z
+    if abs(dx) < 1e-6 and abs(dz) < 1e-6:
+        return None
+    return float(np.degrees(np.arctan2(abs(dz), abs(dx))))
 
 
 def arm_reading(lms, arm, w, h):
@@ -447,6 +477,9 @@ class DumbbellPressTest:
         self.end_reason = None
         self.rest_elapsed = 0.0
         self._last_t = None
+        self.turned = False        # the "student is turned" warning is showing
+        self.turn_deg = None       # middle turn reading of the last TURN_WINDOW_S
+        self._turns = deque()      # (t, deg)
         self._best = None          # highest wrist since back at the start
         self._low = None           # lowest wrist since the last rep
         self._climbed = False      # credited a climb since back at the start
@@ -499,6 +532,24 @@ class DumbbellPressTest:
         self.stopped = True
         self.end_reason = reason
         self.end_t = time.time() if now is None else now
+
+    def note_turn(self, deg, now=None):
+        """Feed one body-turn reading (body_turn_deg, None if not seen). Sets
+        .turned / .turn_deg for the warning; never touches the count."""
+        now = time.time() if now is None else now
+        if deg is not None:
+            self._turns.append((now, float(deg)))
+        while self._turns and now - self._turns[0][0] > TURN_WINDOW_S:
+            self._turns.popleft()
+        if not self._turns:
+            self.turn_deg = None
+            self.turned = False
+            return
+        self.turn_deg = float(np.median([d for _, d in self._turns]))
+        if self.turn_deg >= TURN_WARN_DEG:
+            self.turned = True
+        elif self.turn_deg < TURN_CLEAR_DEG:
+            self.turned = False
 
     # ── per frame ───────────────────────────────────────────────────────
     def update(self, readings, now=None):
@@ -688,6 +739,15 @@ def draw_hud(frame, test, arm_label=None, arm_pts=None, now=None):
     if test.started and not test.stopped and test.count > 0:
         line(f"Rest: {test.rest_elapsed:.1f} / {test.rest_s:.0f} s")
 
+    if test.turned:
+        warn = (f"Student is turned ~{test.turn_deg:.0f} deg - "
+                f"turn the chair to face the camera")
+        size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
+        x0 = max(12, (w - size[0]) // 2 - 14)
+        draw_panel(frame, x0, 214, min(w - 12, x0 + size[0] + 28), 254, C_BAD, 0.8)
+        cv2.putText(frame, warn, (x0 + 14, 242), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    C_TEXT, 2, cv2.LINE_AA)
+
     if test.status_msg:
         msg = _hud_text(test.status_msg)
         draw_panel(frame, 12, h - 54, min(w - 12, 12 + 13 * len(msg) + 24), h - 12)
@@ -798,6 +858,8 @@ def main():
                                  (int(lms[j].x * fw), int(lms[j].y * fh)),
                                  (200, 200, 200), 2, cv2.LINE_AA)
                 readings = {a: arm_reading(lms, a, fw, fh) for a in ARMS}
+            test.note_turn(body_turn_deg(results.pose_world_landmarks[0], lms)
+                           if lms is not None and results.pose_world_landmarks else None, now=now)
 
             ended = test.update(readings, now=now)
             if ended and not staged and args.session_id:
