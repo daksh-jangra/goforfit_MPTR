@@ -1,103 +1,161 @@
-# GoForFit Integrated Fitness App
+# GoForFit NEP FMS — AI Fitness Assessment App
 
-This package combines:
+**Project:** Computer-vision fitness testing for school students
+**Battery:** Indian FMS (Fitness365) tests, plus adapted tests from the Brockport Physical Fitness Test Manual
+**Scope:** A coach runs each test from a phone or laptop browser, and the camera scores it
+**Stack:** FastAPI · OpenCV · MediaPipe · SQLite · Jinja templates
+**Category:** Computer Vision | Pose Estimation | Sports Science
 
-- the `fitness.zip` four-screen frontend flow
-- the `goforfitfinal.zip` AI/OpenCV fitness test scripts
-- a backend now running on **FastAPI** (migrated from Flask)
+---
 
-## What is integrated
+## Executive Summary
 
-- `/` shows the fitness365 assessment category screen.
-- `/screen2` lists backend-backed fitness tests by category.
-- `/screen3` keeps the student/configuration and manual timer screen.
-- `/screen4` keeps the AI viewport layout and launches the real backend test through `POST /api/launch/<test_id>`.
-- Existing backend endpoints are preserved:
-  - `POST /api/launch/<id>`
-  - `GET /api/status`
-  - `GET /api/status/<id>`
-  - `POST /api/stop/<id>`
-  - `POST /api/session`, `GET /api/session/<id>`, `GET /api/sessions`
-  - `POST /api/save/<test_id>`, `GET /api/results`, `GET /api/results/<test_id>`, `GET /api/export/<test_id>`
+GoForFit turns a phone camera into a fitness tester. The coach picks a student,
+opens a test and points the camera. The app watches the movement with
+MediaPipe pose, hand and ball tracking. It counts reps, times holds, measures
+distances and gives pass/fail verdicts. Then it saves the result and sends it
+to the GoForFit dashboard.
 
-The AI tests still open in their own OpenCV windows, as the original backend was designed to do — **except `wingspan`**, which now runs entirely in the browser (see below).
+The app is designed to:
 
-## Wingspan: live feed in the browser (no keyboard needed)
+- Run **18 fitness tests** across anthropometry, strength, endurance, flexibility, speed, agility, power and coordination
+- Score straight from the **coach's phone browser**: no desktop window, no keyboard and no app install
+- Follow each test's **written protocol** for its start, stop, rep and verdict rules
+- Leave the coach in charge of judging form, while the camera decides the score
+- Keep every result in a local database and **sync confirmed scores** to the Laravel dashboard
 
-Every other test still needs the original physical-keyboard controls
-(SPACE/C/M/S/Q/etc.) inside a desktop OpenCV window, which doesn't work from
-a phone. Wingspan was the one test that needed several distinct actions
-(calibrate → enter real cm → measure → snapshot → save), so it's been
-rebuilt to run without any OpenCV window or keyboard at all:
+---
 
-- `tests/wingspan_web_engine.py` runs the camera + MediaPipe processing loop
-  **in-process**, in a background thread, instead of as a subprocess. It
-  reuses all the geometry/drawing code from `tests/wingspan2.py` (imported,
-  not duplicated) — only the keyboard-driven control loop was replaced.
-- `screen4` for `wingspan` shows a live `<img>` MJPEG feed plus on-screen
-  buttons (CALIBRATE / MEASURE MODE / SNAPSHOT / SAVE READING) and a numeric
-  input for typing your real wingspan during calibration — these replace the
-  C / M / SPACE / S keys one-for-one.
-- New endpoints: `GET /api/wingspan/feed` (MJPEG stream), `GET
-  /api/wingspan/state` (polled to drive button enable/disable + status
-  text), `POST /api/wingspan/action` (`{"action": "...", "value": ...}`).
-- `POST /api/launch/wingspan` and `POST /api/stop/wingspan` are unchanged
-  from the frontend's point of view — they now start/stop the in-process
-  engine instead of a subprocess when wingspan is the test.
-- `tests/wingspan2.py` is untouched and still works standalone (`python
-  wingspan2.py`) if you ever want the original desktop/keyboard version.
-- If `wingspan_web_engine.py` fails to import for any reason (e.g. missing
-  dependency), `wingspan` automatically falls back to the old
-  subprocess/OpenCV-window behavior so the app never breaks.
+## Repository Navigation
 
-## Migration notes (Flask → FastAPI)
+```
+goforfit_MPTR/
+├── README.md                     ← This file
+├── requirements.txt              ← Python dependencies
+├── app.py                        ← FastAPI server: test registry, routes, engine control
+├── db.py                         ← SQLite schema + queries (one table per test)
+├── backup-*-app.py               ← Dated snapshots of app.py
+│
+├── templates/                    ← The coach's screens
+│   ├── index.html                ← Home: test categories
+│   ├── screen2.html              ← Test list for a category
+│   ├── screen3.html              ← Student picker, manual entry, dashboard sync
+│   ├── screen4.html              ← Live camera view with on-screen controls
+│   ├── results.html              ← Saved results, per test
+│   └── backup_*-screen4.html     ← Dated snapshots of screen4
+│
+└── tests/                        ← Camera engines and per-test logic
+    ├── web_engines.py            ← Browser-camera engines for single-camera tests
+    ├── dual_feed_engines.py      ← Two-camera engines (shuttle run, 50 m dash, 600 m)
+    ├── camera.py                 ← Turns a camera index or IP-camera URL into a capture
+    ├── stall_watchdog.py         ← Flags a frozen camera feed instead of a black screen
+    ├── wingspan_web_engine.py    ← Wingspan in-browser engine
+    ├── vertical_jump_web_engine.py
+    │
+    ├── bmi__3_.py  wingspan2.py  parcurlup.py  wtt.py  snr.py  vertical_jump.py
+    ├── pullup.py  pullup_full.py  trunk_lift.py  reverse_curl.py
+    ├── shoulder_stretch.py  isometric_pushup.py  seated_pushup.py
+    ├── dumbbell_press.py  target_stretch.py
+    ├── shuttleruntest.py  sprint_timer.py  50m_dash_mod.py
+    ├── 600m_new/                 ← 600 m run: colour tracking, lanes, lap counting
+    │
+    ├── test_*.py                 ← Logic checks (no camera needed)
+    └── *.task                    ← MediaPipe pose / hand model files
+```
 
-- All routes, JSON response shapes, and status codes (400/404/409/500) are preserved exactly.
-- The four screen templates (`index.html`, `screen2.html`, `screen3.html`, `screen4.html`) are **unchanged** — a small `url_for` compatibility shim in `app.py` lets them keep using Flask-style calls like `url_for('screen2', category='All Tests')`.
-- `db.py` is unchanged — it's plain `sqlite3` with no Flask dependency.
-- The `/api/save/*` and `/api/session` endpoints now use Pydantic models for the request body instead of Flask's untyped `request.get_json()`. Fields are still all optional with the same names/defaults, but values now get type-checked (e.g. `height_cm` must be numeric). If your `tests/*.py` scripts POST to these endpoints, double check the payloads match these types — see "What I still need from you" below.
-- New: interactive API docs at `http://localhost:8080/docs` (Swagger UI), courtesy of FastAPI.
-- Server entry point now uses `uvicorn` instead of Flask's built-in dev server.
+---
 
-## Setup
+## Architecture Overview
+
+GoForFit is a **single FastAPI server** with a separate engine for each test.
+The phone browser sends camera frames to the server, the engine scores them,
+and the browser polls for the live result.
+
+| Component | Role |
+| --- | --- |
+| **FastAPI Server** (`app.py`) | Test registry, page routes, starts/stops engines, save/export APIs |
+| **Coach Screens** (`templates/`) | Category → test → student → live camera flow, built for a phone |
+| **Browser-Camera Engines** (`tests/web_engines.py`) | Take frames from the phone (`POST /api/<test>/frame`), run MediaPipe, publish state |
+| **Per-Test Logic** (`tests/<test>.py`) | Each protocol's rules: rep counting, hold timing, angles, verdicts |
+| **Dual-Camera Engines** (`tests/dual_feed_engines.py`) | Shuttle run and 50 m dash from two IP cameras; 600 m from one camera |
+| **Stall Watchdog** (`tests/stall_watchdog.py`) | Detects a frozen feed and tells the coach |
+| **Results Store** (`db.py`) | SQLite: sessions, the student roster, one results table per test |
+| **Dashboard Sync** (`screen3.html`) | Sends a confirmed score to the Laravel parent window that opened the app |
+
+---
+
+## Tests
+
+| ID | Test | Category | Camera | Score |
+| --- | --- | --- | --- | --- |
+| `bmi` | BMI / Height Estimator | Anthropometry | Phone | cm |
+| `wingspan` | Wingspan Measurement | Anthropometry | Phone | cm |
+| `curl_up` | Partial Curl-Up | Muscular Endurance | Phone | reps |
+| `pull_up` | Modified Pull-Up | Muscular Endurance | Phone | reps |
+| `full_pull_up` | Pull-Up (full hang) | Muscular Endurance | Phone | reps |
+| `isometric_push_up` | Isometric Push-Up | Muscular Endurance | Phone | seconds (max 40) |
+| `seated_push_up` | Seated Push-Up | Muscular Endurance | Phone | seconds (max 20) |
+| `dumbbell_press` | Dumbbell Press | Muscular Endurance | Phone | reps (max 50) |
+| `wall_toss` | Wall Toss | Coordination | Phone | catches |
+| `sit_reach` | Sit and Reach | Flexibility | Phone | cm |
+| `trunk_lift` | Trunk Lift | Musculoskeletal | Phone | cm (max 30) |
+| `reverse_curl` | Reverse Curl | Musculoskeletal | Phone | pass / fail |
+| `shoulder_stretch` | Shoulder Stretch | Musculoskeletal | Phone | pass / fail |
+| `target_stretch` | Target Stretch (8 joints) | Musculoskeletal | Phone | 0 / 1 / 2 per side |
+| `vertical_jump` | Vertical Jump | Power | Phone | cm |
+| `run_600m` | 600 m Run | Endurance | One camera | seconds |
+| `shuttle_run` | 10 m Shuttle Run | Agility | Two IP cameras | seconds |
+| `dash_50m` | 50 m Dash | Speed | Two IP cameras | seconds |
+
+Notes:
+- For `sit_reach`, enter the student's hip-to-ankle length on the setup screen first.
+- `vertical_jump` measures how far the hips rise from standing to the top of the
+  jump. The older fingertip-reach method is still available: set
+  `MEASURE_METHOD = "reach"` in `tests/vertical_jump_web_engine.py`.
+- `target_stretch` measures the left side first, then the right. The coach picks
+  the joint on the camera screen.
+
+---
+
+## Protocol Sources
+
+Each test follows a published protocol:
+
+- **Indian FMS battery (Fitness365)**: the main reference. Where its demo video and the Brockport manual disagree, the video wins (for example, the Modified Pull-Up).
+- **Brockport Physical Fitness Test Manual**: Pull-Up, Trunk Lift, Reverse Curl, Shoulder Stretch, Isometric Push-Up, Seated Push-Up, Dumbbell Press and Target Stretch
+- **Coach's role**: the app scores; the coach judges form cues that the protocol leaves to the tester
+
+---
+
+## Setup & Run
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Run
-
 ```bash
 python app.py
 ```
 
-Open:
+Then open `http://localhost:8080`. To test from a phone, open the laptop's address
+on the same Wi-Fi. FastAPI's interactive API docs are at `http://localhost:8080/docs`.
 
-```text
-http://localhost:8080
+1. Start on the home page and pick a category
+2. Pick a test, then the student, on `screen3`
+3. Tap **Switch to AI** to open `screen4` and point the camera
+4. Back on `screen3`, review the result and tap **Save to Database**. If the dashboard opened the app, the score is synced back
+5. Review or export results at `/results`
+
+### Dashboard sync
+
+Set `GOFORFIT_PARENT_ORIGIN` to the dashboard's origin in production. It defaults
+to `*`, which is fine locally because sync only runs when a dashboard window
+opened the app.
+
+### Logic checks
+
+The rep, hold and verdict rules can be tested without a camera:
+
+```bash
+python3 -m pytest tests/test_*.py
 ```
-
-## Test IDs
-
-| ID | Test | Camera | Status |
-| --- | --- | --- | --- |
-| `bmi` | BMI / Height Estimator | Browser (phone) | ✅ Integrated |
-| `wingspan` | Wingspan Measurement | Browser (phone) | ✅ Integrated |
-| `curl_up` | Partial Curl-Up Counter | Browser (phone) | ✅ Integrated |
-| `wall_toss` | Wall Toss Coordination Test | Browser (phone) | ✅ Integrated |
-| `sit_reach` | Sit and Reach Test | Browser (phone) | ✅ Integrated |
-| `vertical_jump` | Vertical Jump Test | Browser (phone) | ✅ Integrated — hip-displacement method |
-| `shuttle_run` | 10 m Shuttle Run Timer | Two IP cameras | ✅ Integrated |
-| `dash_50m` | 50 m Dash Timer | Two IP cameras | ✅ Integrated |
-| `run_600m` | 600 m Run | Two IP cameras | ✅ Integrated |
-
-"Integrated" = wired up and running in the app (browser live-feed engines, or the
-dual-camera engines). It does not by itself certify measurement accuracy on every
-device — validate each test live before relying on the numbers.
-
-For `sit_reach`, enter hip-to-ankle length on the configuration screen before launching AI.
-
-`vertical_jump` measures the rise of the hip centre (center-of-mass) between the
-resting stance and the jump apex, using the same known-height (cm-per-pixel)
-calibration as `bmi`. The legacy fingertip reach-differential method is kept behind
-`MEASURE_METHOD = "reach"` in `tests/vertical_jump_web_engine.py`.
