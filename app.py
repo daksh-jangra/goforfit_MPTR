@@ -1219,6 +1219,15 @@ def test_camera(b: CameraTestBody):
 
 @app.post("/api/launch/{test_id}")
 async def launch(test_id: str, request: Request):
+    # Stop this test's previous run first. If screen4 was reloaded or closed
+    # without STOP, its engine is still running, and replacing it below would
+    # orphan it — nothing could reach it to stop it, so it would hold its pose
+    # model in memory until the server restarts. Anything it stages on the
+    # way out is a stale result, so drop it — even if the new launch fails.
+    if _is_running(test_id):
+        stop(test_id)
+        _pending.pop(test_id, None)
+
     if test_id == "wingspan" and WingspanEngine is not None:
         return await _launch_wingspan(request)
 
