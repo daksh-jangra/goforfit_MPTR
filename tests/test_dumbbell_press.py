@@ -441,6 +441,25 @@ def test_pinned_free_hand_reps_never_count_or_lock():
     assert test.arm is None and test.count == 0
 
 
+def test_zero_reps_still_records_the_pinned_arm():
+    for pinned, want in ((R, R), (L, L), (None, None)):
+        test = dp.DumbbellPressTest()
+        test.pinned = pinned
+        feed(test, [(0.5, START, START)], 30)
+        test.start(now=0.5)
+        feed(test, [(3.0, START, START)], 30, 0.5)
+        test.stop(now=3.5)
+        res = test.result(now=3.5)
+        assert res["reps"] == 0 and res["arm"] == want, f"pinned {pinned}: {res}"
+    # A locked arm is still what's saved once there are reps.
+    test = dp.DumbbellPressTest()
+    test.pinned = R
+    feed(test, [(0.5, IDLE, START)], 30)
+    test.start(now=0.5)
+    feed(test, rep(), 30, 0.5)
+    assert test.result()["arm"] == R and test.count == 1
+
+
 # ── ending ───────────────────────────────────────────────────────────────────
 def test_rest_after_the_last_rep_ends_at_four_seconds():
     for fps in (10, 30):
