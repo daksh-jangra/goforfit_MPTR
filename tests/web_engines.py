@@ -3484,6 +3484,10 @@ class DumbbellPressEngine(BaseWebEngine):
 
     # ── staging ─────────────────────────────────────────────────────────
     def _stage_locked(self):
+        # The loop refreshes the pin every frame; do it here too, so a 0
+        # staged before any frame still records the coach's arm.
+        pinned = self._person(self.requested_arm)
+        self.test.pinned = pinned if pinned in dp_mod.ARMS else None
         res = self.test.result()
         self.last_save = res["reps"]
         self._safe_stage(res["reps"], self._person(res["arm"]),

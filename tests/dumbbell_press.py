@@ -726,7 +726,9 @@ class DumbbellPressTest:
     def result(self, now=None):
         return {
             "reps": self.count,
-            "arm": self.arm,
+            # No rep locked an arm: a 0 still records the arm the coach
+            # picked. Auto with no rep has no arm to give.
+            "arm": self.arm or (self.pinned if self.pinned in ARMS else None),
             "duration_sec": round(self.elapsed(now), 1),
             "end_reason": self.end_reason,
             "short_presses": self.short_presses,
@@ -812,7 +814,7 @@ def draw_hud(frame, test, arm_label=None, arm_pts=None, now=None):
     return frame
 
 
-def _stage_dumbbell_press(session_id, res, arm):
+def _stage_dumbbell_press(session_id, res):
     """Stages the result on the server for human review/save on screen3 —
     does NOT write to the database directly."""
     try:
@@ -822,7 +824,7 @@ def _stage_dumbbell_press(session_id, res, arm):
             json={
                 "session_id":   session_id,
                 "reps":         res["reps"],
-                "arm":          arm,
+                "arm":          res["arm"],
                 "duration_sec": res["duration_sec"],
                 "end_reason":   res["end_reason"],
             },
@@ -922,7 +924,7 @@ def main():
             test.note_room(shoulder_top_px(lms, fh) if lms is not None else None, now=now)
             last_now = now
             if ended and not staged and args.session_id:
-                _stage_dumbbell_press(args.session_id, test.result(now), test.arm)
+                _stage_dumbbell_press(args.session_id, test.result(now))
                 staged = True
 
             arm = test.shown_arm()
@@ -955,7 +957,7 @@ def main():
     test.stop(END_STOPPED, now=last_now)
     res = test.result(now=last_now)
     if test.started and not staged and args.session_id:
-        _stage_dumbbell_press(args.session_id, res, test.arm)
+        _stage_dumbbell_press(args.session_id, res)
     print("\n── Dumbbell Press ───────────────────────────")
     print(f"  Reps          : {res['reps']}")
     print(f"  Arm           : {res['arm'] or '--'}")
