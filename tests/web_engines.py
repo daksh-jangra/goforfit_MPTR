@@ -24,6 +24,7 @@ SECTIONS IN THIS FILE
   4F. SeatedPushUpEngine     wraps seated_pushup.py     (seated push-up hold time)
   4G. TargetStretchEngine    wraps target_stretch.py    (target stretch, 0-2 per side)
   4H. DumbbellPressEngine    wraps dumbbell_press.py    (dumbbell press counter)
+  4J. ModifiedCurlUpEngine   wraps modified_curl_up.py  (modified curl-up counter)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -3579,6 +3580,215 @@ class DumbbellPressEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4J — MODIFIED CURL-UP   (wraps modified_curl_up.py)
+# ════════════════════════════════════════════════════════════════════════
+import modified_curl_up as mcu_mod  # noqa: E402
+
+_MODEL_MODIFIED_CURL_UP = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class ModifiedCurlUpEngine(BaseWebEngine):
+    """Live modified curl-up counter. One trial: the coach taps START on
+    "GO", the browser beeps the 3 s cadence, each curl-up from lying until
+    the fingertips slide up the thighs to the kneecaps and back down counts
+    unless the feet left the floor, and the test ends by itself at 75 or
+    after 6 s with no curl-up (mcu_mod.ModifiedCurlUpTest raises the end and
+    the count is staged right then). STOP ends it early. Side-on camera;
+    which side faces it doesn't matter. Rep logic and HUD live in
+    modified_curl_up.py."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera: frames are POSTed to
+        # /api/modified_curl_up/frame -> push_frame().
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.test = mcu_mod.ModifiedCurlUpTest()
+        self.pose_detected = False
+        self.last_save = None
+
+    @property
+    def count(self):
+        return self.test.count
+
+    # ── camera plumbing (identical contract to DumbbellPressEngine) ─────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_MODIFIED_CURL_UP)
+        options = mcu_mod.PoseLandmarkerOptions(
+            base_options=mcu_mod.BaseOptions(model_asset_path=_MODEL_MODIFIED_CURL_UP),
+            running_mode=mcu_mod.VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = mcu_mod.PoseLandmarker.create_from_options(options)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        t = self.test
+        m = t.m
+        rise = t.rise()
+        return {
+            "count": t.count,
+            "max_reps": mcu_mod.MAX_REPS,
+            "test_started": t.started,
+            "test_done": t.stopped,
+            "end_reason": t.end_reason,
+            "elapsed_sec": round(t.elapsed(), 1),
+            "phase": t.phase,
+            "body_tracked": t.tracked,
+            "in_position": t.in_position,
+            "reach": None if m is None else round(m["reach"], 2),
+            "reach_min": mcu_mod.REACH_MIN,
+            "rise_deg": None if rise is None else round(rise),
+            "feet_seen": t.feet_seen if t.tracked else None,
+            "feet_up": t.feet_up if t.tracked else None,
+            "gap_s": round(t.gap_elapsed, 1),
+            "gap_limit_s": t.gap_s,
+            "cadence_s": mcu_mod.CADENCE_S,
+            "not_counted": dict(t.not_counted),
+            "not_counted_total": t.total_not_counted,
+            "problem": t.problem if t.tracked else None,
+            "pose_detected": self.pose_detected,
+            "status_msg": t.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_start(self, value=None):
+        with self._lock:
+            if not self.test.start():
+                return {"ok": False, "error": "Test already started"}
+            return {"ok": True}
+
+    def action_reset(self, value=None):
+        with self._lock:
+            self.test.reset()
+            self.last_save = None
+            # A second attempt stages its own count.
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        handler = {
+            "start": self.action_start,
+            "reset": self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _stage_locked(self):
+        res = self.test.result()
+        self.last_save = res["reps"]
+        self._safe_stage(res["reps"], res["duration_sec"], res["end_reason"])
+
+    def _stage_on_stop(self):
+        # Coach stopped before the test ended by itself. A 0 is staged like
+        # any other count (a student who can't do one curl-up scored 0), but
+        # only for a trial that actually started.
+        with self._lock:
+            if self._staged or not self.test.started:
+                return
+            self.test.stop(mcu_mod.END_STOPPED)
+            self._stage_locked()
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # live in the same pixel space. (Which side faces the camera
+                # doesn't matter to this test, so the mirror changes nothing
+                # else.)
+                frame = camera.mirror(frame, self.mirror_preview)
+                fh, fw = frame.shape[:2]
+                mp_image = mcu_mod.mp.Image(
+                    image_format=mcu_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+
+                pts = None
+                pose_detected = bool(results.pose_landmarks)
+                if pose_detected:
+                    lms = results.pose_landmarks[0]
+                    for i, j in mcu_mod._POSE_CONNECTIONS:
+                        if lms[i].visibility >= 0.45 and lms[j].visibility >= 0.45:
+                            p1 = (int(lms[i].x * fw), int(lms[i].y * fh))
+                            p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+                    pts = mcu_mod.read_points(lms, fw, fh)
+
+                with self._lock:
+                    ended = self.test.update(pts)
+                    if ended and not self._staged:
+                        # The test's own end (75, or 6 s with no curl-up) is
+                        # how it normally finishes — stage now, so screen3
+                        # has the count even if nobody taps STOP.
+                        self._stage_locked()
+                    self.pose_detected = pose_detected
+                    bp = None
+                    if self.test.tracked and pts and self.test.side:
+                        bp = mcu_mod.body_points(pts, self.test.side)
+                    # Drawn inside the lock: START/RESET change the test.
+                    mcu_mod.draw_hud(frame, self.test, bp)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -3601,6 +3811,7 @@ __all__ = [
     "IsometricPushUpEngine",
     "SeatedPushUpEngine",
     "TargetStretchEngine",
+    "ModifiedCurlUpEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]

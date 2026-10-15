@@ -422,6 +422,7 @@
             isometric_push_up: 'hold_sec',
             seated_push_up: 'hold_sec',
             dumbbell_press: 'reps',
+            modified_curl_up: 'reps',
             target_stretch: 'left_score',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
@@ -442,6 +443,7 @@
             isometric_push_up: 's',
             seated_push_up: 's',
             dumbbell_press: 'reps',
+            modified_curl_up: 'reps',
             target_stretch: '',
             bmi:         'cm',
             wingspan:    'cm',
@@ -471,8 +473,10 @@
         // scored 0 seconds.
         // Seated push-up: likewise, a student who never gets off the seat.
         // Dumbbell press: a student who can't press the weight up once.
+        // Modified curl-up: a student who can't do one correct curl-up.
         const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up',
-                                 'seated_push_up', 'dumbbell_press']).has(testId);
+                                 'seated_push_up', 'dumbbell_press',
+                                 'modified_curl_up']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
 
@@ -769,6 +773,10 @@
                     }
                     if (testId === 'dumbbell_press' && v > 50) {
                         showSaveMessage('Reps can\'t be more than 50 (the test maximum).', false);
+                        return;
+                    }
+                    if (testId === 'modified_curl_up' && v > 75) {
+                        showSaveMessage('Curl-ups can\'t be more than 75 (the test maximum).', false);
                         return;
                     }
                     if (!pendingResult) {

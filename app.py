@@ -76,6 +76,7 @@ try:
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
         ShoulderStretchEngine, IsometricPushUpEngine,
         SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
+        ModifiedCurlUpEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -87,6 +88,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     SeatedPushUpEngine = None
     TargetStretchEngine = None
     DumbbellPressEngine = None
+    ModifiedCurlUpEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -128,6 +130,7 @@ _isometric_push_up_engine = None
 _seated_push_up_engine = None
 _target_stretch_engine = None
 _dumbbell_press_engine = None
+_modified_curl_up_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -698,6 +701,44 @@ TESTS = {
         "unit":   "reps",
         "live_feed":   True,
     },
+    "modified_curl_up": {
+        "id":          "modified_curl_up",
+        "title":       "Modified Curl-Up",
+        "subtitle":    "Hands slide up the thighs to the knees, one every 3 s \u2014 up to 75",
+        "icon":        "\U0001f9d8",
+        "category":    "Muscular Endurance",
+        "script":      "modified_curl_up.py",
+        "description": (
+            "Abdominal strength and endurance. Lying on the back on a mat, knees "
+            "bent about 140\u00b0, feet flat on the floor, hands on the front of "
+            "the thighs. The participant curls up slowly, sliding the hands up the "
+            "thighs until the fingertips touch the kneecaps, then lies back down, "
+            "at about one curl-up every 3 seconds \u2014 the screen beeps the "
+            "pace. A curl-up counts when the student is back down on the mat. It "
+            "is NOT counted if the fingertips don't reach the knees, the student "
+            "doesn't lie back down, or the feet leave the floor; the screen says "
+            "why. The tester may hold their hands on the kneecaps as a target. "
+            "Tap START on 'GO'. The test ends by itself at 75 curl-ups or after 6 "
+            "seconds with no curl-up (two beats), or when the coach taps STOP. "
+            "One trial; the score is the number of correct curl-ups."
+        ),
+        "controls": [
+            ("START", "Start counting (the 'GO' signal) and the 3 s beep"),
+            ("RESET", "Start the trial over (clears the count)"),
+        ],
+        "tip": (
+            "Camera on the floor or just above it, SIDE-ON to the participant, "
+            "1.5-2.5 m away, with the whole body from the head to the FEET in "
+            "frame \u2014 the feet matter, the camera checks they stay on the "
+            "floor. Let the student lie still for a second before START so the "
+            "camera learns where the hands rest. A tester holding the kneecaps "
+            "kneels on the far side, behind the legs, not between the camera "
+            "and the student. Turn the phone's sound up for the beep."
+        ),
+        "params": [],
+        "unit":   "reps",
+        "live_feed":   True,
+    },
     "target_stretch": {
         "id":          "target_stretch",
         "title":       "Target Stretch",
@@ -855,6 +896,10 @@ def _is_running(test_id: str) -> bool:
         return _target_stretch_engine.is_running()
     if test_id == "dumbbell_press" and _dumbbell_press_engine is not None:
         return _dumbbell_press_engine.is_running()
+    if test_id == "modified_curl_up" and _modified_curl_up_engine is not None:
+        return _modified_curl_up_engine.is_running()
+    if test_id == "shuttle_run" and _shuttle_engine is not None:
+        return _shuttle_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -1010,6 +1055,13 @@ class DumbbellPressSave(BaseModel):
     session_id: Optional[int] = None
     reps: Optional[int] = None             # the score: 0-50
     arm: Optional[str] = None
+    duration_sec: Optional[float] = None
+    end_reason: Optional[str] = None
+    rating: Optional[str] = None
+
+class ModifiedCurlUpSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None             # the score: correct curl-ups, 0-75
     duration_sec: Optional[float] = None
     end_reason: Optional[str] = None
     rating: Optional[str] = None
@@ -1272,6 +1324,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "dumbbell_press" and DumbbellPressEngine is not None:
         return await _launch_dumbbell_press(request)
+
+    if test_id == "modified_curl_up" and ModifiedCurlUpEngine is not None:
+        return await _launch_modified_curl_up(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -1735,6 +1790,29 @@ async def _launch_dumbbell_press(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_modified_curl_up(request: Request):
+    global _modified_curl_up_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # Nothing to configure: the coach taps START on "GO".
+    def _stage(reps, duration_sec, end_reason):
+        _pending["modified_curl_up"] = {
+            "session_id": session_id, "reps": reps,
+            "duration_sec": duration_sec, "end_reason": end_reason,
+        }
+
+    try:
+        engine = ModifiedCurlUpEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _modified_curl_up_engine = engine
+    _pending.pop("modified_curl_up", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -1863,7 +1941,8 @@ def engine_status():
                                "sit_reach", "trunk_lift", "reverse_curl",
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
-                               "dumbbell_press", "vertical_jump"],
+                               "dumbbell_press", "modified_curl_up",
+                               "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -1974,6 +2053,12 @@ def stop(test_id: str):
         # Like the pull-ups: the engine stages the count from its own stop()
         # hook if the coach stops before 50 reps or a 4 s rest ended it.
         _dumbbell_press_engine.stop()
+        return {"ok": True}
+    if test_id == "modified_curl_up" and _modified_curl_up_engine is not None:
+        # Like the dumbbell press: the engine stages the count from its own
+        # stop() hook if the coach stops before 75 or 6 s without a curl-up
+        # ended it.
+        _modified_curl_up_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -2164,6 +2249,11 @@ async def target_stretch_frame(request: Request):
 @app.post("/api/dumbbell_press/frame")
 async def dumbbell_press_frame(request: Request):
     return await _receive_frame(_dumbbell_press_engine, request)
+
+
+@app.post("/api/modified_curl_up/frame")
+async def modified_curl_up_frame(request: Request):
+    return await _receive_frame(_modified_curl_up_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -2793,6 +2883,44 @@ def dumbbell_press_action(b: DumbbellPressAction):
         _pending.pop("dumbbell_press", None)
     return res
 
+# ── Modified curl-up live-feed control ─────────────────────────────────
+class ModifiedCurlUpAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/modified_curl_up/feed")
+def modified_curl_up_feed():
+    if _modified_curl_up_engine is None or not _modified_curl_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Modified curl-up test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _modified_curl_up_engine is not None and _modified_curl_up_engine.is_running():
+            jpg = _modified_curl_up_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/modified_curl_up/state")
+def modified_curl_up_state():
+    if _modified_curl_up_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_modified_curl_up_engine.get_state()}
+
+@app.post("/api/modified_curl_up/action")
+def modified_curl_up_action(b: ModifiedCurlUpAction):
+    if _modified_curl_up_engine is None or not _modified_curl_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Modified curl-up test isn't running"}, status_code=409)
+    res = _modified_curl_up_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # Drop a count staged by the attempt being thrown away.
+        _pending.pop("modified_curl_up", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -3201,6 +3329,24 @@ def save_dumbbell_press(b: DumbbellPressSave):
         session_id   = b.session_id,
         reps         = b.reps,
         arm          = b.arm,
+        duration_sec = b.duration_sec,
+        end_reason   = b.end_reason,
+        rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/modified_curl_up")
+def save_modified_curl_up(b: ModifiedCurlUpSave):
+    """Fields: session_id, reps (0-75), duration_sec (opt),
+    end_reason (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.reps is None or not (0 <= b.reps <= 75):
+        return JSONResponse({"ok": False, "error": "Curl-ups must be 0 to 75"}, status_code=400)
+    row_id = db.save_modified_curl_up(
+        session_id   = b.session_id,
+        reps         = b.reps,
         duration_sec = b.duration_sec,
         end_reason   = b.end_reason,
         rating       = b.rating,

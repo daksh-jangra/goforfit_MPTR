@@ -823,6 +823,90 @@
                       : null;
               },
           },
+          modified_curl_up: {
+              feedUrl:    '/api/modified_curl_up/feed',
+              stateUrl:   '/api/modified_curl_up/state',
+              actionUrl:  '/api/modified_curl_up/action',
+              browserCamera: true,
+              frameUrl:   '/api/modified_curl_up/frame',
+              // The phone sits on the floor side-on to the participant, screen
+              // toward the coach — the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              buttons: [
+                  { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'start') return !state.running || state.test_started;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [`Curl-ups: ${state.count} / ${state.max_reps}`];
+                  if (state.body_tracked) {
+                      const up = state.rise_deg === null ? '–' : `${state.rise_deg}°`;
+                      lines.push(`Fingertips: ${state.reach} (knee ${state.reach_min})   Up: ${up}`);
+                      if (state.problem) lines.push(`⚠ ${state.problem}`);
+                  } else {
+                      lines.push(state.pose_detected
+                          ? 'Body not fully visible — side-on, head to feet in frame'
+                          : 'No participant detected');
+                  }
+                  if (state.test_done) {
+                      lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
+                  } else if (state.test_started) {
+                      lines.push(`${state.elapsed_sec}s elapsed   ` +
+                                 `Since last curl-up: ${state.gap_s} / ${state.gap_limit_s} s`);
+                  } else {
+                      lines.push('Lie still with hands on the thighs, then tap START as you call "GO"');
+                  }
+                  const nc = state.not_counted || {};
+                  const why = [['short', "didn't reach the knees"], ['not_down', "didn't lie back down"],
+                               ['feet', 'feet off the floor']]
+                      .filter(([k]) => nc[k]).map(([k, w]) => `${nc[k]} ${w}`);
+                  if (why.length) lines.push(`Not counted: ${why.join(', ')}`);
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              // The cadence: a high beep on START ("GO"), then a short beep
+              // every 3 s while counting, and a long low one when the test
+              // ends by itself. The beat runs on a local timer (the state poll
+              // is too coarse to keep time) and stops itself once polling
+              // stops — STOP, or the engine going away, skips onState.
+              _prev: null,
+              _beat: null,
+              _seenAt: 0,
+              onState(state) {
+                  const now = { started: !!state.test_started, done: !!state.test_done };
+                  const prev = this._prev;
+                  this._prev = now;
+                  this._seenAt = Date.now();
+                  const counting = state.running && now.started && !now.done;
+                  if (counting && !this._beat) {
+                      if (prev && !prev.started) beep(880, 0.25);
+                      this._beat = setInterval(() => {
+                          if (Date.now() - this._seenAt > 1500) {
+                              clearInterval(this._beat);
+                              this._beat = null;
+                              return;
+                          }
+                          beep(660, 0.12);
+                      }, state.cadence_s * 1000);
+                  } else if (!counting && this._beat) {
+                      clearInterval(this._beat);
+                      this._beat = null;
+                  }
+                  if (prev && state.running && now.done && !prev.done) beep(440, 0.8);
+              },
+              syncFields(state) {
+                  // Only a trial that was started: STOP/SAVE without START (or
+                  // after RESET) must not send the student a 0 they never earned.
+                  // A started trial with no curl-ups is a real 0 and is sent.
+                  return (state.test_started && state.count !== null && state.count !== undefined)
+                      ? { modifiedCurlUpScore: state.count }
+                      : null;
+              },
+          },
           target_stretch: {
               feedUrl:    '/api/target_stretch/feed',
               stateUrl:   '/api/target_stretch/state',
@@ -1557,6 +1641,7 @@
               isometric_push_up:'IsometricPushUp',
               seated_push_up:'SeatedPushUp',
               dumbbell_press:'DumbbellPress',
+              modified_curl_up:'ModifiedCurlUp',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
