@@ -285,6 +285,21 @@ CREATE TABLE IF NOT EXISTS dumbbell_press (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Modified Curl-Up ─────────────────────────────────────────────────────
+-- One trial (Brockport fig. 5.8): curl-ups with the hands sliding up the
+-- thighs to the kneecaps, about 1 every 3 s, up to 75. reps is the score
+-- (correct curl-ups only); the trial ends at 75, after 6 s with no curl-up,
+-- or when the coach stops it.
+CREATE TABLE IF NOT EXISTS modified_curl_up (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    reps            INTEGER,     -- correct curl-ups, 0-75 (the score)
+    duration_sec    REAL,        -- START to the end, for context only
+    end_reason      TEXT,        -- 'reached 75', 'no curl-up for 6 s', 'stopped by coach'
+    rating          TEXT,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,7 +398,11 @@ UNION ALL
 UNION ALL
     SELECT 'dumbbell_press', dbp.id, dbp.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, dbp.reps, dbp.rating, dbp.recorded_at
-    FROM dumbbell_press dbp LEFT JOIN sessions s ON dbp.session_id = s.id;
+    FROM dumbbell_press dbp LEFT JOIN sessions s ON dbp.session_id = s.id
+UNION ALL
+    SELECT 'modified_curl_up', mcu.id, mcu.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, mcu.reps, mcu.rating, mcu.recorded_at
+    FROM modified_curl_up mcu LEFT JOIN sessions s ON mcu.session_id = s.id;
 """
 
 
@@ -826,6 +845,25 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Modified Curl-Up ─────────────────────────────────────────────────
+
+    def save_modified_curl_up(
+        self,
+        session_id: int,
+        reps: int,
+        duration_sec: float = None,
+        end_reason: str = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO modified_curl_up (session_id, reps,
+                        duration_sec, end_reason, rating)
+                   VALUES (?,?,?,?,?)""",
+                (session_id, reps, duration_sec, end_reason, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -872,6 +910,7 @@ class GoForFitDB:
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press",
+        "modified_curl_up",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:
