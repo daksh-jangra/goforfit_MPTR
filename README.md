@@ -34,15 +34,13 @@ goforfit_MPTR/
 ├── requirements.txt              ← Python dependencies
 ├── app.py                        ← FastAPI server: test registry, routes, engine control
 ├── db.py                         ← SQLite schema + queries (one table per test)
-├── backup-*-app.py               ← Dated snapshots of app.py
 │
 ├── templates/                    ← The coach's screens
 │   ├── index.html                ← Home: test categories
 │   ├── screen2.html              ← Test list for a category
 │   ├── screen3.html              ← Student picker, manual entry, dashboard sync
 │   ├── screen4.html              ← Live camera view with on-screen controls
-│   ├── results.html              ← Saved results, per test
-│   └── backup_*-screen4.html     ← Dated snapshots of screen4
+│   └── results.html              ← Saved results, per test
 │
 └── tests/                        ← Camera engines and per-test logic
     ├── web_engines.py            ← Browser-camera engines for single-camera tests
