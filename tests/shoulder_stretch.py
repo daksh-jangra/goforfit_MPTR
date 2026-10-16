@@ -1089,6 +1089,12 @@ def draw_panel(img, x1, y1, x2, y2, colour=C_DARK, alpha=0.65):
     cv2.addWeighted(ov, alpha, img, 1 - alpha, 0, img)
 
 
+def _ascii(txt):
+    """cv2.putText draws ASCII only; anything else shows as '???'."""
+    return (str(txt).replace("—", "-").replace("–", "-")
+            .replace("≤", "<=").encode("ascii", "replace").decode("ascii"))
+
+
 def draw_hand_skeleton(frame, hand_lms_list, colour=(200, 200, 200)):
     """Hand skeletons straight onto the BGR frame with OpenCV — the legacy
     mediapipe.solutions drawing helpers are deliberately never imported."""
