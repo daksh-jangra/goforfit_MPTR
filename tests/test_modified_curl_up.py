@@ -329,16 +329,58 @@ def check_shaky_fingertip_is_not_a_second_reach():
         assert test.not_counted["not_down"] == 0, (seed, test.not_counted)
 
 
+def short_of(deg):
+    """Readings for lying back only `deg` short of flat: with straight arms
+    the hands stop short too, in step with the trunk. (Bending the elbows
+    to bring the hands back while the shoulders stay up is the coach's
+    call.)"""
+    frac = deg / (UP - LYING)
+    return dict(lying=LYING + deg, rest=REST + (TOP_REACH - REST) * frac)
+
+
 def check_lying_level_does_not_creep():
     # Lies back only 5 deg short every time: counts (within 6 deg), and the
     # lying level stays where it was learned...
     test, t = started()
-    t = run(test, reps(4, lying=LYING + 5.0), t0=t)
+    t = run(test, reps(4, **short_of(5.0)), t0=t)
     assert test.count == 4, test.count
     assert abs(test.lying_ref - LYING) < 0.5, test.lying_ref
     # ...so stopping 10 deg short is never "back down".
-    run(test, reps(3, lying=LYING + 10.0), t0=t)
+    run(test, reps(3, **short_of(10.0)), t0=t)
     assert test.count == 4, test.count
+
+
+def check_wrong_low_lying_level_recovers():
+    # The trunk reads too LOW for a second or two while lying (hips lifted
+    # to shift on the mat, someone leaning across). That lowest reading used
+    # to stick as the lying level, no real lie-down looked flat enough
+    # again, and nothing more counted. A still pause with the hands back at
+    # rest now re-learns it.
+    for off in (6.0, 10.0, 15.0, 22.0):
+        for period in (3.0, 5.0):
+            # While settling, before START.
+            test = mcu.ModifiedCurlUpTest()
+            t = run(test, [(1.0, hold()), (1.5, hold(trunk=LYING - off)), (1.0, hold())])
+            test.start(now=t)
+            run(test, reps(5, period=period) + [(1.0, hold())], t0=t, jitter=1.5)
+            assert test.count == 5, (off, period, test.count, test.not_counted)
+            assert abs(test.lying_ref - LYING) < 2.0, (off, period, test.lying_ref)
+    # The same in the middle of a test.
+    test, t = started()
+    t = run(test, reps(3), t0=t)
+    t = run(test, [(1.5, hold(trunk=LYING - 12.0)), (1.0, hold())], t0=t)
+    run(test, reps(4) + [(1.0, hold())], t0=t)
+    assert test.count == 7, (test.count, test.not_counted)
+
+
+def check_bobbing_near_the_top_is_not_lying_down():
+    # Never lies down: bobs between the top and 12 deg up, pausing at the
+    # bottom of each bob. The hands stay forward, so the pause is not
+    # "lying down" - only the final real lie-down counts.
+    test, t = started()
+    bob = short_of(12.0)
+    run(test, reps(4, period=4.0, **bob), t0=t)
+    assert test.count == 0, (test.count, test.not_counted)
 
 
 def check_camera_roll_and_distance():
