@@ -50,7 +50,8 @@ What the camera checks (owner's choices, 2026-10-15)
   "Not counted - <why>".
   Coming back down without reaching is "fingertips didn't reach the knees";
   reaching, sliding the hands at least halfway back (REBOUND_FRAC) and
-  reaching again without lying down is "didn't lie back down".
+  reaching again - clearly forward again, REBOUND_HYST from their lowest -
+  without lying down is "didn't lie back down".
 
   While a curl-up is under way the floor line is the one learned lying
   down, frozen: a lifting heel would tilt the live hip-heel line, hiding
@@ -135,6 +136,8 @@ SLIDE_MIN       = 0.12   # ...and slid at least this far from where it rested
                          # (the protocol's ~10 cm is ~0.25-0.3 of a child's thigh)
 REBOUND_FRAC    = 0.5    # hands slid back this share of the way to rest, then
                          # reach again without lying down = "didn't lie back down"
+REBOUND_HYST    = 0.10   # ...and came forward again at least this far from
+                         # their lowest (one shaky fingertip is not a re-reach)
 REST_FALLBACK   = 0.65   # fingertip rest before one is learned (~10 cm short)
 FOOT_LIFT       = 0.15   # heel AND toe this far above rest (thigh lengths,
                          # ~5 cm) = the foot left the floor
@@ -345,6 +348,7 @@ class ModifiedCurlUpTest:
         self._rest = deque()        # (t, smoothed readings) while lying
         self._feet_t = 0.0          # feet-off-the-floor time this curl-up
         self._slid_back = False     # hands slid back since reaching
+        self._low = None            # ...and the lowest they went since
         self.peak_reach = None      # furthest fingertip this curl-up
         self.status_msg = "Press START when ready"
 
@@ -399,6 +403,7 @@ class ModifiedCurlUpTest:
     def _clear_rep(self):
         self._feet_t = 0.0
         self._slid_back = False
+        self._low = None
         self.peak_reach = None
 
     # ── per frame ───────────────────────────────────────────────────────
@@ -552,6 +557,7 @@ class ModifiedCurlUpTest:
             if self._reached(m):
                 self.phase = PH_REACHED
                 self._slid_back = False
+                self._low = None
             elif self._is_down(m):
                 self._enter_down(m, now)
                 return self._reject("short", counting)
@@ -570,9 +576,17 @@ class ModifiedCurlUpTest:
         rest = REST_FALLBACK if self.rest_reach is None else self.rest_reach
         if m["reach"] <= rest + REBOUND_FRAC * (self.peak_reach - rest):
             self._slid_back = True
-        elif self._slid_back and self._reached(m):
+        if self._slid_back:
+            self._low = m["reach"] if self._low is None else min(self._low, m["reach"])
+        if (self._slid_back and self._reached(m)
+                and m["reach"] >= self._low + REBOUND_HYST):
             # Slid the hands back and reached again without lying down: that
-            # one never returned. The next one starts at this reach.
+            # one never returned. The next one starts at this reach. The
+            # hands must come clearly forward again from their lowest - a
+            # shaky fingertip on the way down bobbing back over the knee
+            # line is not a second reach (it used to read as one, and the
+            # reject wiped that curl-up's feet record, so a feet-off
+            # curl-up could be counted).
             self._clear_rep()
             self.peak_reach = m["reach"]
             return self._reject("not_down", counting)

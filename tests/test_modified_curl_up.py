@@ -309,6 +309,26 @@ def check_not_lying_back_down():
     assert test.count == 1, test.count
 
 
+def check_shaky_fingertip_is_not_a_second_reach():
+    # The fingertip point wobbles while the student lies back down. A bob
+    # back over the knee line used to read as a second reach ("didn't lie
+    # back down"), and that reject wiped the curl-up's feet record - so a
+    # curl-up with the feet off the floor could be counted.
+    for seed in range(10):
+        rnd = random.Random(seed)
+        test, t = started()
+        def fn(tt, period=4.0):
+            u = rep_u(tt % period, period)
+            c = curl(u)
+            lift = 0.35 * u if (tt // period) % 2 == 0 else 0.0   # every other one: feet off
+            p = body(trunk=c["trunk"], reach=c["reach"], heel_up=lift, toe_up=lift)
+            p[L]["index"] = p[L]["index"] + np.array([rnd.uniform(-7, 7), rnd.uniform(-7, 7)])
+            return p
+        run(test, [(24.0, fn)], t0=t, seed=seed)
+        assert test.count == 3 and test.not_counted["feet"] == 3, (seed, test.count, test.not_counted)
+        assert test.not_counted["not_down"] == 0, (seed, test.not_counted)
+
+
 def check_lying_level_does_not_creep():
     # Lies back only 5 deg short every time: counts (within 6 deg), and the
     # lying level stays where it was learned...
