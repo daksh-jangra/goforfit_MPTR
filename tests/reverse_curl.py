@@ -279,12 +279,13 @@ class ReverseCurlTracker:
     """
 
     def __init__(self, up_angle=UP_ANGLE_DEG, hold_s=HOLD_S,
-                 rest_min=REST_MIN_DEG, move_delta=MOVE_DELTA_DEG,
-                 return_tol=RETURN_TOL_DEG, settle_s=REST_SETTLE_S,
-                 rest_band=REST_BAND_DEG):
+                 rest_min=REST_MIN_DEG, rest_max=REST_MAX_DEG,
+                 move_delta=MOVE_DELTA_DEG, return_tol=RETURN_TOL_DEG,
+                 settle_s=REST_SETTLE_S, rest_band=REST_BAND_DEG):
         self.up_angle = float(up_angle)
         self.hold_s = float(hold_s)
         self.rest_min = float(rest_min)
+        self.rest_max = float(rest_max)
         self.move_delta = float(move_delta)
         self.return_tol = float(return_tol)
         self.settle_s = float(settle_s)
@@ -465,7 +466,7 @@ class ReverseCurlTracker:
                 self.status_msg = (f"Open the elbow past {self.rest_min:.0f} deg "
                                    f"— rest the weight on the thigh")
             return
-        if angle > REST_MAX_DEG:
+        if angle > self.rest_max:
             # Arm hanging at the side — or, filmed from the FRONT, a forearm
             # resting along the thigh points at the lens and reads nearly
             # straight (the manual's own front-view photo reads 168 deg).
@@ -488,7 +489,7 @@ class ReverseCurlTracker:
         """Feed one angle into a stillness window. True once the elbow has sat
         inside the resting range (hand on the thigh), within `band`, for
         `settle_s`. Leaving the range empties the window."""
-        if not (self.rest_min <= angle <= REST_MAX_DEG):
+        if not (self.rest_min <= angle <= self.rest_max):
             buf.clear()
             return False
         buf.append((now, angle))
@@ -513,7 +514,7 @@ class ReverseCurlTracker:
             return
         self._settle.clear()
         self.peak_deg = None
-        if deg is None or not (self.rest_min <= deg <= REST_MAX_DEG):
+        if deg is None or not (self.rest_min <= deg <= self.rest_max):
             self.baseline_deg = None
             self.state = State.READY
             self.status_msg = "Rest the weight on the thigh and hold still"
@@ -584,7 +585,7 @@ class ReverseCurlTracker:
         now = self._now if self._now is not None else time.time()
         if (self.state == State.LOWERING and self.angle_deg is not None
                 and self.baseline_deg is not None
-                and self.rest_min <= self.angle_deg <= REST_MAX_DEG
+                and self.rest_min <= self.angle_deg <= self.rest_max
                 and self.angle_deg >= self.baseline_deg - ATTEMPT_MIN_DEG):
             # "Back down" is measured against THIS participant's own rest
             # angle, not the bottom of the resting range. Taking the range's

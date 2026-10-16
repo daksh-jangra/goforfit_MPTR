@@ -359,6 +359,43 @@ def test_hanging_arm_is_never_taken_as_rest():
     assert abs(tr.baseline_deg - REST) < 2, f"rest {tr.baseline_deg}, want the thigh ~{REST}"
 
 
+def test_both_ends_of_the_resting_range_can_be_moved():
+    # Both ends of the accepted start position are knobs, not just the lower
+    # one. A student who sits with the forearm flat along the thigh can read
+    # much more open than the default 130; widening the range must let that
+    # start count, and the default must still refuse it.
+    strange_rest = 150.0
+    tight = rc.ReverseCurlTracker()
+    feed(tight, [(2.0, strange_rest)], 20)
+    assert tight.baseline_deg is None, "the default range accepted a straight arm"
+
+    wide = rc.ReverseCurlTracker(rest_max=160.0)
+    t, _ = feed(wide, [(2.0, strange_rest)], 20)
+    assert wide.baseline_deg is not None, "rest_max=160 still refused a 150 deg start"
+    feed(wide, [(0.3, 120.0), (0.2, 80.0), (2.4, UP),
+                (0.3, 90.0), (0.6, strange_rest)], 20, t0=t)
+    assert wide.state is rc.State.PASSED, f"state {wide.state}"
+
+    # The arm-switch handover reads the same range...
+    handover = rc.ReverseCurlTracker(rest_max=160.0)
+    handover.adopt_baseline(strange_rest)
+    assert handover.state is rc.State.SET, f"handover refused a {strange_rest:.0f} deg rest"
+
+    # ...and so does a Stop pressed just after the weight is back down. 133
+    # is on the thigh but not yet near enough to 150 to pass on its own, so
+    # the verdict really does come from Stop.
+    stopped = rc.ReverseCurlTracker(rest_max=160.0)
+    feed(stopped, [(2.0, strange_rest), (0.3, 120.0), (2.4, UP),
+                   (0.3, 90.0), (0.3, 133.0)], 20)
+    assert stopped.state is rc.State.LOWERING, stopped.state
+    assert stopped.finish()["passed"], "Stop refused a finished curl at a wide rest angle"
+
+    # ...and the lower end still works the same way.
+    low = rc.ReverseCurlTracker(rest_min=60.0)
+    feed(low, [(2.0, 65.0)], 20)
+    assert low.baseline_deg is not None, "rest_min=60 refused a 65 deg start"
+
+
 def test_hanging_first_then_a_perfect_curl_passes():
     tr = rc.ReverseCurlTracker()
     t, _ = feed(tr, [(1.0, 170.0)], 20)
