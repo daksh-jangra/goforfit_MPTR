@@ -57,6 +57,20 @@ What the camera checks (owner's choices, 2026-10-15)
   down, frozen: a lifting heel would tilt the live hip-heel line, hiding
   its own lift and inflating the trunk angle.
 
+  The lying level is the lowest steady reading seen, so a lie-down that
+  stops short can't creep it upward rep by rep. But a reading that was
+  wrongly low for a second (hips lifted to shift on the mat, someone
+  leaning across) would then stick, and no real lie-down would look flat
+  enough again - nothing more would count. So a STILL PAUSE between
+  curl-ups (PAUSE_S, trunk within PAUSE_STILL_DEG, at least RISE_DEG below
+  the curl-up's top) with the FINGERTIPS BACK AT REST (REST_REACH_TOL) is
+  lying down too, and re-learns the lying level from that pause. Pausing
+  partway up doesn't qualify: the hands are still forward. (Waiting for
+  the student to lie down - before the first curl-up, after START - the
+  same still pause with the hands at rest counts as lying.) "At rest" is
+  against the lowest the hands rested this trial, so lie-downs that stop a
+  little shorter each time can't walk it (and the lying level) upward.
+
   The rest position is measured while the student is genuinely lying -
   not where the hands are when the curl starts (by then they've moved).
   Only the trunk rising starts an attempt: straightening bent arms while
@@ -138,6 +152,10 @@ REBOUND_FRAC    = 0.5    # hands slid back this share of the way to rest, then
                          # reach again without lying down = "didn't lie back down"
 REBOUND_HYST    = 0.10   # ...and came forward again at least this far from
                          # their lowest (one shaky fingertip is not a re-reach)
+PAUSE_S         = 0.4    # still this long between curl-ups...
+PAUSE_STILL_DEG = 4.0    # ...trunk within this, RISE_DEG below the curl-up's top,
+REST_REACH_TOL  = 0.07   # ...and fingertips back within this of their rest
+                         # = lying down, whatever the learned lying level says
 REST_FALLBACK   = 0.65   # fingertip rest before one is learned (~10 cm short)
 FOOT_LIFT       = 0.15   # heel AND toe this far above rest (thigh lengths,
                          # ~5 cm) = the foot left the floor
@@ -343,6 +361,7 @@ class ModifiedCurlUpTest:
         # fingertip rests, where the foot rests.
         self.lying_ref = None
         self.rest_reach = None
+        self.rest_reach_low = None  # the lowest the hands rested this trial
         self.rest_feet = {}         # "heel_left" etc. -> rest height
         self.floor_d = None         # the floor direction while lying
         self._rest = deque()        # (t, smoothed readings) while lying
@@ -350,6 +369,8 @@ class ModifiedCurlUpTest:
         self._slid_back = False     # hands slid back since reaching
         self._low = None            # ...and the lowest they went since
         self.peak_reach = None      # furthest fingertip this curl-up
+        self.peak_trunk = None      # highest trunk this curl-up
+        self._pause = deque()       # (t, trunk) during a curl-up, for still pauses
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -405,6 +426,7 @@ class ModifiedCurlUpTest:
         self._slid_back = False
         self._low = None
         self.peak_reach = None
+        self.peak_trunk = None
 
     # ── per frame ───────────────────────────────────────────────────────
     def _pick(self, pts):
@@ -436,8 +458,10 @@ class ModifiedCurlUpTest:
         raw = self._pick(pts) if pts else None
         if raw is None:
             # Not seen. The phase is kept - the body is still wherever it
-            # was - but stale frames must not blend into the next reading.
+            # was - but stale frames must not blend into the next reading,
+            # nor count toward a still pause.
             self._sm.reset()
+            self._pause.clear()
             self.m = None
             return None
         m = self._sm.push(raw)
@@ -482,6 +506,8 @@ class ModifiedCurlUpTest:
                 self.lying_ref = level
         # Where the hands rest: the low end (most lying-down) of the window.
         self.rest_reach = float(np.percentile([r[1]["reach"] for r in self._rest], 25))
+        if self.rest_reach_low is None or self.rest_reach < self.rest_reach_low:
+            self.rest_reach_low = self.rest_reach
         self.floor_d = _unit(np.median([r[1]["floor_d"] for r in self._rest], axis=0))
         for k in MedianSmoother.OPT:
             vals = [r[1][k] for r in self._rest if r[1][k] is not None]
@@ -510,6 +536,25 @@ class ModifiedCurlUpTest:
             return m["trunk"] <= LYING_MAX_DEG
         return m["trunk"] <= self.lying_ref + RETURN_DEG
 
+    def _settled(self, m, now, below_top=True):
+        """Lying still between curl-ups with the hands back at rest - down,
+        even if the learned lying level is wrong. Returns the level to
+        re-learn, or None. below_top: the pause must also be RISE_DEG below
+        this curl-up's top (not asked while waiting to see the student lie
+        down, when there is no curl-up yet)."""
+        self._pause.append((now, m["trunk"]))
+        while len(self._pause) >= 2 and self._pause[1][0] <= now - PAUSE_S + 1e-9:
+            self._pause.popleft()
+        if now - self._pause[0][0] < PAUSE_S - 1e-9 or self.rest_reach_low is None:
+            return None
+        trunk = [p[1] for p in self._pause]
+        level = float(np.median(trunk))
+        if (max(trunk) - min(trunk) <= PAUSE_STILL_DEG
+                and (not below_top or level <= self.peak_trunk - RISE_DEG)
+                and m["reach"] <= self.rest_reach_low + REST_REACH_TOL):
+            return level
+        return None
+
     def _reached(self, m):
         return (m["reach"] >= REACH_MIN
                 and (self.rest_reach is None or m["reach"] - self.rest_reach >= SLIDE_MIN))
@@ -523,6 +568,7 @@ class ModifiedCurlUpTest:
             # under way is dropped.
             self.phase = PH_UNKNOWN
             self._rest.clear()
+            self._pause.clear()
             self._clear_rep()
             self.problem = "Lie on your back on the mat, side-on to the camera"
             return None
@@ -531,10 +577,9 @@ class ModifiedCurlUpTest:
                         else "Feet not in view - the coach watches them")
 
         if self.phase == PH_UNKNOWN:
-            if self._is_down(m):
-                self.phase = PH_DOWN
-                self._rest.clear()
-                self._learn_rest(m, now)
+            settled = self._settled(m, now, below_top=False)
+            if self._is_down(m) or settled is not None:
+                self._enter_down(m, now, settled)
             return None
 
         if self.phase == PH_DOWN:
@@ -545,6 +590,7 @@ class ModifiedCurlUpTest:
             # The trunk is coming up: a new curl-up. Its faults start here,
             # measured against the rest just learned.
             self._rest.clear()
+            self._pause.clear()
             self._clear_rep()
             self.phase = PH_RISING
 
@@ -552,20 +598,22 @@ class ModifiedCurlUpTest:
         if self.feet_up:
             self._feet_t += dt
         self.peak_reach = m["reach"] if self.peak_reach is None else max(self.peak_reach, m["reach"])
+        self.peak_trunk = m["trunk"] if self.peak_trunk is None else max(self.peak_trunk, m["trunk"])
+        settled = self._settled(m, now)
 
         if self.phase == PH_RISING:
             if self._reached(m):
                 self.phase = PH_REACHED
                 self._slid_back = False
                 self._low = None
-            elif self._is_down(m):
-                self._enter_down(m, now)
+            elif self._is_down(m) or settled is not None:
+                self._enter_down(m, now, settled)
                 return self._reject("short", counting)
             return None
 
         # PH_REACHED
-        if self._is_down(m):
-            self._enter_down(m, now)
+        if self._is_down(m) or settled is not None:
+            self._enter_down(m, now, settled)
             if not counting:
                 return None
             if self._feet_t >= FAULT_MIN_S - 1e-9:
@@ -592,7 +640,11 @@ class ModifiedCurlUpTest:
             return self._reject("not_down", counting)
         return None
 
-    def _enter_down(self, m, now):
+    def _enter_down(self, m, now, settled=None):
+        if settled is not None and not self._is_down(m):
+            # Lying still with the hands back, but above the learned level:
+            # that level was wrong. Take this one.
+            self.lying_ref = settled
         self.phase = PH_DOWN
         self._rest.clear()
         self._learn_rest(m, now)
