@@ -728,10 +728,12 @@ TESTS = {
         ],
         "tip": (
             "Camera on the floor or just above it, SIDE-ON to the participant, "
-            "1.5-2.5 m away, with the whole body from the head to the FEET in "
-            "frame \u2014 the feet matter, the camera checks they stay on the "
-            "floor. Let the student lie still for a second before START so the "
-            "camera learns where the hands rest. A tester holding the kneecaps "
+            "about 1.5-2 m away, with the whole body from the head to the FEET in "
+            "frame and the student filling most of the picture's width \u2014 the "
+            "screen says if the camera is too far back. The feet matter: the "
+            "camera checks they stay on the floor. Let the student lie still for "
+            "a second before START so the camera learns where the hands rest. "
+            "A tester holding the kneecaps "
             "kneels on the far side, behind the legs, not between the camera "
             "and the student. Turn the phone's sound up for the beep."
         ),

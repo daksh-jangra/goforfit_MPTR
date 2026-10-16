@@ -49,7 +49,7 @@ TOP_REACH = 1.0              # fingertip at the kneecap
 # ── body model: side-on points for a pose ───────────────────────────────────────
 def body(trunk=LYING, reach=REST, heel_up=0.0, toe_up=0.0, roll=0.0,
          head_right=True, scale=1.0, far_foot=True, near_foot=True, far_heel_up=None,
-         far_toe_up=None, standing=False):
+         far_toe_up=None, standing=False, frame_w=640.0):
     """read_points()-shaped dict for a student lying side-on, the LEFT side
     nearest the camera. Lengths in thigh units, trunk in degrees above the
     hip-heel line, roll = camera roll (degrees)."""
@@ -89,6 +89,7 @@ def body(trunk=LYING, reach=REST, heel_up=0.0, toe_up=0.0, roll=0.0,
     out = {L: {k: to_img(v) for k, v in near.items()},
            R: {k: to_img(v) for k, v in far.items()}}
     out[L]["vis"], out[R]["vis"] = 0.95, 0.70
+    out["frame_w"] = frame_w
     out[R]["index"] = None                      # far hand hidden behind the thighs
     if not near_foot:
         out[L]["heel"] = out[L]["toe"] = None
@@ -118,10 +119,11 @@ def run(test, segments, fps=20, t0=0.0, jitter=0.0, spike_p=0.0, drop_p=0.0, see
         for i in range(n):
             pts = fn(i * dt)
             if pts is not None and (jitter or spike_p):
-                pts = {sd: {k: (v if k == "vis" or v is None
-                                else v + np.array([rnd.uniform(-jitter, jitter),
-                                                   rnd.uniform(-jitter, jitter)]))
-                            for k, v in p.items()} for sd, p in pts.items()}
+                pts = {sd: ({k: (v if k == "vis" or v is None
+                                 else v + np.array([rnd.uniform(-jitter, jitter),
+                                                    rnd.uniform(-jitter, jitter)]))
+                             for k, v in p.items()} if isinstance(p, dict) else p)
+                       for sd, p in pts.items()}
                 if spike_p and rnd.random() < spike_p:
                     k = rnd.choice(["shoulder", "index", "heel", "toe", "knee"])
                     pts[L][k] = pts[L][k] + np.array([rnd.uniform(-60, 60), rnd.uniform(-60, 60)])
@@ -451,6 +453,25 @@ def check_side_switch_keeps_counting():
         return p
     run(test, [(6.0, far_clear)], t0=t)
     assert test.count == 4, (test.count, test.not_counted)
+
+
+def check_camera_too_far_warns_without_touching_the_count():
+    # 120 px thigh in a 640 px picture (0.19): no warning.
+    test, t = started()
+    assert not test.too_small and test.problem is None, test.problem
+    # 60 px (0.09): warned before START, and the count is untouched.
+    test, t = started(scale=0.5)
+    assert test.too_small and "move the camera closer" in test.problem, test.problem
+    run(test, reps(5, scale=0.5), t0=t)
+    assert test.count == 5, test.count
+    # Moved closer: clears once over SMALL_OFF, not on a single frame.
+    t = run(test, [(0.2, hold(scale=0.85))], t0=test._last_t + 0.05)
+    assert test.too_small
+    run(test, [(1.5, hold(scale=0.85))], t0=t)
+    assert not test.too_small and test.problem is None, test.problem
+    # Hovering at the line (0.115 = between ON and OFF) doesn't flicker.
+    test, t = started(scale=0.115 * 640 / THIGH)
+    assert not test.too_small
 
 
 def check_stop_and_reset():

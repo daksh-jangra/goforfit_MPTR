@@ -113,7 +113,15 @@ Usage
 Camera placement
 ----------------
   Phone on the floor (or just above it), SIDE-ON to the participant,
-  1.5-2.5 m away, with the whole body from the head to the feet in frame.
+  about 1.5-2 m away, with the whole body from the head to the feet in
+  frame and the student filling most of the picture's width.
+
+  Too far back, the student is a small patch of the picture and the pose
+  points' few pixels of wobble become a big share of a thigh: false "not
+  counted" messages, and now and then a test that doesn't end by itself.
+  So the screen says "move the camera closer" while the thigh is under
+  SMALL_ON of the picture width (~70 px at 640, a child's thigh at ~2.5 m).
+  It never changes the count.
 """
 
 import argparse
@@ -164,6 +172,9 @@ FLOOR_TILT_MAX_DEG = 35.0  # hip-heel line flatter than this = lying on the mat
 REST_WINDOW_S   = 1.0    # rest position = the last second spent lying...
 REST_MIN_S      = 0.25   # ...once at least this much of it has been seen
 REF_STILL_DEG   = 6.0    # a lying second this steady may set the lying level
+SMALL_ON        = 0.11   # thigh under this share of the picture width (median
+SMALL_OFF       = 0.12   # of SIZE_S) = too far back; warning clears above OFF
+SIZE_S          = 1.0
 MAX_FRAME_DT    = 0.5    # most one frame may add to any clock (Wi-Fi gaps)
 SIDE_SWITCH_VIS = 0.10   # the other side must be this much clearer to switch
 
@@ -230,8 +241,9 @@ def read_points(lms, w, h):
     """{side: {name: pixel point or None}} for every point the test uses;
     a point is None when unclear or outside the picture (MediaPipe still
     returns a confident-looking guess for joints off the edge). "vis" is the
-    side's mean visibility over its CORE points."""
-    out = {}
+    side's mean visibility over its CORE points; "frame_w" is the picture
+    width, for the camera-too-far check."""
+    out = {"frame_w": float(w)}
     for sd in SIDES:
         idx = SIDE_IDX[sd]
         pts = {name: (lm_px(lms, i, w, h) if _clear(lms[i]) else None)
@@ -288,6 +300,8 @@ def measure(pts, side, floor_d=None):
         "floor_tilt": math.degrees(math.atan2(abs(cur_d[1]), abs(cur_d[0]))),
         "floor_d": cur_d,
         "vis": p["vis"],
+        # Thigh as a share of the picture width (None without the width).
+        "size": thigh / pts["frame_w"] if pts.get("frame_w") else None,
     }
     # Each foot on its own: heel and toe height, or None when unclear.
     for sd in SIDES:
@@ -357,6 +371,8 @@ class ModifiedCurlUpTest:
         self.feet_seen = False      # a foot clear enough to check this frame
         self.feet_up = False        # ...and off the floor right now
         self.problem = None         # what is wrong right now, for the screen
+        self.too_small = False      # student small in the picture: camera too far
+        self._size = deque()        # (t, thigh share of the picture width)
         # Learned while lying still: the lying trunk level, where the
         # fingertip rests, where the foot rests.
         self.lying_ref = None
@@ -464,6 +480,7 @@ class ModifiedCurlUpTest:
             self._pause.clear()
             self.m = None
             return None
+        self._check_size(raw, now)
         m = self._sm.push(raw)
         if not self._sm.full:
             # Just (re)found: one wild frame would decide on its own.
@@ -488,6 +505,21 @@ class ModifiedCurlUpTest:
             self.status_msg = f"No curl-up for {self.gap_s:.0f} s - test over"
             return END_GAP
         return None
+
+    def _check_size(self, raw, now):
+        """Camera too far back? The thigh's share of the picture width over
+        the last SIZE_S, with a gap between on and off so it doesn't
+        flicker. Thigh length doesn't change while curling side-on."""
+        if raw.get("size") is None:
+            return
+        self._size.append((now, raw["size"]))
+        while self._size and now - self._size[0][0] > SIZE_S:
+            self._size.popleft()
+        size = float(np.median([v for _, v in self._size]))
+        if size < SMALL_ON:
+            self.too_small = True
+        elif size > SMALL_OFF:
+            self.too_small = False
 
     def _learn_rest(self, m, now):
         """While lying: the lying level, the fingertip's and the foot's rest."""
@@ -573,6 +605,7 @@ class ModifiedCurlUpTest:
             self.problem = "Lie on your back on the mat, side-on to the camera"
             return None
         self.problem = ("Feet off the floor - keep them flat" if self.feet_up
+                        else "Student too small - move the camera closer" if self.too_small
                         else None if self.feet_seen
                         else "Feet not in view - the coach watches them")
 
@@ -796,7 +829,7 @@ def main():
     if not live and not (1.0 <= clip_fps <= 240.0):
         clip_fps = 30.0
 
-    print("[INFO] Side-on camera at floor level, head to feet in frame. "
+    print("[INFO] Side-on camera at floor level, ~1.5-2 m, head to feet in frame. "
           "SPACE = start, R = reset, Q = quit (no cadence beep here)\n")
 
     test = ModifiedCurlUpTest()
