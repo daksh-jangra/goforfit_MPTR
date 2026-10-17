@@ -1146,10 +1146,28 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
         y += dy
 
     line(f"SHOULDER STRETCH  [{st.name}]", colour, 0.68, 30)
-    def mark(sd):
-        return "DONE" if tracker.side_done(sd) else "...."
-    line(f"Both sides needed:  R {mark(SIDE_RIGHT)}   L {mark(SIDE_LEFT)}"
-         f"    now: {side or '--'}")
+    # Each side carries its own verdict, so the words are drawn one at a time:
+    # line() paints a whole string in a single colour, and R and L need
+    # different ones. "...." only while the trial is still running — once it
+    # is over, a side that was never banked is a FAIL.
+    def side_word(sd):
+        if tracker.side_done(sd):
+            return "PASS", C_OK
+        if tracker.resolved:
+            return "FAIL", C_BAD
+        return "....", C_TEXT
+
+    r_word, r_col = side_word(SIDE_RIGHT)
+    l_word, l_col = side_word(SIDE_LEFT)
+    x = 24
+    for seg, seg_col in (("Both sides needed:  R ", C_TEXT), (r_word, r_col),
+                         ("   L ", C_TEXT), (l_word, l_col),
+                         (f"    now: {side or '--'}", C_TEXT)):
+        seg = _ascii(seg)
+        cv2.putText(frame, seg, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    seg_col, 2, cv2.LINE_AA)
+        x += cv2.getTextSize(seg, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0][0]
+    y += 26
     if ratio is not None:
         line(f"Gap: {ratio:.2f} palm",
              C_OK if ratio <= tracker.pass_ratio else C_TEXT)
@@ -1170,14 +1188,6 @@ def draw_hud(frame, tracker, side=None, ratio=None, tip_pts=None):
         cv2.putText(frame, _ascii(tracker.status_msg), (24, h - 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.58, C_TEXT, 2, cv2.LINE_AA)
 
-    if tracker.resolved:
-        verdict = "PASS" if tracker.passed else "FAIL"
-        vcol = C_OK if tracker.passed else C_BAD
-        size = cv2.getTextSize(verdict, cv2.FONT_HERSHEY_SIMPLEX, 2.2, 5)[0]
-        org = ((w - size[0]) // 2, (h + size[1]) // 2)
-        draw_panel(frame, org[0] - 30, org[1] - size[1] - 24,
-                   org[0] + size[0] + 30, org[1] + 24, C_DARK, 0.72)
-        cv2.putText(frame, verdict, org, cv2.FONT_HERSHEY_SIMPLEX, 2.2, vcol, 5, cv2.LINE_AA)
     return frame
 
 
