@@ -561,7 +561,7 @@
               frameUrl:   '/api/shoulder_stretch/frame',
               // The camera films the participant from BEHIND (the hands meet
               // between the shoulder blades), so on a phone this is the back
-              // lens — which is also the un-mirrored one, and mirroring would
+              // lens - which is also the un-mirrored one, and mirroring would
               // swap the RIGHT/LEFT trial label.
               preferBackCamera: true,
               // Nothing to calibrate: the fingertip gap is measured against the
@@ -596,13 +596,13 @@
                       lines.push(`${state.trial_cap_s}s starts at the first attempt`);
                   }
                   if (state.gap_ratio !== null && state.gap_ratio !== undefined) {
-                      // The gap is measured in palm lengths, not centimetres —
+                      // The gap is measured in palm lengths, not centimetres -
                       // saying so stops the number being read as a distance.
                       lines.push(`Gap: ${state.gap_ratio} palm (touch ≤ ${state.threshold_ratio})`);
                   } else if (!state.pose_detected) {
                       lines.push('No participant detected');
                   } else {
-                      lines.push('Hands not both visible — film from behind, hands between the shoulder blades');
+                      lines.push('Hands not both visible - film from behind, hands between the shoulder blades');
                   }
                   lines.push(`Touch (this side): ${state.touch_frames} / ${state.required_frames} frames` +
                              (state.touch_pct > 0 ? `  (${state.touch_pct}%)` : ''));
@@ -616,7 +616,7 @@
                   return lines;
               },
               syncFields(state) {
-                  // Only sync a decided trial — an in-progress one is not a
+                  // Only sync a decided trial - an in-progress one is not a
                   // verdict, and screen3 would show it as a staged Fail.
                   // Same shape as the confirmed BMI/Wingspan sync: one numeric
                   // <camel>Score and nothing else (1 = pass, 0 = fail). A readable

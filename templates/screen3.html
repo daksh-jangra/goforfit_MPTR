@@ -667,7 +667,7 @@
                         ? `AI verdict: <span class="font-semibold text-indigo-950">${passFailLabel(passed)}</span>${detail}` +
                           (locked ? ' — decided by the camera.' : ' — change above if it looks wrong.')
                         : notCompleted
-                            ? '<span class="font-semibold text-amber-700">Not completed</span> — the camera didn\'t see a real attempt. Run the test again.'
+                            ? '<span class="font-semibold text-amber-700">Not completed</span> - the camera didn\'t see a real attempt. Run the test again.'
                             : locked
                                 ? '<span class="text-gray-400">No result yet. Use Switch to AI — the camera decides this test.</span>'
                                 : '<span class="text-gray-400">No AI verdict staged. Choose Pass or Fail below, or use Switch to AI.</span>';
@@ -758,7 +758,7 @@
                     if (input.value !== '0' && input.value !== '1') {
                         showSaveMessage(
                             (pendingResult && pendingResult.rating === 'Not completed')
-                                ? 'Not completed — nothing to save. Run the test again.'
+                                ? 'Not completed - nothing to save. Run the test again.'
                             : input.disabled
                                 ? 'No result yet — run the test first; the camera decides it.'
                                 : 'Choose Pass or Fail before saving.', false);
