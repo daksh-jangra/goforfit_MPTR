@@ -567,33 +567,36 @@ TESTS = {
     "shoulder_stretch": {
         "id":          "shoulder_stretch",
         "title":       "Shoulder Stretch",
-        "subtitle":    "Touch the fingertips behind the back \u2014 both sides in 15 s, pass/fail",
+        "subtitle":    "Touch the fingertips behind the back: both sides in 15 s, pass/fail",
         "icon":        "\U0001f932",
         "category":    "Musculoskeletal",
         "script":      "shoulder_stretch.py",
-        "description": (
-            "Upper-body flexibility of the shoulder girdle. One arm reaches over the "
-            "shoulder and down the back, the other reaches across and up the back, and "
-            "the participant tries to touch the fingertips together between the "
-            "shoulder blades. No equipment. BOTH sides must be done \u2014 right arm "
-            "over the right shoulder AND left arm over the left \u2014 inside ONE trial "
-            "of 15 seconds, which starts at the first real attempt (not when the "
-            "camera opens). The item is PASSED only if the fingers touch on BOTH "
-            "sides. The app measures the fingertip gap against the hand's own size, "
-            "names the arm from the hands and decides the verdict; the coach judges "
-            "that the reach is a genuine attempt."
-        ),
+        # A list here shows as numbered steps on screen3 instead of a paragraph.
+        "description": [
+            "This tests upper-body flexibility of the shoulders. No equipment is needed.",
+            "One arm reaches over the shoulder and down the back.",
+            "The other arm reaches across and up the back.",
+            "The student tries to touch the fingertips together between the shoulder blades.",
+            "Do BOTH sides in ONE trial: right arm over the right shoulder, then left "
+            "arm over the left.",
+            "The trial lasts 15 seconds. The clock starts at the first real attempt, "
+            "not when the camera opens.",
+            "The student PASSES only if the fingers touch on BOTH sides.",
+            "The app measures the gap between the fingertips, compared with the size "
+            "of the hand. It works out which arm is on top and decides pass or fail.",
+            "The coach checks that each reach is a genuine attempt.",
+        ],
         "controls": [
             ("RESET", "Start the trial over (clears both sides and the 15 s clock)"),
         ],
-        "tip": (
-            "Camera BEHIND the participant at upper-back height, 1.5-2 m away, with "
-            "the upper back, both shoulders and BOTH HANDS in frame. This is the only "
-            "test in the app shot from behind: the hands meet between the shoulder "
-            "blades, so a front view cannot see them at all and no trial will score. "
-            "Only the student should be in frame when the test starts \u2014 the camera "
-            "locks onto the one person it sees and will not start with two."
-        ),
+        "tip": [
+            "Put the camera BEHIND the student at upper-back height, 1.5 to 2 m away.",
+            "Keep the upper back, both shoulders and BOTH HANDS in frame.",
+            "This is the only test filmed from behind. From the front the hands "
+            "can't be seen, so no trial will score.",
+            "Only the student should be in frame when the test starts. The camera "
+            "locks onto one person and won't start if it sees two.",
+        ],
         # No pre-launch params and no side control: both sides are scored in
         # one trial and the arm is named per frame from the hands.
         "params": [],
