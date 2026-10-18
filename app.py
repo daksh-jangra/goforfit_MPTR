@@ -200,11 +200,12 @@ TESTS = {
         "icon":        "📏",
         "category":    "Anthropometry",
         "script":      "bmi__3_.py",
-        "description": (
-            "Estimates height from webcam using MediaPipe PoseLandmarker. "
-            "Calibrate once with a known height, then measure anyone instantly. "
-            "Outputs height in cm and calculates BMI when weight is provided."
-        ),
+        "description": [
+            "Calibrate once with a person of known height.",
+            "After that, anyone can be measured straight away.",
+            "The app estimates height from the camera and shows it in cm.",
+            "Enter the weight to get BMI as well.",
+        ],
         "controls": [
             ("SPACE", "Start 5-second scan"),
             ("C",     "Calibrate with known-height person"),
@@ -212,7 +213,11 @@ TESTS = {
             ("S",     "Save readings to CSV"),
             ("Q",     "Quit"),
         ],
-        "tip":    "Mount the camera level (pointing straight ahead) and stand with your whole body in the frame. Calibrate once with a known height — no distance measurement needed.",
+        "tip":    [
+            "Mount the camera level, pointing straight ahead.",
+            "Stand with the whole body in frame.",
+            "Calibrate once with a known height. No distance measurement is needed.",
+        ],
         "params": [],
         "unit":   "cm",
         "live_feed":   True,
@@ -224,11 +229,13 @@ TESTS = {
         "icon":        "🦅",
         "category":    "Anthropometry",
         "script":      "wingspan2.py",
-        "description": (
-            "Uses MediaPipe Hand + Pose landmarkers to measure arm span accurately. "
-            "Auto-downloads model files on first run. Calibrate for your distance, "
-            "then capture a 3-second median snapshot."
-        ),
+        "description": [
+            "Measures arm span from middle fingertip to middle fingertip, in cm.",
+            "The first run downloads the model files by itself.",
+            "Calibrate for the spot where the student will stand.",
+            "Capture a 3-second snapshot. The app uses the middle reading from those 3 "
+            "seconds.",
+        ],
         "controls": [
             ("C",     "Enter calibration mode"),
             ("M",     "Switch to measure mode"),
@@ -236,7 +243,11 @@ TESTS = {
             ("S",     "Save result to CSV"),
             ("Q",     "Quit"),
         ],
-        "tip":    "Extend both arms fully, palms forward, fingers spread. Calibrate once with a known wingspan — no distance measurement needed; just stand at the calibration spot.",
+        "tip":    [
+            "Extend both arms fully, palms forward, fingers spread.",
+            "Calibrate once with a known wingspan. No distance measurement is needed.",
+            "Stand on the same spot used for calibration.",
+        ],
         "params": [],
         "unit":   "cm",
         "live_feed":   True,
@@ -244,22 +255,26 @@ TESTS = {
     "curl_up": {
         "id":          "curl_up",
         "title":       "Partial Curl-Up Counter",
-        "subtitle":    "Timed abdominal strength test — 30 seconds",
+        "subtitle":    "Timed abdominal strength test: 30 seconds",
         "icon":        "🏋️",
         "category":    "Muscular Endurance",
         "script":      "parcurlup.py",
-        "description": (
-            "Counts partial curl-ups in 30 seconds using hip-angle analysis and "
-            "shoulder-rise detection. Full-screen display with live rep counter, "
-            "countdown timer, and session CSV export."
-        ),
+        "description": [
+            "Counts partial curl-ups for 30 seconds.",
+            "The app watches the hip angle and how far the shoulders rise.",
+            "The screen shows a live rep count and a countdown timer.",
+            "Results can be exported to a CSV file.",
+        ],
         "controls": [
             ("SPACE", "Start 30-second timer"),
             ("R",     "Reset counter"),
             ("F",     "Toggle fullscreen"),
             ("Q",     "Quit"),
         ],
-        "tip":    "Lie flat, knees bent ~90°. Camera should see you from the side.",
+        "tip":    [
+            "Lie flat with the knees bent about 90\u00b0.",
+            "The camera should see the student from the side.",
+        ],
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -267,29 +282,33 @@ TESTS = {
     "pull_up": {
         "id":          "pull_up",
         "title":       "Modified Pull-Up",
-        "subtitle":    "Shoulder strength and endurance — max reps, one trial",
+        "subtitle":    "Shoulder strength and endurance: max reps, one trial",
         "icon":        "💪",
         "category":    "Muscular Endurance",
         "script":      "pullup.py",
-        "description": (
-            "Counts modified pull-ups on a pull-up stand. The participant lies on "
-            "their back under the bar, grips it with an overgrasp, and on 'GO' raises "
-            "the body by flexing the arms until the chin reaches the level of the bar, "
-            "then lowers back without the shoulders touching the ground. Because the "
-            "hands are on the bar, the wrists mark its height, so the chin-to-bar "
-            "criterion is checked directly rather than estimated. The test ends by "
-            "itself once the participant pauses for two or more seconds."
-        ),
+        "description": [
+            "Uses a pull-up stand.",
+            "The student lies on their back under the bar and grips it with an overhand "
+            "grip.",
+            "On 'GO', the student pulls the body up by bending the arms until the chin "
+            "reaches the level of the bar.",
+            "The student lowers back down without the shoulders touching the ground.",
+            "The hands are on the bar, so the wrists show the bar's height. The app checks "
+            "chin-to-bar directly instead of estimating it.",
+            "The test ends by itself once the student pauses for 2 seconds or more.",
+        ],
         "controls": [
             ("SPACE", "Start counting (the 'GO' signal)"),
             ("R",     "Reset counter"),
             ("F",     "Toggle fullscreen"),
             ("Q",     "Quit"),
         ],
-        "tip": ("Set the bar just within reach of the participant lying on their back "
-                "on the mat. Point the camera so the face and one whole arm, hand included, "
-                "are in frame. Keep the knees straight and the back straight; a "
-                "steady, constant pace scores best."),
+        "tip": [
+            "Set the bar just within reach of the student lying on their back on the mat.",
+            "Point the camera so the face and one whole arm, hand included, are in frame.",
+            "Keep the knees straight and the back straight.",
+            "A steady, even pace scores best.",
+        ],
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -297,28 +316,32 @@ TESTS = {
     "full_pull_up": {
         "id":          "full_pull_up",
         "title":       "Pull-Up",
-        "subtitle":    "Upper-body strength and endurance — max reps, one trial",
+        "subtitle":    "Upper-body strength and endurance: max reps, one trial",
         "icon":        "🏋️",
         "category":    "Muscular Endurance",
         "script":      "pullup_full.py",
-        "description": (
-            "Counts pull-ups from a straight-arm hang. The participant hangs from the "
-            "bar with an overhand grip, pulls up until the chin is above the bar, then "
-            "lowers back to a full hang. A rep counts only when the chin clears the bar "
-            "AND the shoulders come above the elbows, and the arms straighten again "
-            "before the next pull. The chin is the protocol's rule; the shoulders are "
-            "the second opinion, since the chin has to be estimated from the face. The "
-            "test ends by itself when the participant drops off the bar."
-        ),
+        "description": [
+            "The student hangs from the bar with an overhand grip, arms straight.",
+            "They pull up until the chin is above the bar, then lower back to a full hang.",
+            "A rep counts only when the chin clears the bar AND the shoulders come above "
+            "the elbows.",
+            "The arms must straighten again before the next pull.",
+            "The chin is the protocol's rule. The shoulders are a second check, because "
+            "the app has to estimate the chin from the face.",
+            "The test ends by itself when the student drops off the bar.",
+        ],
         "controls": [
             ("SPACE", "Start counting (the 'GO' signal)"),
             ("R",     "Reset counter"),
             ("F",     "Toggle fullscreen"),
             ("Q",     "Quit"),
         ],
-        "tip": ("Place the camera a few metres away, roughly level with the bar, so the "
-                "head, arms and bar are all in frame. The participant starts from a "
-                "still, straight-arm hang; no swinging, kicking or bent knees."),
+        "tip": [
+            "Place the camera a few metres away, roughly level with the bar.",
+            "Keep the head, arms and bar all in frame.",
+            "The student starts from a still, straight-arm hang.",
+            "No swinging, kicking or bent knees.",
+        ],
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -326,15 +349,16 @@ TESTS = {
     "wall_toss": {
         "id":          "wall_toss",
         "title":       "Wall Toss Coordination Test",
-        "subtitle":    "Alternate-hand ball toss — 30 seconds",
+        "subtitle":    "Alternate-hand ball toss: 30 seconds",
         "icon":        "🎯",
         "category":    "Coordination",
         "script":      "wtt.py",
-        "description": (
-            "Counts alternating wall-toss catches using HSV ball tracking and "
-            "MediaPipe hand detection. Five-state machine ensures only true "
-            "alternating catches are counted."
-        ),
+        "description": [
+            "The student tosses the ball at the wall and catches it, switching hands each "
+            "time.",
+            "The app tracks the ball and the hands and counts the catches.",
+            "Only true alternating catches are counted.",
+        ],
         "controls": [
             ("S",   "Start / restart test"),
             ("R",   "Reset to zero"),
@@ -342,7 +366,11 @@ TESTS = {
             ("1–5", "Switch ball colour preset"),
             ("Q",   "Quit"),
         ],
-        "tip":    "Use an orange ball and stand ~1 m from the wall. Camera to your side.",
+        "tip":    [
+            "Use an orange ball.",
+            "Stand about 1 m from the wall.",
+            "Put the camera to the student's side.",
+        ],
         "params": [],
         "unit":   "catches",
         "live_feed":   True,
@@ -350,19 +378,21 @@ TESTS = {
     "shuttle_run": {
         "id":          "shuttle_run",
         "title":       "10 m Shuttle Run Timer",
-        "subtitle":    "Dual camera, whistle-triggered start — up to 4 lanes",
+        "subtitle":    "Dual camera, whistle-triggered start: up to 4 lanes",
         "icon":        "🏃",
         "category":    "Agility",
         "script":      "shuttleruntest.py",
-        "description": (
-            "Times a 10 m shuttle run using two cameras facing each other across the "
-            "track, one at each end. Up to 4 students run in fixed lanes; a whistle "
-            "(2.4–4.1 kHz) detected via microphone starts every lane's timer at once. "
-            "MediaPipe Pose tracks ankle position per lane to detect alternating "
-            "line touches at each end — each student needs the configured number of "
-            "touches to finish. Results are staged for review and also saved to a "
-            "timestamped CSV plus a raw JSON event log."
-        ),
+        "description": [
+            "Times a 10 m shuttle run with two cameras, one at each end of the track, "
+            "facing each other.",
+            "Up to 4 students run at once, each in a fixed lane.",
+            "A whistle starts every lane's timer at the same moment. The app listens for "
+            "it through the microphone (2.4 to 4.1 kHz).",
+            "The app tracks each student's ankles to see them touch the line at each end.",
+            "Each student needs the set number of line touches to finish.",
+            "Results are staged for review and also saved to a timestamped CSV file and a "
+            "raw JSON event log.",
+        ],
         "controls": [
             ("Click", "Calibrate: mark lane boundaries + touch line on each camera"),
             ("C",     "Confirm calibration step"),
@@ -370,8 +400,12 @@ TESTS = {
             ("SPACE", "Manual start (if no whistle detected)"),
             ("Q",     "Quit"),
         ],
-        "tip": ("Two cameras face each other 10 m apart, one at each end of the track. "
-                "Mark 4 lanes on the ground. A laptop/USB mic must be able to hear the whistle."),
+        "tip": [
+            "Set the two cameras 10 m apart, one at each end of the track, facing each "
+            "other.",
+            "Mark 4 lanes on the ground.",
+            "The laptop or USB microphone must be able to hear the whistle.",
+        ],
         "params": [
             {
                 "name":        "cam_a_url",
@@ -409,12 +443,15 @@ TESTS = {
         "icon":        "⚡",
         "category":    "Speed",
         "script":      "sprint_timer.py",
-        "description": (
-            "Automatically times a 50 m sprint using two cameras: a perpendicular "
-            "FINISH camera for precise crossing detection, and an OVERHEAD camera "
-            "for lane identity. Supports whistle-triggered start, simultaneous "
-            "multi-lane timing, and lap logging to CSV."
-        ),
+        "description": [
+            "Times a 50 m sprint automatically with two cameras.",
+            "The FINISH camera watches the finish line and detects exactly when each "
+            "runner crosses it.",
+            "The OVERHEAD camera tells which runner is in which lane.",
+            "A whistle can start the timing.",
+            "Several lanes are timed at the same time.",
+            "Laps are logged to a CSV file.",
+        ],
         "controls": [
             ("SPACE", "Arrows move/resize strip during calibration"),
             ("s+N",   "Arm lane N individually"),
@@ -422,7 +459,10 @@ TESTS = {
             ("r",     "Reset all lanes"),
             ("Q",     "Quit"),
         ],
-        "tip":    "FINISH cam: perpendicular, level with the line. OVERHEAD cam: elevated, looking straight down.",
+        "tip":    [
+            "FINISH camera: perpendicular to the track, level with the finish line.",
+            "OVERHEAD camera: up high, looking straight down.",
+        ],
         "params": [
             {
                 "name":        "finish_cam_url",
@@ -469,17 +509,21 @@ TESTS = {
         "icon":        "🤸",
         "category":    "Flexibility",
         "script":      "snr.py",
-        "description": (
-            "Measures forward reach distance in cm using MediaPipe pose landmarks. "
-            "Calibrated with your hip-to-ankle length for accurate cm output. "
-            "Tracks maximum forward displacement during the reach."
-        ),
+        "description": [
+            "Measures how far forward the student reaches, in cm.",
+            "Enter the student's hip-to-ankle length first. The app uses it to turn the "
+            "reach into accurate cm.",
+            "The app keeps the furthest forward reach during the attempt.",
+        ],
         "controls": [
             ("SPACE", "Set start position / lock final result"),
             ("R",     "Reset for new trial"),
             ("Q",     "Quit and print summary"),
         ],
-        "tip": "Sit on the floor, legs straight. Enter your hip-to-ankle length below before launching.",
+        "tip": [
+            "Sit on the floor with the legs straight.",
+            "Enter the hip-to-ankle length below before launching.",
+        ],
         "params": [
             {
                 "name":        "leg_cm",
@@ -501,23 +545,27 @@ TESTS = {
         "icon":        "🧎",
         "category":    "Musculoskeletal",
         "script":      "trunk_lift.py",
-        "description": (
-            "Measures trunk extension: the participant lies prone and lifts the upper "
-            "body, and the chin height above the mat is measured at the held peak. "
-            "Tap both ends of the measuring stick on the video once to set the scale "
-            "and the floor line. Two trials, better one kept, capped at 12 in (30 cm)."
-        ),
+        "description": [
+            "Measures trunk extension.",
+            "The student lies face down and lifts the upper body.",
+            "The chin height above the mat is measured at the held peak.",
+            "Before starting, tap both ends of the measuring stick on the video once. This "
+            "sets the scale and the floor line.",
+            "Two trials. The better one is kept.",
+            "The score is capped at 12 in (30 cm).",
+        ],
         "controls": [
             ("TAP x2", "Tap both ends of the measuring stick"),
             ("MARK",   "Capture the current height as a trial"),
             ("UNDO",   "Remove the last trial"),
             ("RESET",  "Start the trials over"),
         ],
-        "tip": (
-            "Camera on the floor, side-on, 1.5-2 m away, whole mat in frame. Lay the "
-            "measuring stick on the mat in front of the chin - where the protocol "
-            "already puts it - so it sits the same distance from the lens as the chin."
-        ),
+        "tip": [
+            "Camera on the floor, side-on, 1.5 to 2 m away, with the whole mat in frame.",
+            "Lay the measuring stick on the mat in front of the chin, where the protocol "
+            "already puts it.",
+            "That way the stick is the same distance from the camera as the chin.",
+        ],
         "params": [
             {
                 "name":        "stick_cm",
@@ -535,28 +583,31 @@ TESTS = {
     "reverse_curl": {
         "id":          "reverse_curl",
         "title":       "Reverse Curl",
-        "subtitle":    "Lift a 1 lb weight to 45\u00b0, hold 2 s \u2014 pass/fail",
+        "subtitle":    "Lift a 1 lb weight to 45\u00b0 and hold 2 s: pass/fail",
         "icon":        "\U0001f4aa",
         "category":    "Musculoskeletal",
         "script":      "reverse_curl.py",
-        "description": (
-            "Hand, wrist and arm strength. Seated, the 1 lb (0.5 kg) dumbbell starts "
-            "on the midpoint of the thigh; the participant flexes the elbow to 45\u00b0 "
-            "or less, holds it there for 2 seconds, then lowers it back to the thigh "
-            "under control. One trial, decided by the camera: a correct curl is a "
-            "PASS, a real attempt that falls short is a FAIL. Practise before "
-            "pressing Start. The coach still watches that the descent is slower "
-            "than gravity."
-        ),
+        "description": [
+            "Tests hand, wrist and arm strength.",
+            "The student sits with the 1 lb (0.5 kg) dumbbell resting on the middle of the "
+            "thigh.",
+            "They bend the elbow to 45\u00b0 or less and hold it there for 2 seconds.",
+            "Then they lower it back to the thigh under control.",
+            "One trial. The camera decides: a correct curl is a PASS, a real attempt that "
+            "falls short is a FAIL.",
+            "Let the student practise before pressing Start.",
+            "The coach still checks that the lowering is slower than gravity.",
+        ],
         "controls": [
             ("RESET", "Start the trial over"),
         ],
-        "tip": (
-            "Camera side-on to the working arm at seated-shoulder height, 1.5-2 m "
-            "away, with the shoulder, elbow, wrist and thigh all in frame. A "
-            "straight-on front view foreshortens the elbow angle and good curls "
-            "will read as short."
-        ),
+        "tip": [
+            "Camera side-on to the working arm, at seated shoulder height, 1.5 to 2 m "
+            "away.",
+            "Keep the shoulder, elbow, wrist and thigh all in frame.",
+            "Don't film straight from the front. The elbow angle looks wrong from there, "
+            "and good curls will read as short.",
+        ],
         # No params and no arm buttons: the camera works out which arm is
         # curling by itself. (/api/launch/reverse_curl still accepts an "arm"
         # field for scripted launches.)
@@ -606,28 +657,30 @@ TESTS = {
     "isometric_push_up": {
         "id":          "isometric_push_up",
         "title":       "Isometric Push-Up",
-        "subtitle":    "Hold the top of a push-up \u2014 seconds held, up to 40 s",
+        "subtitle":    "Hold the top of a push-up: seconds held, up to 40 s",
         "icon":        "\u23f1\ufe0f",
         "category":    "Muscular Endurance",
         "script":      "isometric_pushup.py",
-        "description": (
-            "Upper-body strength and endurance. The participant holds the UP "
-            "position of a push-up: hands directly below the shoulders, arms "
-            "straight, the whole body in a straight line, toes on the mat. The "
-            "clock starts by itself once the camera sees that position held still, "
-            "and stops the moment the elbows bend, the hips sag or pike, the knees "
-            "bend or the body sways \u2014 or at 40 seconds, the maximum. One "
-            "trial; the score is the time held to the nearest second. The coach "
-            "may help place the body in position but must not hold it up."
-        ),
+        "description": [
+            "Tests upper-body strength and endurance.",
+            "The student holds the UP position of a push-up: hands directly below the "
+            "shoulders, arms straight, body in a straight line, toes on the mat.",
+            "The clock starts by itself once the camera sees that position held still.",
+            "The clock stops the moment the elbows bend, the hips sag or pike, the knees "
+            "bend or the body sways.",
+            "It also stops at 40 seconds, the maximum.",
+            "One trial. The score is the time held, to the nearest second.",
+            "The coach may help place the body in position but must not hold it up.",
+        ],
         "controls": [
             ("RESET", "Start the trial over (clears the clock)"),
         ],
-        "tip": (
-            "Camera on the floor or just above it, SIDE-ON to the participant, "
-            "1.5-2 m away, with the whole body from the hands to the toes in frame. "
-            "Only the student should be in frame."
-        ),
+        "tip": [
+            "Camera on the floor or just above it, SIDE-ON to the student, 1.5 to 2 m "
+            "away.",
+            "Keep the whole body, from the hands to the toes, in frame.",
+            "Only the student should be in frame.",
+        ],
         "params": [],
         "unit":   "s",
         "live_feed":   True,
@@ -635,32 +688,33 @@ TESTS = {
     "seated_push_up": {
         "id":          "seated_push_up",
         "title":       "Seated Push-Up",
-        "subtitle":    "Lift off the seat on straight arms \u2014 seconds held, up to 20 s",
+        "subtitle":    "Lift off the seat on straight arms: seconds held, up to 20 s",
         "icon":        "\u23f1\ufe0f",
         "category":    "Muscular Endurance",
         "script":      "seated_pushup.py",
-        "description": (
-            "Upper-body strength and endurance. The participant sits with the "
-            "hands on push-up blocks, the armrests of a wheelchair or armchair, or "
-            "the wheels of a sport wheelchair, and pushes down until the body is "
-            "off the seat with the elbows extended. The camera first learns where "
-            "the hips sit; the clock starts by itself once they are lifted and "
-            "steady, and stops when they come back down onto the seat or the "
-            "elbows bend \u2014 or at 20 seconds, the maximum. A student who "
-            "cannot fully straighten the arms is timed from their own best "
-            "extension. One trial; the score is the time held to the nearest "
-            "second. The feet may touch the floor but must not help."
-        ),
+        "description": [
+            "Tests upper-body strength and endurance.",
+            "The student sits with the hands on push-up blocks, on the armrests of a "
+            "wheelchair or armchair, or on the wheels of a sport wheelchair.",
+            "They push down until the body is off the seat with the elbows straight.",
+            "The camera first learns where the hips sit.",
+            "The clock starts by itself once the hips are lifted and steady.",
+            "It stops when the hips come back down onto the seat or the elbows bend, or at "
+            "20 seconds, the maximum.",
+            "A student who can't fully straighten the arms is timed from their own best "
+            "extension.",
+            "One trial. The score is the time held, to the nearest second.",
+            "The feet may touch the floor but must not help.",
+        ],
         "controls": [
             ("RESET", "Start the trial over (clears the clock and the seat)"),
         ],
-        "tip": (
-            "Camera at seat height, front-on or side-on to the participant, "
-            "1.5-2 m away, with the head, the hips and the hands in frame. "
-            "The student sits still "
-            "for a moment first so the camera can find the seat. Only the "
-            "student should be in frame."
-        ),
+        "tip": [
+            "Camera at seat height, in front of or beside the student, 1.5 to 2 m away.",
+            "Keep the head, hips and hands in frame.",
+            "The student sits still for a moment first so the camera can find the seat.",
+            "Only the student should be in frame.",
+        ],
         "params": [],
         "unit":   "s",
         "live_feed":   True,
@@ -668,38 +722,41 @@ TESTS = {
     "dumbbell_press": {
         "id":          "dumbbell_press",
         "title":       "Dumbbell Press",
-        "subtitle":    "Press a 15 lb dumbbell overhead \u2014 max reps, up to 50",
+        "subtitle":    "Press a 15 lb dumbbell overhead: max reps, up to 50",
         "icon":        "\U0001f3cb\ufe0f",
         "category":    "Muscular Endurance",
         "script":      "dumbbell_press.py",
-        "description": (
-            "Arm and shoulder strength and endurance. Seated in a wheelchair or "
-            "sturdy chair, the participant holds a 15 lb (6.8 kg) dumbbell in the "
-            "dominant hand at the shoulder and presses it straight up until the "
-            "elbow is extended, then brings it back to the shoulder, at a steady "
-            "3-4 seconds per rep. A rep counts when the hand is pressed well "
-            "above the head (1.3 upper-arm lengths above the shoulder, a nearly "
-            "straight arm); the weight must come back down to the "
-            "shoulder before the next one counts. Tap START on 'GO'. The test "
-            "ends by itself at 50 reps or after a rest of 4 seconds \u2014 a "
-            "slow press that is still going up, or a slow lowering still coming "
-            "down, is not a rest. One trial; the "
-            "score is the number of reps."
-        ),
+        "description": [
+            "Tests arm and shoulder strength and endurance.",
+            "The student sits in a wheelchair or sturdy chair, holding a 15 lb (6.8 kg) "
+            "dumbbell at the shoulder in the dominant hand.",
+            "They press it straight up until the elbow is straight, then bring it back to "
+            "the shoulder.",
+            "Keep a steady pace of 3 to 4 seconds per rep.",
+            "A rep counts when the hand is pressed well above the head (1.3 upper-arm "
+            "lengths above the shoulder, a nearly straight arm).",
+            "The weight must come back down to the shoulder before the next rep counts.",
+            "Tap START on 'GO'.",
+            "The test ends by itself at 50 reps, or after a 4-second rest. A slow press "
+            "still going up, or a slow lowering still coming down, is not a rest.",
+            "One trial. The score is the number of reps.",
+        ],
         "controls": [
             ("ARM",   "Auto (the first arm to press), or pin the student's left / right hand"),
             ("START", "Start counting (the 'GO' signal)"),
             ("RESET", "Start the trial over (clears the count)"),
         ],
-        "tip": (
-            "If the student might lift the free hand first, pick their pressing "
-            "hand before START. Camera FRONT-ON at chest height, 2-3 m away, the "
-            "student facing it squarely, with the head, both arms and plenty of room "
-            "above the head for the weight overhead in frame \u2014 the screen warns "
-            "if the chair is turned or there isn't enough room. The spotter stands "
-            "BEHIND the chair \u2014 not between the camera and the student, or the "
-            "camera loses the student."
-        ),
+        "tip": [
+            "If the student might lift the free hand first, pick their pressing hand "
+            "before START.",
+            "Camera FRONT-ON at chest height, 2 to 3 m away, with the student facing it "
+            "squarely.",
+            "Keep the head, both arms and plenty of room above the head in frame, for the "
+            "weight overhead.",
+            "The screen warns if the chair is turned or there isn't enough room.",
+            "The spotter stands BEHIND the chair, not between the camera and the student, "
+            "or the camera loses the student.",
+        ],
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -707,39 +764,43 @@ TESTS = {
     "modified_curl_up": {
         "id":          "modified_curl_up",
         "title":       "Modified Curl-Up",
-        "subtitle":    "Hands slide up the thighs to the knees, one every 3 s \u2014 up to 75",
+        "subtitle":    "Hands slide up the thighs to the knees, one every 3 s, up to 75",
         "icon":        "\U0001f9d8",
         "category":    "Muscular Endurance",
         "script":      "modified_curl_up.py",
-        "description": (
-            "Abdominal strength and endurance. Lying on the back on a mat, knees "
-            "bent about 140\u00b0, feet flat on the floor, hands on the front of "
-            "the thighs. The participant curls up slowly, sliding the hands up the "
-            "thighs until the fingertips touch the kneecaps, then lies back down, "
-            "at about one curl-up every 3 seconds \u2014 the screen beeps the "
-            "pace. A curl-up counts when the student is back down on the mat. It "
-            "is NOT counted if the fingertips don't reach the knees, the student "
-            "doesn't lie back down, or the feet leave the floor; the screen says "
-            "why. The tester may hold their hands on the kneecaps as a target. "
-            "Tap START on 'GO'. The test ends by itself at 75 curl-ups or after 6 "
-            "seconds with no curl-up (two beats), or when the coach taps STOP. "
-            "One trial; the score is the number of correct curl-ups."
-        ),
+        "description": [
+            "Tests abdominal strength and endurance.",
+            "The student lies on their back on a mat, knees bent about 140\u00b0, feet flat on "
+            "the floor, hands on the front of the thighs.",
+            "They curl up slowly, sliding the hands up the thighs until the fingertips "
+            "touch the kneecaps, then lie back down.",
+            "Keep a pace of about one curl-up every 3 seconds. The screen beeps the pace.",
+            "A curl-up counts when the student is back down on the mat.",
+            "It does NOT count if the fingertips don't reach the knees, the student "
+            "doesn't lie back down, or the feet leave the floor. The screen says why.",
+            "The tester may hold their hands on the kneecaps as a target.",
+            "Tap START on 'GO'.",
+            "The test ends by itself at 75 curl-ups, or after 6 seconds (two beats) with "
+            "no curl-up, or when the coach taps STOP.",
+            "One trial. The score is the number of correct curl-ups.",
+        ],
         "controls": [
             ("START", "Start counting (the 'GO' signal) and the 3 s beep"),
             ("RESET", "Start the trial over (clears the count)"),
         ],
-        "tip": (
-            "Camera on the floor or just above it, SIDE-ON to the participant, "
-            "about 1.5-2 m away, with the whole body from the head to the FEET in "
-            "frame and the student filling most of the picture's width \u2014 the "
-            "screen says if the camera is too far back. The feet matter: the "
-            "camera checks they stay on the floor. Let the student lie still for "
-            "a second before START so the camera learns where the hands rest. "
-            "A tester holding the kneecaps "
-            "kneels on the far side, behind the legs, not between the camera "
-            "and the student. Turn the phone's sound up for the beep."
-        ),
+        "tip": [
+            "Camera on the floor or just above it, SIDE-ON to the student, about 1.5 to 2 "
+            "m away.",
+            "Keep the whole body, from the head to the FEET, in frame, with the student "
+            "filling most of the picture's width. The screen says if the camera is too far "
+            "back.",
+            "The feet matter: the camera checks they stay on the floor.",
+            "Let the student lie still for a second before START so the camera learns "
+            "where the hands rest.",
+            "A tester holding the kneecaps kneels on the far side, behind the legs, not "
+            "between the camera and the student.",
+            "Turn the phone's sound up for the beep.",
+        ],
         "params": [],
         "unit":   "reps",
         "live_feed":   True,
@@ -747,38 +808,42 @@ TESTS = {
     "target_stretch": {
         "id":          "target_stretch",
         "title":       "Target Stretch",
-        "subtitle":    "How far one joint moves \u2014 left and right, scored 0 to 2",
+        "subtitle":    "How far one joint moves: left and right, scored 0 to 2",
         "icon":        "\U0001f9d8",
         "category":    "Musculoskeletal",
         "script":      "target_stretch.py",
-        "description": (
-            "Range of motion at one joint. Pick the joint before pressing START: "
-            "wrist extension, elbow extension, shoulder extension, shoulder "
-            "abduction, shoulder external rotation, forearm supination, forearm "
-            "pronation or knee extension. The participant moves as far as "
-            "they can and holds the end position for at least 1 second; the camera "
-            "reads the angle to the nearest 15\u00b0 and scores it 0, 1 or 2. The "
-            "LEFT side is measured first, then the RIGHT, each with 10 seconds "
-            "from when the camera first sees the joint held steady. The coach demonstrates the full "
-            "movement and helps the participant find their best position; the "
-            "camera decides the score."
-        ),
+        "description": [
+            "Tests the range of motion at one joint.",
+            "Pick the joint before pressing START: wrist extension, elbow extension, "
+            "shoulder extension, shoulder abduction, shoulder external rotation, forearm "
+            "supination, forearm pronation or knee extension.",
+            "The student moves as far as they can and holds the end position for at least "
+            "1 second.",
+            "The camera reads the angle to the nearest 15\u00b0 and scores it 0, 1 or 2.",
+            "The LEFT side is measured first, then the RIGHT.",
+            "Each side gets 10 seconds, starting when the camera first sees the joint held "
+            "steady.",
+            "The coach demonstrates the full movement and helps the student find their "
+            "best position. The camera decides the score.",
+        ],
         "controls": [
             ("NEXT",  "End the side under way now (keeps its best hold)"),
             ("RESET", "Start the run over (both sides)"),
         ],
-        "tip": (
-            "Shoulder abduction, supination and pronation: camera IN FRONT, the "
-            "student FACING it \u2014 not their back (the PDF drawing for shoulder "
-            "abduction shows the back; don't copy that, the app would measure the "
-            "wrong arm). Every other joint: camera SIDE-ON with the tested "
-            "side toward it \u2014 the student turns around for the second side. "
-            "1.5-2 m away at the height of the joint, with the whole limb (and the "
-            "hip, for the shoulder) in frame, and the HEAD too \u2014 the app uses "
-            "the face to tell which way the student is facing. Knee: stand, or sit if the student "
-            "can't stand. Shoulder extension: no chair back behind the arm. Only "
-            "the student should be in frame."
-        ),
+        "tip": [
+            "Shoulder abduction, supination and pronation: camera IN FRONT, with the "
+            "student FACING it, not their back.",
+            "The PDF drawing for shoulder abduction shows the back. Don't copy it, or the "
+            "app will measure the wrong arm.",
+            "Every other joint: camera SIDE-ON with the tested side toward it. The student "
+            "turns around for the second side.",
+            "Place the camera 1.5 to 2 m away, at the height of the joint.",
+            "Keep the whole limb in frame (and the hip, for the shoulder), and the HEAD "
+            "too. The app uses the face to tell which way the student is facing.",
+            "Knee: the student stands, or sits if they can't stand.",
+            "Shoulder extension: no chair back behind the arm.",
+            "Only the student should be in frame.",
+        ],
         # The joint is picked on the AI screen, not here: the dashboard opens
         # that screen directly.
         "joints": TARGET_STRETCH_JOINTS,
@@ -789,15 +854,17 @@ TESTS = {
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
-        "subtitle":    "Standing reach + max jump height — 5 attempts",
+        "subtitle":    "Standing reach + max jump height: 5 attempts",
         "icon":        "🐰",
         "category":    "Power",
         "script":      "vertical_jump.py",
-        "description": (
-            "Uses MediaPipe Pose to track reach height and measure vertical jump. "
-            "Capture your standing reach, calibrate it in cm, then take 5 jump "
-            "attempts. Reports best jump, average jump, and per-attempt results."
-        ),
+        "description": [
+            "Capture the student's standing reach.",
+            "Calibrate it in cm.",
+            "The student takes 5 jump attempts.",
+            "The app tracks the reach height and reports the best jump, the average jump "
+            "and each attempt's result.",
+        ],
         "controls": [
             ("S",     "Capture standing reach baseline"),
             ("C",     "Enter standing reach in cm (calibrate)"),
@@ -805,7 +872,9 @@ TESTS = {
             ("R",     "Reset calibration"),
             ("ESC",   "Exit"),
         ],
-        "tip":    "Stand side-on to the camera with your reaching arm fully visible.",
+        "tip":    [
+            "Stand side-on to the camera with the reaching arm fully visible.",
+        ],
         "params": [],
         "unit":   "cm",
         "live_feed":   True,
@@ -813,27 +882,28 @@ TESTS = {
     "run_600m": {
         "id":          "run_600m",
         "title":       "600 m Run",
-        "subtitle":    "Multi-lane endurance run — coloured T-shirt tracking, up to 5 lanes",
+        "subtitle":    "Multi-lane endurance run: coloured T-shirt tracking, up to 5 lanes",
         "icon":        "🏃‍♂️",
         "category":    "Endurance",
         "script":      "600m_new/main.py",
-        "description": (
-            "Tracks up to 5 runners at once using HSV colour segmentation on "
-            "coloured T-shirts. A virtual finish line inside the frame counts "
-            "each valid, correctly-directed crossing as a completed lap, with "
-            "a debounce so a runner lingering on the line isn't double-counted. "
-            "Per-lane timers run for the whole test; the coach stops the test "
-            "once every runner has covered 600 m."
-        ),
+        "description": [
+            "Tracks up to 5 runners at once by the colour of their T-shirts.",
+            "A virtual finish line in the camera picture counts each valid crossing in the "
+            "right direction as one lap.",
+            "A runner lingering on the line isn't counted twice.",
+            "Each lane's timer runs for the whole test.",
+            "The coach stops the test once every runner has covered 600 m.",
+        ],
         "controls": [
             ("Click", "On the setup screen: pick 5 lane colours + enter camera distance"),
             ("SPACE", "Start / Stop / Restart the test"),
             ("ESC",   "Quit"),
         ],
-        "tip": (
-            "Assign each runner a distinct T-shirt colour on the setup screen before "
-            "the run starts, and position the camera so the finish line is clearly in frame."
-        ),
+        "tip": [
+            "Give each runner a different T-shirt colour on the setup screen before the "
+            "run starts.",
+            "Position the camera so the finish line is clearly in frame.",
+        ],
         "params": [
             {
                 "name":        "camera_url",
