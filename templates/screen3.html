@@ -501,7 +501,7 @@
         // Counts the database keeps as whole numbers. 7.5 reps can't be saved,
         // so say so here rather than fail with a bare "Could not save".
         const WHOLE_ONLY = new Set(['curl_up', 'pull_up', 'full_pull_up', 'wall_toss',
-                                    'dumbbell_press', 'modified_curl_up']).has(testId);
+                                    'dumbbell_press', 'push_up', 'modified_curl_up']).has(testId);
         const notWhole = (v) => WHOLE_ONLY && !Number.isInteger(v);
         const NOT_WHOLE_MSG = 'Enter a whole number (no decimals).';
 
