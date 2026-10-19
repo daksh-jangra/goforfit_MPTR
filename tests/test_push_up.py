@@ -162,6 +162,40 @@ def check_one_bad_rep_in_a_good_set_doesnt_end_it():
         assert test.not_counted["shallow"] == 1, (fps, test.not_counted)
 
 
+def check_resting_at_the_top_near_the_line_ends_it():
+    # A straight arm that reads 160-165 wobbles across the top line. That is
+    # rest, not push-up attempts: the test must still end 6 s later, with no
+    # made-up "not to 90" entries.
+    for top in (160.0, 162.0, 165.0):
+        for fps in (8, 15, 30):
+            for seed in range(5):
+                test, t = started(fps)
+                t = run(test, reps(on_toes, 2), fps=fps, t0=t)
+                run(test, [(10, hold(on_toes, elbow=top))], fps=fps, t0=t, jitter=8, seed=seed)
+                assert test.stopped and test.end_reason == pu.END_GAP, (top, fps, seed)
+                assert test.count == 2 and test.total_not_counted == 0, (top, fps, seed, test.not_counted)
+
+
+def check_tilted_phone_still_counts():
+    # The phone rolled ~20 degrees adds that to the body's tilt on screen.
+    for roll in (10.0, 20.0):
+        def tilted(e, **chg):
+            m = on_toes(e, **chg)
+            m["body_tilt"] += roll
+            return m
+        test, t = started(model=tilted)
+        run(test, reps(tilted, 4) + [(0.5, hold(tilted))], t0=t, jitter=3)
+        assert test.count == 4, (roll, test.count)
+
+
+def check_kneeling_upright_is_not_in_position():
+    test = pu.PushUpTest()
+    t = run(test, [(1, hold(on_toes, body_tilt=65.0))])
+    test.start(now=t)
+    run(test, reps(on_toes, 3, body_tilt=65.0), t0=t)
+    assert test.count == 0 and test.stopped
+
+
 def check_resting_at_the_bottom_ends_it():
     test, t = started()
     t = run(test, reps(on_toes, 2), t0=t)

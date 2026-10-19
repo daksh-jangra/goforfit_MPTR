@@ -36,8 +36,13 @@ What the camera checks (owner's choices, 2026-10-14)
     * the knees were down (KNEES), or
     * the back was not reasonably straight (BACK),
   for at least FAULT_MIN_S. Those reps show "Not counted - <why>".
-  Coming back up without reaching the bottom is "not down to 90 degrees";
-  going back down from partway up is "arms not straightened".
+  Coming back up without reaching the bottom is "not down to 90 degrees" -
+  but only if the elbow dipped below SHALLOW_DIP_DEG (140) on the way. A
+  smaller dip is still resting at the top: a straight arm that reads near
+  160 wobbles across the line, and each wobble was logged as a not-counted
+  push-up and restarted the 6 s clock, so a student resting at the top
+  never ended the test (arm at 160-162: 0 of 20 runs ended). Going back
+  down from partway up is "arms not straightened".
   The cycle starts when the elbow leaves the top, so a student resting on
   the knees BETWEEN reps loses nothing once the knees come up again.
 
@@ -64,9 +69,11 @@ What the camera checks (owner's choices, 2026-10-14)
   student is at the top. A student not at the top when START is pressed
   must get there first: the first rep starts from straight arms.
 
-  The body must be roughly horizontal (body_tilt <= BODY_TILT_MAX_DEG) for
-  anything to count - a student standing or kneeling up is "not in the
-  push-up position" and the rep under way is dropped.
+  The body must be roughly horizontal (body_tilt <= BODY_TILT_MAX_DEG, 50)
+  for anything to count - a student standing (~80-90) or kneeling up (~65+)
+  is "not in the push-up position" and the rep under way is dropped. The
+  top of a push-up reads ~20-30 on a level phone; 50 leaves room for a phone
+  tilted ~20 degrees (at 40, a 10-15 degree tilt stopped the counting).
 
 When the test ends
 --------------------------------------------------------------------
@@ -123,6 +130,9 @@ GAP_S     = 6.0    # no counted push-up for two beats ends the test
 # ── Detection tuning ─────────────────────────────────────────────────────────────
 UP_DEG          = 160.0   # elbow at least this = arms straight (the top)
 DOWN_DEG        = 100.0   # elbow at most this = down to 90 degrees
+SHALLOW_DIP_DEG = 140.0   # a dip from the top must go below this to be a
+                          # "not down to 90" attempt; less is resting at the
+                          # top (see the docstring)
 REBOUND_DEG     = 130.0   # from the bottom up past this, then back down to
                           # DOWN_DEG = the arms were not straightened
 KNEE_MIN_DEG    = 150.0   # knee bent more than this = knees down
@@ -131,7 +141,7 @@ KNEE_LOW        = 0.25    # knee lower than this above the hands-toes line, in
 KNEE_CHECK_DEG  = 130.0   # ...checked only while the elbow is at least this
 BACK_MAX_DEG    = 25.0    # hip further off the shoulder-ankle line = back bent
 FAULT_MIN_S     = 0.2     # a fault must be seen this long within one rep
-BODY_TILT_MAX_DEG = 40.0  # shoulder-ankle line flatter than this = in position
+BODY_TILT_MAX_DEG = 50.0  # shoulder-ankle line flatter than this = in position
 MAX_FRAME_DT    = 0.5     # most one frame may add to any clock (Wi-Fi gaps)
 SIDE_SWITCH_VIS = 0.10    # the other side must be this much clearer to switch
 
@@ -297,6 +307,7 @@ class PushUpTest:
         self.problem = None        # what is wrong right now, for the screen
         self._fault_t = {"knees": 0.0, "back": 0.0}
         self._peak = None          # highest elbow since reaching the bottom
+        self._dip = None           # lowest elbow since leaving the top
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -429,6 +440,7 @@ class PushUpTest:
                 return None
             # Leaving the top starts a new rep: its faults start here.
             self._clear_faults()
+            self._dip = e
             self.phase = PH_LOWERING
 
         # A rep under way: add up how long each fault has been seen.
@@ -438,11 +450,14 @@ class PushUpTest:
             self._fault_t["back"] += dt
 
         if self.phase == PH_LOWERING:
+            self._dip = min(self._dip, e)
             if e <= DOWN_DEG:
                 self.phase = PH_DOWN
                 self._peak = e
             elif e >= UP_DEG:
                 self.phase = PH_UP
+                if self._dip > SHALLOW_DIP_DEG:
+                    return None    # a wobble at the top, not an attempt
                 return self._reject("shallow", counting)
             return None
 
