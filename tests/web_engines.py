@@ -3681,6 +3681,7 @@ class PushUpEngine(BaseWebEngine):
             "not_counted": dict(t.not_counted),
             "not_counted_total": t.total_not_counted,
             "problem": t.problem if t.tracked else None,
+            "no_toes": t.no_toes and t.tracked,
             "pose_detected": self.pose_detected,
             "status_msg": t.status_msg,
             "last_save": self.last_save,

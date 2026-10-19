@@ -844,7 +844,12 @@
                   return !state.running;
               },
               renderStatus(state) {
-                  const lines = [`Push-ups: ${state.count}`];
+                  const lines = [];
+                  // Without the toes the knees can't be fully checked.
+                  if (state.no_toes) {
+                      lines.push('\u26a0 Toes not in view - move the phone back so the feet are in the picture');
+                  }
+                  lines.push(`Push-ups: ${state.count}`);
                   if (state.body_tracked) {
                       lines.push(`Elbow: ${state.elbow_deg}° (top ${state.up_deg}°, ` +
                                  `bottom ${state.down_deg}°)   Knee: ${state.knee_deg}°`);

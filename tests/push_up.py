@@ -46,9 +46,14 @@ What the camera checks (owner's choices, 2026-10-14)
   The cycle starts when the elbow leaves the top, so a student resting on
   the knees BETWEEN reps loses nothing once the knees come up again.
 
-  KNEES is two readings. The knee bent below KNEE_MIN_DEG (150; isometric
-  push-up's straight legs read 163-178, soft knees 147-162) catches a knee
-  push-up with the feet raised. With the shins flat on the mat a knee
+  KNEES is two readings. The knee bent below KNEE_MIN_DEG (145) catches a
+  knee push-up with the feet raised (~90-120). Isometric push-up's straight
+  legs read 163-178 and slightly soft knees 147-162: those still count -
+  strict, but not so strict that a student on the toes with soft knees
+  loses push-ups (owner, 2026-10-19). Without the toes in view the knee
+  height can't be read, so the angle is the only knee check and the line
+  is KNEE_MIN_NO_TOES_DEG (150) instead, to catch the shins-flat knee
+  push-up below. With the shins flat on the mat a knee
   push-up's knee only bends to ~140-150 at the top and straightens toward
   ~170 at the bottom, so the knee HEIGHT catches it too: kneeling, the knee
   sits on the floor line through the hands and toes (~0.1 thigh lengths -
@@ -57,7 +62,9 @@ What the camera checks (owner's choices, 2026-10-14)
   floor stay on one line in the picture). At the BOTTOM of a good push-up
   the knee is legitimately low too (~0.15), so the height is only checked
   while the elbow is >= KNEE_CHECK_DEG (130). It needs the toes in view;
-  without them only the angle is used.
+  without them only the angle is used (at 150, see above), and the screen
+  WARNS "Toes not in view" once they have been missing for most of the
+  last TOE_WINDOW_S. The warning never changes the count.
 
   BACK: the hip more than BACK_MAX_DEG off the shoulder-ankle line, either
   way ("reasonably straight"). The isometric push-up's hold limit is 28.
@@ -135,7 +142,8 @@ SHALLOW_DIP_DEG = 140.0   # a dip from the top must go below this to be a
                           # top (see the docstring)
 REBOUND_DEG     = 130.0   # from the bottom up past this, then back down to
                           # DOWN_DEG = the arms were not straightened
-KNEE_MIN_DEG    = 150.0   # knee bent more than this = knees down
+KNEE_MIN_DEG    = 145.0   # knee bent more than this = knees down (toes seen)
+KNEE_MIN_NO_TOES_DEG = 150.0  # ...the same without the toes (no height check)
 KNEE_LOW        = 0.25    # knee lower than this above the hands-toes line, in
                           # thigh lengths = kneeling (see the docstring)
 KNEE_CHECK_DEG  = 130.0   # ...checked only while the elbow is at least this
@@ -144,6 +152,9 @@ FAULT_MIN_S     = 0.2     # a fault must be seen this long within one rep
 BODY_TILT_MAX_DEG = 50.0  # shoulder-ankle line flatter than this = in position
 MAX_FRAME_DT    = 0.5     # most one frame may add to any clock (Wi-Fi gaps)
 SIDE_SWITCH_VIS = 0.10    # the other side must be this much clearer to switch
+TOE_WINDOW_S    = 1.5     # "Toes not in view" shows when the toes were missing
+TOE_WARN_FRAC   = 0.5     # in more than this share of the tracked frames over
+TOE_CLEAR_FRAC  = 0.2     # the window; it clears below TOE_CLEAR_FRAC
 
 SMOOTH_FRAMES   = 3       # median window, as in the other rep counters
 MIN_VIS         = 0.50    # landmark visibility floor
@@ -308,6 +319,8 @@ class PushUpTest:
         self._fault_t = {"knees": 0.0, "back": 0.0}
         self._peak = None          # highest elbow since reaching the bottom
         self._dip = None           # lowest elbow since leaving the top
+        self.no_toes = False       # the "toes not in view" warning is showing
+        self._toes = deque()       # (t, toes seen) on tracked frames
         self.status_msg = "Press START when ready"
 
     # ── read-outs ───────────────────────────────────────────────────────
@@ -383,6 +396,7 @@ class PushUpTest:
             return None
 
         raw = self._pick(sides)
+        self._note_toes(None if raw is None else raw["knee_h"] is not None, now)
         if raw is None:
             # Not seen. The phase is kept - the body is still wherever it
             # was - but stale frames must not blend into the next reading.
@@ -411,6 +425,22 @@ class PushUpTest:
             return END_GAP
         return None
 
+    def _note_toes(self, seen, now):
+        """Keep the "toes not in view" warning up to date. seen is None when
+        the body isn't tracked this frame (that frame says nothing)."""
+        if seen is not None:
+            self._toes.append((now, seen))
+        while self._toes and now - self._toes[0][0] > TOE_WINDOW_S:
+            self._toes.popleft()
+        if not self._toes:
+            self.no_toes = False
+            return
+        missing = sum(1 for _, s in self._toes if not s) / len(self._toes)
+        if missing > TOE_WARN_FRAC:
+            self.no_toes = True
+        elif missing < TOE_CLEAR_FRAC:
+            self.no_toes = False
+
     def _step(self, m, dt, counting):
         """The phase machine. Returns "rep", "not_counted" or None."""
         self.in_position = m["body_tilt"] <= BODY_TILT_MAX_DEG
@@ -422,8 +452,11 @@ class PushUpTest:
             return None
 
         e = m["elbow"]
-        knees = (m["knee"] < KNEE_MIN_DEG
-                 or (e >= KNEE_CHECK_DEG and m["knee_h"] is not None and m["knee_h"] < KNEE_LOW))
+        if m["knee_h"] is None:
+            knees = m["knee"] < KNEE_MIN_NO_TOES_DEG
+        else:
+            knees = (m["knee"] < KNEE_MIN_DEG
+                     or (e >= KNEE_CHECK_DEG and m["knee_h"] < KNEE_LOW))
         back = abs(m["bend"]) > BACK_MAX_DEG
         self.problem = ("Knees down - legs straight, on the toes" if knees
                         else ("Hips too high - body straight" if m["bend"] > 0
@@ -556,6 +589,15 @@ def draw_hud(frame, test, pts=None):
         x0 = max(12, (w - size[0]) // 2 - 14)
         draw_panel(frame, x0, 214, min(w - 12, x0 + size[0] + 28), 254, C_BAD, 0.8)
         cv2.putText(frame, warn, (x0 + 14, 242), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    C_TEXT, 2, cv2.LINE_AA)
+
+    if test.no_toes and test.tracked:
+        warn = "Toes not in view - move the phone back"
+        size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
+        x0 = max(12, (w - size[0]) // 2 - 14)
+        y0 = 262 if test.problem else 214
+        draw_panel(frame, x0, y0, min(w - 12, x0 + size[0] + 28), y0 + 40, C_BAD, 0.8)
+        cv2.putText(frame, warn, (x0 + 14, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                     C_TEXT, 2, cv2.LINE_AA)
 
     if test.status_msg:
