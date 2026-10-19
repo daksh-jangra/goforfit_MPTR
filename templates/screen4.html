@@ -764,7 +764,7 @@
               browserCamera: true,
               frameUrl:   '/api/dumbbell_press/frame',
               // The phone faces the seated participant, screen toward the
-              // coach — the back camera. Falls back to a laptop's.
+              // coach - the back camera. Falls back to a laptop's.
               preferBackCamera: true,
               buttons: [
                   { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
@@ -779,12 +779,12 @@
                   const lines = [];
                   // Sitting turned makes presses read low, so it comes first.
                   if (state.turned) {
-                      lines.push(`\u26a0 Student is turned ~${state.turn_deg}\u00b0 \u2014 ` +
+                      lines.push(`\u26a0 Student is turned ~${state.turn_deg}\u00b0 - ` +
                                  'turn the chair to face the camera squarely');
                   }
                   // The hand leaving the top of the picture counts nothing.
                   if (state.no_room) {
-                      lines.push('\u26a0 Not enough room above the head \u2014 ' +
+                      lines.push('\u26a0 Not enough room above the head - ' +
                                  'tilt the phone up or move it back');
                   }
                   lines.push(`Count: ${state.count} / ${state.max_reps}`);
@@ -799,8 +799,8 @@
                       lines.push(`Hand above shoulder: ${state.wrist_up.toFixed(1)} upper arms (need ${state.wrist_up_needed})`);
                   } else {
                       lines.push(state.pose_detected
-                          ? 'Arm not clearly visible \u2014 front-on, head and both arms in frame'
-                          : 'No participant detected \u2014 is the spotter in front of the student, or the student turned away?');
+                          ? 'Arm not clearly visible - front-on, head and both arms in frame'
+                          : 'No participant detected - is the spotter in front of the student, or the student turned away?');
                   }
                   if (state.test_done) {
                       lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
