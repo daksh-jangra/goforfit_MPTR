@@ -285,6 +285,20 @@ CREATE TABLE IF NOT EXISTS dumbbell_press (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Push-Up ──────────────────────────────────────────────────────────────
+-- One trial (Brockport fig. 5.17): push-ups on the toes at about 1 every
+-- 3 s, as many as possible. reps is the score (correct push-ups only); the
+-- trial ends after 6 s with no push-up or when the coach stops it.
+CREATE TABLE IF NOT EXISTS push_up (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    reps            INTEGER,     -- correct push-ups (the score)
+    duration_sec    REAL,        -- START to the end, for context only
+    end_reason      TEXT,        -- 'no push-up for 6 s', 'stopped by coach'
+    rating          TEXT,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Modified Curl-Up ─────────────────────────────────────────────────────
 -- One trial (Brockport fig. 5.8): curl-ups with the hands sliding up the
 -- thighs to the kneecaps, about 1 every 3 s, up to 75. reps is the score
@@ -399,6 +413,10 @@ UNION ALL
     SELECT 'dumbbell_press', dbp.id, dbp.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, dbp.reps, dbp.rating, dbp.recorded_at
     FROM dumbbell_press dbp LEFT JOIN sessions s ON dbp.session_id = s.id
+UNION ALL
+    SELECT 'push_up', pu.id, pu.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, pu.reps, pu.rating, pu.recorded_at
+    FROM push_up pu LEFT JOIN sessions s ON pu.session_id = s.id
 UNION ALL
     SELECT 'modified_curl_up', mcu.id, mcu.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, mcu.reps, mcu.rating, mcu.recorded_at
@@ -845,6 +863,25 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Push-Up ──────────────────────────────────────────────────────────
+
+    def save_push_up(
+        self,
+        session_id: int,
+        reps: int,
+        duration_sec: float = None,
+        end_reason: str = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO push_up (session_id, reps,
+                        duration_sec, end_reason, rating)
+                   VALUES (?,?,?,?,?)""",
+                (session_id, reps, duration_sec, end_reason, rating),
+            )
+            return cur.lastrowid
+
     # ── Modified Curl-Up ─────────────────────────────────────────────────
 
     def save_modified_curl_up(
@@ -909,7 +946,7 @@ class GoForFitDB:
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
-        "seated_push_up", "target_stretch", "dumbbell_press",
+        "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
         "modified_curl_up",
     }
 
