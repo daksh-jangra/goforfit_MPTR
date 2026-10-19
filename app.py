@@ -78,7 +78,7 @@ try:
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
         ShoulderStretchEngine, IsometricPushUpEngine,
         SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
-        ModifiedCurlUpEngine,
+        PushUpEngine, ModifiedCurlUpEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -90,6 +90,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     SeatedPushUpEngine = None
     TargetStretchEngine = None
     DumbbellPressEngine = None
+    PushUpEngine = None
     ModifiedCurlUpEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
@@ -132,6 +133,7 @@ _isometric_push_up_engine = None
 _seated_push_up_engine = None
 _target_stretch_engine = None
 _dumbbell_press_engine = None
+_push_up_engine = None
 _modified_curl_up_engine = None
 
 
@@ -764,6 +766,47 @@ TESTS = {
         "unit":   "reps",
         "live_feed":   True,
     },
+    "push_up": {
+        "id":          "push_up",
+        "title":       "Push-Up",
+        "subtitle":    "Push-ups on the toes, one every 3 s: as many as possible",
+        "icon":        "\U0001f4aa",
+        "category":    "Muscular Endurance",
+        "script":      "push_up.py",
+        "description": [
+            "Tests upper-body strength and endurance.",
+            "The student lies face down on a mat, hands under the shoulders, legs "
+            "straight and slightly apart, weight on the tucked toes.",
+            "They push up until the arms are straight. This is the starting position.",
+            "They lower the body until the elbows are bent to 90\u00b0, then push back "
+            "up to straight arms. That is one push-up.",
+            "Keep a pace of about one push-up every 3 seconds. The screen beeps the pace.",
+            "Tap START on 'GO'.",
+            "A push-up is NOT counted if the knees touch the floor, the arms don't "
+            "straighten at the top, the elbows don't reach 90\u00b0, or the back isn't "
+            "kept reasonably straight. The screen says why.",
+            "The test ends by itself after 6 seconds with no push-up (two beats), or when "
+            "the coach taps STOP.",
+            "One trial. The score is the number of correct push-ups.",
+            "Jerky or one-sided push-ups are the coach's call: correct the count on the "
+            "results screen.",
+        ],
+        "controls": [
+            ("START", "Start counting (the 'GO' signal) and the 3 s beep"),
+            ("RESET", "Start the trial over (clears the count)"),
+        ],
+        "tip": [
+            "Camera on the floor or just above it, SIDE-ON to the student, 1.5 to 2.5 m "
+            "away.",
+            "Keep the whole body, from the hands to the toes, in frame. The toes matter: "
+            "they show whether the knees are down.",
+            "Turn the phone's sound up for the beep.",
+            "Only the student should be in frame.",
+        ],
+        "params": [],
+        "unit":   "reps",
+        "live_feed":   True,
+    },
     "modified_curl_up": {
         "id":          "modified_curl_up",
         "title":       "Modified Curl-Up",
@@ -1029,6 +1072,8 @@ def _is_running(test_id: str) -> bool:
         return _target_stretch_engine.is_running()
     if test_id == "dumbbell_press" and _dumbbell_press_engine is not None:
         return _dumbbell_press_engine.is_running()
+    if test_id == "push_up" and _push_up_engine is not None:
+        return _push_up_engine.is_running()
     if test_id == "modified_curl_up" and _modified_curl_up_engine is not None:
         return _modified_curl_up_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
@@ -1188,6 +1233,13 @@ class DumbbellPressSave(BaseModel):
     session_id: Optional[int] = None
     reps: Optional[int] = None             # the score: 0-50
     arm: Optional[str] = None
+    duration_sec: Optional[float] = None
+    end_reason: Optional[str] = None
+    rating: Optional[str] = None
+
+class PushUpSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None             # the score: correct push-ups
     duration_sec: Optional[float] = None
     end_reason: Optional[str] = None
     rating: Optional[str] = None
@@ -1459,6 +1511,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "dumbbell_press" and DumbbellPressEngine is not None:
         return await _launch_dumbbell_press(request)
+
+    if test_id == "push_up" and PushUpEngine is not None:
+        return await _launch_push_up(request)
 
     if test_id == "modified_curl_up" and ModifiedCurlUpEngine is not None:
         return await _launch_modified_curl_up(request)
@@ -1925,6 +1980,29 @@ async def _launch_dumbbell_press(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_push_up(request: Request):
+    global _push_up_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # Nothing to configure: the coach taps START on "GO".
+    def _stage(reps, duration_sec, end_reason):
+        _pending["push_up"] = {
+            "session_id": session_id, "reps": reps,
+            "duration_sec": duration_sec, "end_reason": end_reason,
+        }
+
+    try:
+        engine = PushUpEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _push_up_engine = engine
+    _pending.pop("push_up", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 async def _launch_modified_curl_up(request: Request):
     global _modified_curl_up_engine
     body = await _json_body(request)
@@ -2076,7 +2154,7 @@ def engine_status():
                                "sit_reach", "trunk_lift", "reverse_curl",
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
-                               "dumbbell_press", "modified_curl_up",
+                               "dumbbell_press", "push_up", "modified_curl_up",
                                "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
@@ -2188,6 +2266,11 @@ def stop(test_id: str):
         # Like the pull-ups: the engine stages the count from its own stop()
         # hook if the coach stops before 50 reps or a 4 s rest ended it.
         _dumbbell_press_engine.stop()
+        return {"ok": True}
+    if test_id == "push_up" and _push_up_engine is not None:
+        # Like the dumbbell press: the engine stages the count from its own
+        # stop() hook if the coach stops before 6 s without a push-up ended it.
+        _push_up_engine.stop()
         return {"ok": True}
     if test_id == "modified_curl_up" and _modified_curl_up_engine is not None:
         # Like the dumbbell press: the engine stages the count from its own
@@ -2384,6 +2467,11 @@ async def target_stretch_frame(request: Request):
 @app.post("/api/dumbbell_press/frame")
 async def dumbbell_press_frame(request: Request):
     return await _receive_frame(_dumbbell_press_engine, request)
+
+
+@app.post("/api/push_up/frame")
+async def push_up_frame(request: Request):
+    return await _receive_frame(_push_up_engine, request)
 
 
 @app.post("/api/modified_curl_up/frame")
@@ -3018,6 +3106,44 @@ def dumbbell_press_action(b: DumbbellPressAction):
         _pending.pop("dumbbell_press", None)
     return res
 
+# ── Push-up live-feed control ──────────────────────────────────────────
+class PushUpAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/push_up/feed")
+def push_up_feed():
+    if _push_up_engine is None or not _push_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Push-up test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _push_up_engine is not None and _push_up_engine.is_running():
+            jpg = _push_up_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/push_up/state")
+def push_up_state():
+    if _push_up_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_push_up_engine.get_state()}
+
+@app.post("/api/push_up/action")
+def push_up_action(b: PushUpAction):
+    if _push_up_engine is None or not _push_up_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Push-up test isn't running"}, status_code=409)
+    res = _push_up_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # Drop a count staged by the attempt being thrown away.
+        _pending.pop("push_up", None)
+    return res
+
 # ── Modified curl-up live-feed control ─────────────────────────────────
 class ModifiedCurlUpAction(BaseModel):
     action: str
@@ -3464,6 +3590,24 @@ def save_dumbbell_press(b: DumbbellPressSave):
         session_id   = b.session_id,
         reps         = b.reps,
         arm          = b.arm,
+        duration_sec = b.duration_sec,
+        end_reason   = b.end_reason,
+        rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/push_up")
+def save_push_up(b: PushUpSave):
+    """Fields: session_id, reps (0 or more), duration_sec (opt),
+    end_reason (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.reps is None or b.reps < 0:
+        return JSONResponse({"ok": False, "error": "Push-ups must be 0 or more"}, status_code=400)
+    row_id = db.save_push_up(
+        session_id   = b.session_id,
+        reps         = b.reps,
         duration_sec = b.duration_sec,
         end_reason   = b.end_reason,
         rating       = b.rating,
