@@ -271,6 +271,31 @@ def check_knee_lines_strict_but_not_too_strict():
         assert (test.count == 4) == counted, ("no toes", knee, test.count, test.not_counted)
 
 
+def check_toes_flickering_keeps_the_softer_knee_line():
+    # The pose model drops the toe now and then. Soft knees (147) on the
+    # toes must still count, and knee push-ups must still be caught.
+    for miss in (0.1, 0.3):
+        for fps in (8, 15, 30):
+            for seed in range(5):
+                rnd = random.Random(seed)
+
+                def flicker(base, **kw):
+                    def model(e, **c):
+                        m = base(e, **kw, **c)
+                        if rnd.random() < miss:
+                            m["knee_h"] = None
+                        return m
+                    return model
+                soft = flicker(on_toes, knee=147.0)
+                test, t = started(fps, model=soft)
+                run(test, reps(soft, 5) + [(0.5, hold(soft))], fps=fps, t0=t, jitter=2, seed=seed)
+                assert test.count == 5, ("soft", miss, fps, seed, test.not_counted)
+                kneel = flicker(on_knees_shins_flat)
+                test, t = started(fps, model=kneel)
+                run(test, reps(kneel, 5), fps=fps, t0=t, jitter=2, seed=seed)
+                assert test.count == 0, ("kneel", miss, fps, seed, test.count)
+
+
 def check_toes_warning_comes_and_goes_and_never_changes_the_count():
     test, t = started()
     t = run(test, reps(on_toes, 2), t0=t)
