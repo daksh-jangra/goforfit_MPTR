@@ -493,6 +493,12 @@
                                  'modified_curl_up']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
+        // Counts the database keeps as whole numbers. 7.5 reps can't be saved,
+        // so say so here rather than fail with a bare "Could not save".
+        const WHOLE_ONLY = new Set(['curl_up', 'pull_up', 'full_pull_up', 'wall_toss',
+                                    'dumbbell_press', 'modified_curl_up']).has(testId);
+        const notWhole = (v) => WHOLE_ONLY && !Number.isInteger(v);
+        const NOT_WHOLE_MSG = 'Enter a whole number (no decimals).';
 
         // The override boxes are marked min="1" for measured tests; a rep count
         // of 0 is valid, so the browser must not reject it.
@@ -501,6 +507,9 @@
                 el.min = '0';
                 el.step = '1';
             });
+        }
+        if (WHOLE_ONLY) {
+            document.querySelectorAll('#override-input').forEach(el => { el.step = '1'; });
         }
 
         let pendingResult = null;
@@ -735,6 +744,11 @@
                 msg.classList.remove('hidden');
                 return;
             }
+            if (notWhole(v)) {
+                msg.innerText = NOT_WHOLE_MSG;
+                msg.classList.remove('hidden');
+                return;
+            }
             const field = RESULT_FIELD_MAP[testId] || 'wingspan_cm';
             // Create a new pendingResult if there isn't one (pure manual entry)
             if (!pendingResult) {
@@ -775,6 +789,10 @@
                     const v = parseFloat(input.value);
                     if (badValue(v)) {
                         showSaveMessage('Enter a value before saving.', false);
+                        return;
+                    }
+                    if (notWhole(v)) {
+                        showSaveMessage(NOT_WHOLE_MSG, false);
                         return;
                     }
                     if (testId === 'isometric_push_up' && v > 40) {
