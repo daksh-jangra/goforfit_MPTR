@@ -32,6 +32,8 @@ import sys
 import csv
 import io
 import time
+import asyncio
+import re
 import concurrent.futures
 from pathlib import Path
 import sqlite3
@@ -939,6 +941,61 @@ TESTS = {
 # ── Track running processes ────────────────────────────────────────────────
 _running: dict[str, subprocess.Popen] = {}
 
+# ── Auto-stop for a test nobody has open ───────────────────────────────────
+# screen4 polls /api/<test>/state every 0.6 s while a test is open. A window
+# closed without STOP and never reopened leaves its engine running (the next
+# START stops it - see launch()), holding its pose model until the server
+# restarts. So a test whose page hasn't been heard from for IDLE_STOP_S is
+# stopped, the same as pressing STOP. Generous on purpose: a phone browser
+# slows the polling of a tab in the background to about once a minute, and a
+# test someone is still running must never be cut off.
+IDLE_STOP_S = 300
+IDLE_CHECK_S = 30
+_last_seen: dict[str, float] = {}   # test_id -> time.monotonic() of its last request
+_ENGINE_PATH = re.compile(r"^/api/([a-z0-9_]+)/(state|frame|feed|action)$")
+
+
+@app.middleware("http")
+async def _note_test_page(request: Request, call_next):
+    m = _ENGINE_PATH.match(request.url.path)
+    if m:
+        _last_seen[m.group(1)] = time.monotonic()
+    return await call_next(request)
+
+
+def _stop_idle_engines(now: Optional[float] = None) -> list[str]:
+    """Stop every in-app engine whose page has gone quiet. Returns their ids."""
+    now = time.monotonic() if now is None else now
+    stopped = []
+    for test_id, seen in list(_last_seen.items()):
+        if now - seen < IDLE_STOP_S or test_id in _running:
+            continue   # still open, or a desktop-window script the coach closes
+        try:
+            if _is_running(test_id):
+                print(f"[idle] {test_id}: no page open for {IDLE_STOP_S}s - stopping it")
+                # Keep a result that was already waiting (a test that ended by
+                # itself), but not a half-finished one only this stop made:
+                # nobody saw that trial, so it isn't a score.
+                had_result = test_id in _pending
+                stop(test_id)
+                if not had_result:
+                    _pending.pop(test_id, None)
+                stopped.append(test_id)
+        except Exception as exc:
+            print(f"[idle] {test_id}: could not stop it: {exc}")
+    return stopped
+
+
+@app.on_event("startup")
+async def _start_idle_watch():
+    # On the event loop, like launch(): a check and its stop can't interleave
+    # with a START replacing the engine, so a fresh run is never the one cut.
+    async def watch():
+        while True:
+            await asyncio.sleep(IDLE_CHECK_S)
+            _stop_idle_engines()
+    asyncio.create_task(watch())
+
 
 def _is_running(test_id: str) -> bool:
     if test_id == "wingspan" and _wingspan_engine is not None:
@@ -1354,6 +1411,8 @@ async def launch(test_id: str, request: Request):
     if _is_running(test_id):
         stop(test_id)
         _pending.pop(test_id, None)
+    # A new start gets the full grace period before the idle stop can act.
+    _last_seen[test_id] = time.monotonic()
 
     if test_id == "wingspan" and WingspanEngine is not None:
         return await _launch_wingspan(request)
