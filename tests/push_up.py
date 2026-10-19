@@ -53,7 +53,11 @@ What the camera checks (owner's choices, 2026-10-14)
   loses push-ups (owner, 2026-10-19). Without the toes in view the knee
   height can't be read, so the angle is the only knee check and the line
   is KNEE_MIN_NO_TOES_DEG (150) instead, to catch the shins-flat knee
-  push-up below. With the shins flat on the mat a knee
+  push-up below. Which line applies is decided once per PUSH-UP, not per
+  frame: 145 if the toes were seen for FAULT_MIN_S while the height check
+  runs (elbow >= 130), else 150. Per frame, the pose model dropping the toe
+  now and then switched soft knees (147) to the 150 line: with the toes
+  missing in 10% of frames, 74% of those push-ups were lost (now 0). With the shins flat on the mat a knee
   push-up's knee only bends to ~140-150 at the top and straightens toward
   ~170 at the bottom, so the knee HEIGHT catches it too: kneeling, the knee
   sits on the floor line through the hands and toes (~0.1 thigh lengths -
@@ -317,6 +321,8 @@ class PushUpTest:
         self.in_position = False   # body roughly horizontal
         self.problem = None        # what is wrong right now, for the screen
         self._fault_t = {"knees": 0.0, "back": 0.0}
+        self._knee_soft_t = 0.0    # knee between the two lines (145-150), this rep
+        self._toes_seen_t = 0.0    # toes seen while the height check runs, this rep
         self._peak = None          # highest elbow since reaching the bottom
         self._dip = None           # lowest elbow since leaving the top
         self.no_toes = False       # the "toes not in view" warning is showing
@@ -368,6 +374,8 @@ class PushUpTest:
     def _clear_faults(self):
         for k in self._fault_t:
             self._fault_t[k] = 0.0
+        self._knee_soft_t = 0.0
+        self._toes_seen_t = 0.0
         self._peak = None
 
     # ── per frame ───────────────────────────────────────────────────────
@@ -452,13 +460,13 @@ class PushUpTest:
             return None
 
         e = m["elbow"]
-        if m["knee_h"] is None:
-            knees = m["knee"] < KNEE_MIN_NO_TOES_DEG
-        else:
-            knees = (m["knee"] < KNEE_MIN_DEG
-                     or (e >= KNEE_CHECK_DEG and m["knee_h"] < KNEE_LOW))
+        toes = m["knee_h"] is not None
+        knees = (m["knee"] < KNEE_MIN_DEG
+                 or (toes and e >= KNEE_CHECK_DEG and m["knee_h"] < KNEE_LOW))
+        knee_soft = KNEE_MIN_DEG <= m["knee"] < KNEE_MIN_NO_TOES_DEG
         back = abs(m["bend"]) > BACK_MAX_DEG
-        self.problem = ("Knees down - legs straight, on the toes" if knees
+        self.problem = ("Knees down - legs straight, on the toes"
+                        if (knees or (knee_soft and self.no_toes))
                         else ("Hips too high - body straight" if m["bend"] > 0
                               else "Hips sagging - body straight") if back
                         else None)
@@ -481,6 +489,10 @@ class PushUpTest:
             self._fault_t["knees"] += dt
         if back:
             self._fault_t["back"] += dt
+        if knee_soft:
+            self._knee_soft_t += dt
+        if toes and e >= KNEE_CHECK_DEG:
+            self._toes_seen_t += dt
 
         if self.phase == PH_LOWERING:
             self._dip = min(self._dip, e)
@@ -499,6 +511,11 @@ class PushUpTest:
             self.phase = PH_UP
             if not counting:
                 return None
+            # Toes not seen long enough this rep for the height check: the
+            # knee angle is the only knee check, so it uses the stricter line.
+            if (self._toes_seen_t < FAULT_MIN_S - 1e-9
+                    and self._fault_t["knees"] + self._knee_soft_t >= FAULT_MIN_S - 1e-9):
+                return self._reject("knees", counting)
             for fault in ("knees", "back"):
                 if self._fault_t[fault] >= FAULT_MIN_S - 1e-9:
                     return self._reject(fault, counting)
