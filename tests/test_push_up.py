@@ -255,6 +255,39 @@ def check_knee_push_up_caught_without_toes():
     assert test.count == 0 and test.not_counted["knees"] == 4, test.not_counted
 
 
+def check_knee_lines_strict_but_not_too_strict():
+    # Toes in view: soft knees (147+) count, clearly bent (140) don't.
+    for knee, counted in ((150.0, True), (147.0, True), (140.0, False)):
+        test, t = started()
+        run(test, reps(on_toes, 4, knee=knee) + [(0.5, hold(on_toes, knee=knee))], t0=t, jitter=2)
+        assert (test.count == 4) == counted, (knee, test.count, test.not_counted)
+        if not counted:
+            assert test.not_counted["knees"] == 4, (knee, test.not_counted)
+    # Toes out of view: the angle is the only knee check, so it stays at 150.
+    for knee, counted in ((155.0, True), (147.0, False)):
+        test, t = started()
+        run(test, reps(on_toes, 4, knee=knee, knee_h=None)
+            + [(0.5, hold(on_toes, knee=knee, knee_h=None))], t0=t, jitter=2)
+        assert (test.count == 4) == counted, ("no toes", knee, test.count, test.not_counted)
+
+
+def check_toes_warning_comes_and_goes_and_never_changes_the_count():
+    test, t = started()
+    t = run(test, reps(on_toes, 2), t0=t)
+    assert not test.no_toes
+    t = run(test, reps(on_toes, 2, knee_h=None), t0=t)       # toes cropped out
+    assert test.no_toes
+    t = run(test, [(0.3, hold(on_toes))] + reps(on_toes, 2), t0=t)  # back in view
+    assert not test.no_toes
+    run(test, [(0.5, hold(on_toes))], t0=t)
+    assert test.count == 6, test.count
+    # A single frame without toes doesn't raise it.
+    test, t = started()
+    seq = [(0.05, hold(on_toes, knee_h=None)), (1.0, hold(on_toes))] * 3
+    run(test, seq, t0=t)
+    assert not test.no_toes
+
+
 def check_good_push_up_low_knee_at_bottom_counts():
     # The knee is close to the floor at the bottom of a good push-up; that
     # must not read as kneeling.
