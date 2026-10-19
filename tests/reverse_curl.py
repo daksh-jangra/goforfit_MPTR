@@ -337,7 +337,7 @@ class ReverseCurlTracker:
                 self._above_since = None
                 self.hold_elapsed = 0.0
                 self.state = State.LIFTING
-                self.status_msg = "Video paused mid-hold — hold again"
+                self.status_msg = "Video paused mid-hold - hold again"
 
         if angle_deg is None:
             return self._on_dropout(now)
@@ -372,7 +372,7 @@ class ReverseCurlTracker:
                 self.status_msg = f"Hold for {self.hold_s:.0f} s"
             elif angle >= self.baseline_deg - self.return_tol:
                 return self._end_attempt(f"Came back down at {self.peak_deg:.0f} deg "
-                                         f"— target is {self.up_angle:.0f} deg")
+                                         f"- target is {self.up_angle:.0f} deg")
             return None
 
         if self.state == State.HOLD:
@@ -396,7 +396,7 @@ class ReverseCurlTracker:
                                              f"{self.hold_s:.0f} s before lowering")
                 else:
                     self.state = State.LIFTING
-                    self.status_msg = "Lost the hold — back to the target"
+                    self.status_msg = "Lost the hold - back to the target"
                 return None
 
             self.hold_elapsed = now - self._hold_start
@@ -404,7 +404,7 @@ class ReverseCurlTracker:
             if self.hold_elapsed >= self.hold_s:
                 self.state = State.LOWERING
                 self._return.clear()
-                self.status_msg = "Hold complete — lower the weight to the thigh"
+                self.status_msg = "Hold complete - lower the weight to the thigh"
             return None
 
         if self.state == State.LOWERING:
@@ -453,7 +453,7 @@ class ReverseCurlTracker:
             self._hold_start = None
             self.hold_elapsed = 0.0
             self.state = State.LIFTING
-            self.status_msg = "Tracking lost mid-hold — hold again"
+            self.status_msg = "Tracking lost mid-hold - hold again"
         return None
 
     def _seek_baseline(self, angle, now, refresh=False):
@@ -464,7 +464,7 @@ class ReverseCurlTracker:
             self._settle.clear()
             if not refresh:
                 self.status_msg = (f"Open the elbow past {self.rest_min:.0f} deg "
-                                   f"— rest the weight on the thigh")
+                                   f"- rest the weight on the thigh")
             return
         if angle > self.rest_max:
             # Arm hanging at the side — or, filmed from the FRONT, a forearm
@@ -473,7 +473,7 @@ class ReverseCurlTracker:
             # Either way this isn't a usable resting angle; say which to fix.
             self._settle.clear()
             if not refresh:
-                self.status_msg = "Arm looks straight — rest the weight on the thigh, film side-on"
+                self.status_msg = "Arm looks straight - rest the weight on the thigh, film side-on"
             return
         band, settle_s = ((SETTLED_BAND_DEG, SETTLED_S) if refresh
                           else (self.rest_band, self.settle_s))
@@ -483,7 +483,7 @@ class ReverseCurlTracker:
             if not refresh:
                 self.state = State.SET
                 self.status_msg = (f"Rest angle {self.baseline_deg:.0f} deg "
-                                   f"— lift to {self.up_angle:.0f} deg")
+                                   f"- lift to {self.up_angle:.0f} deg")
 
     def _still_in_rest_range(self, buf, angle, now, band, settle_s):
         """Feed one angle into a stillness window. True once the elbow has sat
@@ -522,7 +522,7 @@ class ReverseCurlTracker:
         self.baseline_deg = float(deg)
         self.state = State.SET
         self.status_msg = (f"Rest angle {self.baseline_deg:.0f} deg "
-                           f"— lift to {self.up_angle:.0f} deg")
+                           f"- lift to {self.up_angle:.0f} deg")
 
     def _note_hold(self, when):
         if self._hold_start is not None:
@@ -539,7 +539,7 @@ class ReverseCurlTracker:
             self.hold_elapsed = 0.0
             self.hold_best_s = 0.0
             self.state = State.SET
-            self.status_msg = f"Ready — lift to {self.up_angle:.0f} deg"
+            self.status_msg = f"Ready - lift to {self.up_angle:.0f} deg"
             return None
         return self._fail(msg)
 
@@ -564,7 +564,7 @@ class ReverseCurlTracker:
         self.passed = False
         self.verdict_by = "auto"
         self.state = State.FAILED
-        self.status_msg = f"FAIL — {msg}"
+        self.status_msg = f"FAIL - {msg}"
         return self.result()
 
     def finish(self):
@@ -613,7 +613,7 @@ class ReverseCurlTracker:
         self.passed = True
         self.verdict_by = "auto"
         self.state = State.PASSED
-        self.status_msg = "PASS — correct reverse curl"
+        self.status_msg = "PASS - correct reverse curl"
         return self.result()
 
     # ── read-only views ──────────────────────────────────────────────────
@@ -813,8 +813,8 @@ def draw_panel(img, x1, y1, x2, y2, colour=C_DARK, alpha=0.65):
 
 def _hud_text(txt):
     """cv2.putText only draws ASCII: anything else is rendered as "???".
-    Status messages keep their proper punctuation for screen4's HTML status
-    line and are flattened here, at the one place that draws them."""
+    The status lines are written in plain ASCII, so this is a safety net for
+    anything added later (a dash, a degree sign) reaching the overlay."""
     txt = txt.replace("\u2014", "-").replace("\u2013", "-").replace("\u00b0", " deg")
     return txt.encode("ascii", "replace").decode("ascii")
 
@@ -946,7 +946,7 @@ def main():
     clip_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
     if not live and not (1.0 <= clip_fps <= 240.0):
         clip_fps = 30.0
-        print(f"[WARN] {args.source} reports no usable frame rate — "
+        print(f"[WARN] {args.source} reports no usable frame rate - "
               f"timing it as {clip_fps:.0f} fps")
 
     print(f"\n[INFO] Stream  {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}×"
