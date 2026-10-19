@@ -356,6 +356,8 @@
             document.getElementById('m-class').innerText = student ? student.grade : (cls || '-');
             document.getElementById('m-roll').innerText = student && student.roll_no ? student.roll_no : '-';
             loadSavedResults();
+            // A waiting result may belong to the student just picked, or not.
+            if (pendingResult) renderPendingResult();
         }
 
         function toggleAddStudent() {
@@ -514,6 +516,60 @@
 
         let pendingResult = null;
 
+        // ---- Whose result is waiting ---------------------------------------
+        // One unsaved result is kept per test, tied to the session it was run
+        // under. If the coach has since picked a different student, saving it
+        // (or typing that student's score over it) would file it under the
+        // first student. So look up whose it is, show it, and refuse to save
+        // it while someone else is picked.
+        let pendingOwner = null;
+        async function loadPendingOwner(sid) {
+            if (!sid) return null;
+            try {
+                const d = await fetch(`/api/session/${sid}`).then(r => r.json());
+                return (d && d.ok) ? d.session : null;
+            } catch (e) { return null; }
+        }
+        const sameText = (a, b) =>
+            String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+        // goToAI() names the session after the student, so compare the fields
+        // it writes: name, class, and the roll / reg numbers in the notes.
+        function isOwner(sess, st) {
+            if (!sameText(sess.student_name, st.name) || !sameText(sess.grade, st.grade)) return false;
+            return !sess.notes || sess.notes === `Roll: ${st.roll_no || '-'} | Reg: ${st.reg_no || '-'}`;
+        }
+        function pendingForAnother() {
+            const st = currentStudent();
+            return !!(pendingResult && pendingOwner && st && !isOwner(pendingOwner, st));
+        }
+        const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g,
+            c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        function ownerLabel() {
+            const o = pendingOwner;
+            if (!o) return '';
+            return escHtml(o.student_name || 'unknown') + (o.grade ? ` (${escHtml(o.grade)})` : '');
+        }
+        const otherStudentMsg = () =>
+            `This result is for ${pendingOwner.student_name}. Pick them to save it.`;
+        // Someone else's result: say whose it is, and don't show its value as
+        // if it were this student's.
+        function renderOtherStudentPending() {
+            if (IS_TST) {
+                ['left', 'right'].forEach(s => {
+                    document.getElementById(`tst-${s}-score`).textContent = '-';
+                    document.getElementById(`tst-${s}-deg`).innerHTML = '&nbsp;';
+                });
+                document.getElementById('tst-joint-label').textContent = '';
+            } else if (!TEST_TIMED) {
+                const el = document.getElementById('override-input');
+                if (el) el.value = '';
+            }
+            if (TEST_TIMED) document.getElementById('pending-panel').classList.remove('hidden');
+            document.getElementById('pending-summary').innerHTML =
+                `<span class="font-semibold text-amber-700">The waiting result is for ${ownerLabel()}, ` +
+                `not the student picked.</span> Pick ${escHtml(pendingOwner.student_name)} to review and save it.`;
+        }
+
         // ---- Laravel popup sync (Bhawani) ----------------------------------
         // This app is opened as a popup window from the Laravel dashboard at
         // nep.goforfit.in. Once a result is confirmed saved to our own DB,
@@ -559,6 +615,7 @@
                     return;
                 }
                 pendingResult = data.pending;
+                pendingOwner = await loadPendingOwner(pendingResult.session_id);
                 renderPendingResult();
             } catch (e) {
                 console.warn('Could not load pending result:', e);
@@ -632,6 +689,16 @@
         }
 
         function renderPendingResult() {
+            if (pendingForAnother()) { renderOtherStudentPending(); return; }
+            renderPendingValue();
+            // Name the student, so the coach can see it's the right one.
+            if (pendingResult && pendingOwner && pendingOwner.student_name) {
+                document.getElementById('pending-summary').insertAdjacentHTML('beforeend',
+                    `<div class="text-xs text-gray-500 mt-1">Student: ${ownerLabel()}</div>`);
+            }
+        }
+
+        function renderPendingValue() {
             if (IS_TST) { renderTstPending(); return; }
             const panel = document.getElementById('pending-panel');
             if (!pendingResult) { if (TEST_TIMED) panel.classList.add('hidden'); return; }
@@ -718,6 +785,11 @@
         function applyOverride() {
             const input = document.getElementById('override-input');
             const msg   = document.getElementById('override-msg');
+            if (pendingForAnother()) {
+                msg.innerText = otherStudentMsg();
+                msg.classList.remove('hidden');
+                return;
+            }
             if (IS_PASS_FAIL) {
                 if (input.value !== '0' && input.value !== '1') {
                     msg.innerText = 'Choose Pass or Fail.';
@@ -763,6 +835,7 @@
         }
 
         async function saveResult() {
+            if (pendingForAnother()) { showSaveMessage(otherStudentMsg(), false); return; }
             if (IS_TST) return saveTstResult();
             if (!TEST_TIMED) {
                 // Single-input layout: the box itself is the value to save —
