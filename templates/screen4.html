@@ -327,10 +327,10 @@
               renderStatus(state) {
                   const lines = [`Count: ${state.count}`];
                   if (state.test_done) {
-                      lines.push('Paused 2s — test ended. Tap STOP / SAVE');
+                      lines.push('Paused 2s - test ended. Tap STOP / SAVE');
                   } else if (state.test_started) {
                       lines.push(`${state.elapsed_sec}s elapsed`);
-                      lines.push('Chin must reach the bar — ends after a 2s pause');
+                      lines.push('Chin must reach the bar - ends after a 2s pause');
                   } else {
                       lines.push('Tap START as you call "GO"');
                   }
