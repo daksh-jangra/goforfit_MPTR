@@ -741,6 +741,7 @@ TESTS = {
             "Tap START on 'GO'.",
             "The test ends by itself at 50 reps, or after a 4-second rest. A slow press "
             "still going up, or a slow lowering still coming down, is not a rest.",
+            "If no rep counts within 15 seconds of START, the test ends with a score of 0.",
             "One trial. The score is the number of reps.",
         ],
         "controls": [
