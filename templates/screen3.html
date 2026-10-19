@@ -94,7 +94,7 @@
             {% for param in test.params %}
             <div class="space-y-1.5">
                 <label for="{{ param.name }}" class="block text-sm font-bold text-gray-900">
-                    {{ param.label }}{% if not param.get('required', True) %}<span class="font-normal text-gray-400"> — optional</span>{% endif %}
+                    {{ param.label }}{% if not param.get('required', True) %}<span class="font-normal text-gray-400"> - optional</span>{% endif %}
                 </label>
                 <div class="flex gap-2">
                     <input id="{{ param.name }}" type="{{ param.type }}" min="{{ param.min }}" max="{{ param.max }}" placeholder="{{ param.placeholder }}" class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
@@ -129,7 +129,7 @@
         </div>
 
         <div id="pending-panel" class="hidden bg-indigo-50 border border-indigo-200 rounded p-4 text-sm space-y-3">
-            <div class="font-bold text-indigo-950">AI Result — Review &amp; Save</div>
+            <div class="font-bold text-indigo-950">AI Result - Review &amp; Save</div>
             <div id="pending-summary" class="text-gray-800"></div>
 
             <!-- Manual override -->
@@ -243,7 +243,7 @@
         {% endif %}
 
         <div id="saved-results" class="hidden bg-white border border-gray-200 rounded p-4 text-sm">
-            <div class="font-bold text-indigo-950 mb-2">Saved Results — {{ test.title }}</div>
+            <div class="font-bold text-indigo-950 mb-2">Saved Results - {{ test.title }}</div>
             <div id="saved-results-empty" class="text-xs text-gray-500 hidden">No saved results yet for this student.</div>
             <table id="saved-results-table" class="w-full text-xs text-left hidden">
                 <thead>
@@ -300,7 +300,7 @@
                     status.className = 'text-xs text-rose-600 font-semibold';
                 }
             } catch (e) {
-                status.innerText = '❌ Request failed — is the server running?';
+                status.innerText = '❌ Request failed - is the server running?';
                 status.className = 'text-xs text-rose-600 font-semibold';
             }
 
@@ -479,7 +479,7 @@
         // Pass/fail tests are decided by the camera and their box is locked,
         // so "enter a value manually" would be wrong advice there.
         const NO_READING_MSG = (IS_PASS_FAIL || IS_TST)
-            ? 'No result yet \u2014 run the test; the camera decides it.'
+            ? 'No result yet - run the test; the camera decides it.'
             : 'No AI reading staged. Enter a value manually below, or use Switch to AI.';
         // Rep counts where zero is a real score: a kid who manages no pull-up
         // scored 0, not "nothing measured". Every other measured test keeps the
@@ -594,7 +594,7 @@
                 exerciseType: map.exerciseType,
                 [map.scoreKey]: scoreValue
             }, LARAVEL_PARENT_ORIGIN);
-            showSaveMessage('Result saved — syncing with Laravel...', true);
+            showSaveMessage('Result saved - syncing with Laravel...', true);
             setTimeout(() => window.close(), 800); // brief pause so the message above is visible
         }
 
@@ -645,14 +645,14 @@
             document.getElementById('tst-joint-label').textContent =
                 p ? (p.joint_title || TST_JOINTS[p.joint] || p.joint || '') : '';
             document.getElementById('pending-summary').innerHTML = (tstHasSide(p, 'left') || tstHasSide(p, 'right'))
-                ? 'AI scores \u2014 decided by the camera (0, 1 or 2 per side).'
+                ? 'AI scores - decided by the camera (0, 1 or 2 per side).'
                 : `<span class="text-gray-400">${NO_READING_MSG}</span>`;
         }
 
         async function saveTstResult() {
             const p = pendingResult;
             if (!(tstHasSide(p, 'left') || tstHasSide(p, 'right'))) {
-                showSaveMessage('No result yet \u2014 run the test first; the camera decides it.', false);
+                showSaveMessage('No result yet - run the test first; the camera decides it.', false);
                 return;
             }
             const sid = p.session_id || (urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null);
@@ -741,11 +741,11 @@
                 document.getElementById('pending-summary').innerHTML =
                     (passed !== undefined && passed !== null)
                         ? `AI verdict: <span class="font-semibold text-indigo-950">${passFailLabel(passed)}</span>${detail}` +
-                          (locked ? ' — decided by the camera.' : ' — change above if it looks wrong.')
+                          (locked ? ' - decided by the camera.' : ' - change above if it looks wrong.')
                         : notCompleted
                             ? '<span class="font-semibold text-amber-700">Not completed</span> - the camera didn\'t see a real attempt. Run the test again.'
                             : locked
-                                ? '<span class="text-gray-400">No result yet. Use Switch to AI — the camera decides this test.</span>'
+                                ? '<span class="text-gray-400">No result yet. Use Switch to AI - the camera decides this test.</span>'
                                 : '<span class="text-gray-400">No AI verdict staged. Choose Pass or Fail below, or use Switch to AI.</span>';
                 return;
             }
@@ -759,7 +759,7 @@
                 }
                 document.getElementById('pending-summary').innerHTML =
                     val !== undefined && val !== null
-                        ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}</span> — edit above if it looks wrong.`
+                        ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}</span> - edit above if it looks wrong.`
                         : `<span class="text-gray-400">${NO_READING_MSG}</span>`;
                 return;
             }
@@ -847,7 +847,7 @@
                             (pendingResult && pendingResult.rating === 'Not completed')
                                 ? 'Not completed - nothing to save. Run the test again.'
                             : input.disabled
-                                ? 'No result yet — run the test first; the camera decides it.'
+                                ? 'No result yet - run the test first; the camera decides it.'
                                 : 'Choose Pass or Fail before saving.', false);
                         return;
                     }
@@ -902,7 +902,7 @@
             }
 
             if (!pendingResult) {
-                showSaveMessage('Nothing to save — enter a value using the override box above.', false);
+                showSaveMessage('Nothing to save - enter a value using the override box above.', false);
                 return;
             }
             const btn = document.getElementById('save-btn');
