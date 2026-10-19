@@ -86,6 +86,10 @@ What counts as a rep - the HAND HEIGHT, not the elbow angle
 When the test ends
 --------------------------------------------------------------------
   * 50 reps.
+  * No rep counted within FIRST_REP_S (15 s) of START: the score is 0. The
+    owner's rule (2026-10-19), deliberately strict - a student who can't
+    straighten the elbow enough to reach the line gets 0 rather than an
+    allowance for their range. Short presses don't extend it.
   * REST_S (4 s) without the arm working, counted from the first rep on.
     "Working" means a new rep, getting back down to the start after a rep,
     a press still climbing (the wrist rising another PROGRESS_UA beyond
@@ -189,6 +193,10 @@ VisionRunningMode     = mp_vision.RunningMode
 # ── Protocol constants ───────────────────────────────────────────────────────────
 MAX_REPS = 50
 REST_S   = 4.0     # "rests for more than 4 seconds between repetitions"
+FIRST_REP_S = 15.0 # no counted rep this long after START = score 0. Not in
+                   # the manual: the owner's rule (2026-10-19), so a student
+                   # who can't press the weight to the line doesn't keep the
+                   # test open until the coach taps STOP.
 
 # ── Detection tuning ─────────────────────────────────────────────────────────────
 WRIST_UP_UA    = 1.3    # wrist this many upper arms above the shoulder = arm
@@ -258,6 +266,7 @@ PH_UP       = "up"         # extended overhead; must come down before the next r
 
 END_MAX      = "50 reps"
 END_REST     = "rested 4 s"
+END_NO_REP   = f"no rep in {FIRST_REP_S:.0f} s"
 END_STOPPED  = "stopped by coach"
 
 # HUD palette (matches reverse_curl.py)
@@ -481,9 +490,10 @@ class DumbbellPressTest:
     the rep count, the rest clock and the end rule. Driven entirely through
     update(readings, now), so it can be exercised with made-up sequences."""
 
-    def __init__(self, rest_s=REST_S, max_reps=MAX_REPS):
+    def __init__(self, rest_s=REST_S, max_reps=MAX_REPS, first_rep_s=FIRST_REP_S):
         self.rest_s = float(rest_s)
         self.max_reps = int(max_reps)
+        self.first_rep_s = float(first_rep_s)
         self.pinned = None         # ARM_LEFT / ARM_RIGHT pinned by the coach
         self.reset()
 
@@ -640,6 +650,12 @@ class DumbbellPressTest:
                     self.arm = a
                     break
             if self.arm is None:
+                # No rep at all: after FIRST_REP_S the score is 0.
+                if counting and now - self.start_t >= self.first_rep_s:
+                    # Timed from START, not from the frame that noticed it.
+                    self.stop(END_NO_REP, self.start_t + self.first_rep_s)
+                    self.status_msg = f"No rep in {self.first_rep_s:.0f} s - score 0"
+                    return END_NO_REP
                 return None
             other = ARM_RIGHT if self.arm == ARM_LEFT else ARM_LEFT
             self.counters[other].forget_reps()   # its stray reps never count
@@ -787,6 +803,8 @@ def draw_hud(frame, test, arm_label=None, arm_pts=None, now=None):
         line("Arm not tracked", C_BAD)
     if test.started and not test.stopped and test.count > 0:
         line(f"Rest: {test.rest_elapsed:.1f} / {test.rest_s:.0f} s")
+    elif test.started and not test.stopped:
+        line(f"First rep: {test.elapsed(now):.0f} / {test.first_rep_s:.0f} s")
 
     if test.turned:
         warn = (f"Student is turned ~{test.turn_deg:.0f} deg - "

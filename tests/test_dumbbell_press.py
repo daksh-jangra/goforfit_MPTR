@@ -475,10 +475,58 @@ def test_rest_after_the_last_rep_ends_at_four_seconds():
         assert test.count == 3
 
 
-def test_no_end_before_the_first_rep():
+def test_no_rest_end_before_the_first_rep():
+    # The 4 s rest only runs from the first rep: sitting still at the start
+    # doesn't end it at 4 s - only the 15 s no-rep rule does.
     test = started()
-    feed(test, [(20.0, IDLE, START)], 15, 0.5)
-    assert not test.stopped, "ended before any rep"
+    feed(test, [(14.0, IDLE, START)], 15, 0.5)
+    assert not test.stopped, "ended before 15 s with no rep"
+
+
+def test_no_rep_in_15_s_scores_zero():
+    for fps in (8, 15, 30):
+        test = started()
+        _, ended = feed(test, [(20.0, IDLE, START)], fps, 0.5)
+        assert test.stopped and test.end_reason == dp.END_NO_REP, f"{fps} fps: {test.end_reason}"
+        t_end = ended[0][0]
+        assert 15.0 <= t_end - 0.5 <= 15.0 + 1.0 / fps + 1e-6, f"{fps} fps: ended {t_end - 0.5:.2f} s after START"
+        res = test.result(now=t_end)
+        assert res["reps"] == 0 and res["end_reason"] == dp.END_NO_REP and res["duration_sec"] == 15.0, res
+
+
+def test_short_presses_do_not_hold_off_the_zero():
+    test = started()
+    feed(test, [(1.0, IDLE, START), (0.8, IDLE, HALF), (1.0, IDLE, START)] * 8, 15, 0.5)
+    assert test.stopped and test.end_reason == dp.END_NO_REP and test.count == 0
+    assert test.short_presses == 0      # no arm was locked, so none are its
+
+
+def test_not_seen_still_scores_zero_at_15_s():
+    test = started()
+    feed(test, [(16.0, None, None)], 15, 0.5)
+    assert test.stopped and test.end_reason == dp.END_NO_REP
+
+
+def test_a_first_rep_inside_15_s_keeps_the_test_going():
+    # A slow start: the first full rep lands at ~13.5 s, then two more.
+    test = started()
+    end, ended = feed(test, [(11.5, IDLE, START)] + rep() * 3, 15, 0.5)
+    assert not ended and test.count == 3 and not test.stopped, (test.count, test.end_reason)
+    _, ended = feed(test, [(6.0, IDLE, START)], 15, end)
+    assert test.end_reason == dp.END_REST and test.count == 3
+
+
+def test_no_rep_clock_waits_for_start_and_restarts_on_reset():
+    test = dp.DumbbellPressTest()
+    feed(test, [(20.0, IDLE, START)], 15)
+    assert not test.stopped, "ended before START"
+    test.start(now=20.0)
+    feed(test, [(10.0, IDLE, START)], 15, 20.0)
+    test.reset()
+    feed(test, [(0.5, IDLE, START)], 15, 30.0)
+    test.start(now=30.5)
+    feed(test, [(14.0, IDLE, START)], 15, 30.5)
+    assert not test.stopped, "RESET didn't restart the 15 s"
 
 
 def test_holding_the_weight_up_is_rest():

@@ -3435,6 +3435,7 @@ class DumbbellPressEngine(BaseWebEngine):
             "wrist_up_needed": dp_mod.WRIST_UP_UA,
             "rest_s": round(t.rest_elapsed, 1),
             "rest_limit_s": t.rest_s,
+            "first_rep_limit_s": t.first_rep_s,
             "short_presses": t.short_presses,
             "pose_detected": self.pose_detected,
             "arm_tracked": self.arm_tracked,

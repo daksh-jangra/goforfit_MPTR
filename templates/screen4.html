@@ -806,7 +806,9 @@
                       lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
                   } else if (state.test_started) {
                       lines.push(`${state.elapsed_sec}s elapsed` +
-                                 (state.count > 0 ? `   Rest: ${state.rest_s} / ${state.rest_limit_s} s` : ''));
+                                 (state.count > 0
+                                     ? `   Rest: ${state.rest_s} / ${state.rest_limit_s} s`
+                                     : `   First rep within ${state.first_rep_limit_s} s, or the score is 0`));
                   } else {
                       lines.push('Tap START as you call "GO"');
                   }
