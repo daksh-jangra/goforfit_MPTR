@@ -3610,6 +3610,7 @@ class PushUpEngine(BaseWebEngine):
         self.test = pu_mod.PushUpTest()
         self.pose_detected = False
         self.last_save = None
+        self._last_frame_t = None   # wall time the loop last processed a frame
 
     @property
     def count(self):
@@ -3683,12 +3684,20 @@ class PushUpEngine(BaseWebEngine):
             "problem": t.problem if t.tracked else None,
             "no_toes": t.no_toes and t.tracked,
             "toes_ok": t.toes_ok,
-            "slow_camera": t.slow_camera,
-            "fps": round(t.fps) if t.fps is not None else None,
+            # The test only hears about frames that arrive; frames that
+            # stopped coming altogether (Wi-Fi drop, phone locked) are
+            # only visible here.
+            "slow_camera": t.slow_camera or self._frames_stopped(),
+            "fps": 0 if self._frames_stopped() else (round(t.fps) if t.fps is not None else None),
             "pose_detected": self.pose_detected,
             "status_msg": t.status_msg,
             "last_save": self.last_save,
         }
+
+    def _frames_stopped(self):
+        """No frame processed for NO_FRAME_WARN_S, after the first one."""
+        return (self._running and self._last_frame_t is not None
+                and time.time() - self._last_frame_t > pu_mod.NO_FRAME_WARN_S)
 
     # ── actions (screen4 buttons) ───────────────────────────────────────
     def action_start(self, value=None):
@@ -3778,6 +3787,7 @@ class PushUpEngine(BaseWebEngine):
                     sides = pu_mod.read_sides(lms, fw, fh)
 
                 with self._lock:
+                    self._last_frame_t = time.time()
                     ended = self.test.update(sides)
                     if ended and not self._staged:
                         # The test's own end (6 s with no push-up) is how it

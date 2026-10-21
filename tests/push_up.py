@@ -66,7 +66,11 @@ What the camera checks (owner's choices, 2026-10-14)
   TOES must be seen (owner, 2026-10-21: "toes completely needs to be
   detected"). The knee height needs them, and without them the angle alone
   let ~1 in 4 shins-flat knee push-ups through. So:
-    * START is refused until the toes are in view (toes_ok).
+    * START is refused while the "Toes not in view" warning shows
+      (toes_ok is the same rule, so the button and the warning always
+      agree). Its own stricter line (40%) made the button grey out and come
+      back 4-9 times in 10 s with the toes flickering out in 30-50% of
+      frames, where counting is still fine.
     * A push-up only counts if the toes were seen for FAULT_MIN_S while
       the height check runs (elbow >= 130); otherwise "toes not in view".
       Decided per push-up, not per frame: the pose model drops the toe now
@@ -134,7 +138,10 @@ Tracking dropouts
   2026-10-21) when, over the last SLOW_WINDOW_S, fewer than SLOW_FPS frames
   a second are processed, or the student - mostly in view - is lost in
   more than LOSS_WARN_FRAC of them. It clears at CLEAR_FPS and below
-  LOSS_CLEAR_FRAC. Never changes the count; doesn't block START.
+  LOSS_CLEAR_FRAC. The browser engine also shows it when no frame at all
+  has arrived for NO_FRAME_WARN_S (Wi-Fi drop, phone locked): this file
+  only hears about frames that arrive, so it can't see that by itself.
+  Never changes the count; doesn't block START.
 
   The 3 s beat itself is played by the browser (screen4); this file only
   ends the test.
@@ -205,6 +212,7 @@ SLOW_FPS        = 10.0    # fewer frames a second than this -> warn
 CLEAR_FPS       = 12.0    # ...clears at this many
 LOSS_WARN_FRAC  = 0.2     # student lost in more than this share of frames -> warn
 LOSS_CLEAR_FRAC = 0.1     # ...clears below this
+NO_FRAME_WARN_S = 1.5     # no frame at all for this long -> warn (the engine)
 PRESENT_FRAC    = 0.5     # (losses only count while the student is in view in
                           # at least this share - not before they arrive)
 
@@ -381,7 +389,6 @@ class PushUpTest:
         self.slow_camera = False   # the "camera too slow" warning is showing
         self.fps = None            # frames processed per second, last SLOW_WINDOW_S
         self._frames = deque()     # (t, body seen) for every frame processed
-        self._toe_missing = None   # share of recent tracked frames without toes
         self._toes = deque()       # (t, toes seen) on tracked frames
         self.status_msg = "Press START when ready"
 
@@ -402,10 +409,9 @@ class PushUpTest:
 
     @property
     def toes_ok(self):
-        """The toes are in view now: seen in most of the last TOE_WINDOW_S
-        of tracked frames. START waits for this."""
-        return (len(self._toes) >= 3 and self._toe_missing is not None
-                and self._toe_missing <= TOE_CLEAR_FRAC)
+        """The toes are in view: the body has been tracked lately and the
+        "Toes not in view" warning isn't showing. START waits for this."""
+        return len(self._toes) >= 3 and not self.no_toes
 
     def start_problem(self):
         """Why START can't go yet (plain words), or None."""
@@ -557,10 +563,8 @@ class PushUpTest:
             self._toes.popleft()
         if not self._toes:
             self.no_toes = False
-            self._toe_missing = None
             return
         missing = sum(1 for _, s in self._toes if not s) / len(self._toes)
-        self._toe_missing = missing
         if missing > TOE_WARN_FRAC:
             self.no_toes = True
         elif missing < TOE_CLEAR_FRAC:
