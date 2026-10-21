@@ -1256,7 +1256,13 @@
           }
           row.classList.remove('hidden');
           box.classList.remove('hidden');
-          box.innerText = engineCfg.renderStatus(state).join('  •  ');
+          // A problem reported while the test is still running (e.g. the
+          // camera stalled: no new frame for 5 s) goes first. It used to be
+          // shown only after the test stopped, so the coach saw a frozen
+          // picture with no reason.
+          const lines = engineCfg.renderStatus(state);
+          if (state.error) lines.unshift(`⚠ ${state.error}`);
+          box.innerText = lines.join('  •  ');
           if (engineCfg.onState) engineCfg.onState(state);
           document.getElementById('ai-calib-overlay')?.classList.toggle('hidden', !engineCfg.showCalibOverlay(state));
           setButtonsEnabled(state);

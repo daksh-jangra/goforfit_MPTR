@@ -71,5 +71,5 @@ class StallWatchdogMixin:
             return (f"Camera never delivered a frame ({quiet_for:.0f}s). "
                     "Press STOP, check the camera is connected and not in use "
                     "by another app, then start again.")
-        return (f"Camera stalled — no new frame for {quiet_for:.0f}s. "
+        return (f"Camera stalled - no new frame for {quiet_for:.0f}s. "
                 "Press STOP and start again; restart the server if it keeps happening.")
