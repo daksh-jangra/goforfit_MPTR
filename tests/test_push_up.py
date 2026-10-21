@@ -248,11 +248,12 @@ def check_knee_push_ups_not_counted():
             assert test.not_counted["knees"] == 5, (model.__name__, fps, test.not_counted)
 
 
-def check_knee_push_up_caught_without_toes():
-    # Toes out of view: only the knee angle is left, which is ~145 at the top.
+def check_knee_push_up_without_toes_never_counts():
+    # Toes out of view: the knee height can't be read, so (strict) nothing
+    # counts - a shins-flat knee push-up can't slip through on the angle.
     test, t = started(model=on_knees_shins_flat)
     run(test, reps(on_knees_shins_flat, 4, knee_h=None), t0=t, jitter=2)
-    assert test.count == 0 and test.not_counted["knees"] == 4, test.not_counted
+    assert test.count == 0 and test.not_counted["toes"] == 4, test.not_counted
 
 
 def check_knee_lines_strict_but_not_too_strict():
@@ -263,12 +264,12 @@ def check_knee_lines_strict_but_not_too_strict():
         assert (test.count == 4) == counted, (knee, test.count, test.not_counted)
         if not counted:
             assert test.not_counted["knees"] == 4, (knee, test.not_counted)
-    # Toes out of view: the angle is the only knee check, so it stays at 150.
-    for knee, counted in ((155.0, True), (147.0, False)):
+    # Toes out of view: strict - nothing counts, whatever the knees read.
+    for knee in (172.0, 155.0, 147.0):
         test, t = started()
         run(test, reps(on_toes, 4, knee=knee, knee_h=None)
             + [(0.5, hold(on_toes, knee=knee, knee_h=None))], t0=t, jitter=2)
-        assert (test.count == 4) == counted, ("no toes", knee, test.count, test.not_counted)
+        assert test.count == 0 and test.not_counted["toes"] == 4, ("no toes", knee, test.not_counted)
 
 
 def check_toes_flickering_keeps_the_softer_knee_line():
@@ -305,7 +306,8 @@ def check_toes_warning_comes_and_goes_and_never_changes_the_count():
     t = run(test, [(0.3, hold(on_toes))] + reps(on_toes, 2), t0=t)  # back in view
     assert not test.no_toes
     run(test, [(0.5, hold(on_toes))], t0=t)
-    assert test.count == 6, test.count
+    # The 2 push-ups done with the toes cropped out don't count (strict).
+    assert test.count == 4 and test.not_counted["toes"] == 2, (test.count, test.not_counted)
     # Toes flickering out in 30% of frames: counting is fine, so no warning.
     # Missing in 85%: the warning shows.
     for miss, want in ((0.3, False), (0.85, True)):
@@ -325,6 +327,43 @@ def check_toes_warning_comes_and_goes_and_never_changes_the_count():
     seq = [(0.05, hold(on_toes, knee_h=None)), (1.0, hold(on_toes))] * 3
     run(test, seq, t0=t)
     assert not test.no_toes
+
+
+def check_start_waits_for_the_toes():
+    test = pu.PushUpTest()
+    assert test.start_problem()                       # nothing seen yet
+    t = run(test, [(1, hold(on_toes, knee_h=None))])
+    assert test.start_problem() and not test.toes_ok  # body seen, toes not
+    t = run(test, [(1, hold(on_toes))], t0=t)
+    assert test.toes_ok and test.start_problem() is None
+    test.start(now=t)
+    assert test.start_problem() == "Test already started"
+
+
+def check_slow_camera_warning():
+    def warned(fps, lost=0.0, secs=6.0, seed=1):
+        rnd = random.Random(seed)
+        test, t = started(fps)
+        shown = 0
+        n = int(secs * fps)
+        for i in range(n):
+            m = on_toes(rep_curve((i / fps) % 3.0, 3.0))
+            seen = rnd.random() >= lost
+            test.update({L: m if seen else None, R: None}, now=t)
+            t += 1 / fps
+            shown += test.slow_camera
+        return shown / n, test
+    assert warned(8)[0] > 0.6                      # slow phone: shown
+    assert warned(15)[0] == 0 and warned(30)[0] == 0
+    assert warned(20, lost=0.3)[0] > 0.5           # student keeps being lost
+    assert warned(20, lost=0.05)[0] == 0           # the odd lost frame: fine
+    # Before the student is in view, an empty picture is not "dropping frames".
+    test = pu.PushUpTest()
+    run(test, [(5, lambda tt: None)], fps=20)
+    assert not test.slow_camera
+    # It never changes the count.
+    share, test = warned(8, secs=12.5)
+    assert test.count == 4, test.count
 
 
 def check_good_push_up_low_knee_at_bottom_counts():
