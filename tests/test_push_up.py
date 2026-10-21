@@ -306,6 +306,20 @@ def check_toes_warning_comes_and_goes_and_never_changes_the_count():
     assert not test.no_toes
     run(test, [(0.5, hold(on_toes))], t0=t)
     assert test.count == 6, test.count
+    # Toes flickering out in 30% of frames: counting is fine, so no warning.
+    # Missing in 85%: the warning shows.
+    for miss, want in ((0.3, False), (0.85, True)):
+        rnd = random.Random(1)
+        test, t = started()
+        shown = 0
+        for i in range(15 * 20):
+            m = on_toes(rep_curve((i / 20) % 3.0, 3.0))
+            if rnd.random() < miss:
+                m["knee_h"] = None
+            test.update({L: m, R: None}, now=t)
+            t += 1 / 20
+            shown += test.no_toes
+        assert (shown > 150) == want and (shown == 0 or want), (miss, shown)
     # A single frame without toes doesn't raise it.
     test, t = started()
     seq = [(0.05, hold(on_toes, knee_h=None)), (1.0, hold(on_toes))] * 3
@@ -397,6 +411,18 @@ def check_dropouts():
     assert not test.stopped
     t = run(test, reps(on_toes, 1), t0=t)
     assert test.count == 5
+
+
+def check_scattered_lost_frames_on_a_slow_phone():
+    # Single lost frames (glare, blur) at 8 fps must not hide push-ups.
+    for fps in (8, 15):
+        for seed in range(10):
+            rnd = random.Random(seed)
+            test, t = started(fps)
+            seg = [(18, lambda tt: None if rnd.random() < 0.2
+                    else on_toes(rep_curve(tt % 3.0, 3.0))), (1, hold(on_toes))]
+            run(test, seg, fps=fps, t0=t, jitter=2, seed=seed)
+            assert test.count == 6, (fps, seed, test.count, test.not_counted)
 
 
 def check_frames_arriving_slowly_dont_end_it():

@@ -67,8 +67,12 @@ What the camera checks (owner's choices, 2026-10-14)
   the knee is legitimately low too (~0.15), so the height is only checked
   while the elbow is >= KNEE_CHECK_DEG (130). It needs the toes in view;
   without them only the angle is used (at 150, see above), and the screen
-  WARNS "Toes not in view" once they have been missing for most of the
-  last TOE_WINDOW_S. The warning never changes the count.
+  WARNS "Toes not in view" once they have been missing in more than 70%
+  of the frames over the last TOE_WINDOW_S (clears below 40%). Not lower:
+  with the knee line chosen per push-up, counting is right with the toes
+  missing in 30% of frames, and at 50% / 20% the warning showed a fifth of
+  the time there and sent the coach to move the phone for nothing. The
+  warning never changes the count.
 
   BACK: the hip more than BACK_MAX_DEG off the shoulder-ankle line, either
   way ("reasonably straight"). The isometric push-up's hold limit is 28.
@@ -98,6 +102,15 @@ When the test ends
   * The coach presses STOP.
   The gap clock only runs on frames where the body is seen, and each frame
   adds at most MAX_FRAME_DT, so a Wi-Fi gap can't end the test by itself.
+
+Tracking dropouts
+--------------------------------------------------------------------
+  When the body is lost the phase is kept. The 3-frame smoothing is kept
+  too through a gap of up to SHORT_GAP_S (0.3 s) and only thrown away after
+  a longer one. Throwing it away on every lost frame also wasted the next
+  two good frames while it refilled: at 8 fps with 20% of frames lost that
+  hid the top or bottom of 14% of push-ups (now 0; 30% lost: 33% -> 3%).
+  The kept frames are recent and out-vote one wild frame on return.
   The 3 s beat itself is played by the browser (screen4); this file only
   ends the test.
 
@@ -155,10 +168,11 @@ BACK_MAX_DEG    = 25.0    # hip further off the shoulder-ankle line = back bent
 FAULT_MIN_S     = 0.2     # a fault must be seen this long within one rep
 BODY_TILT_MAX_DEG = 50.0  # shoulder-ankle line flatter than this = in position
 MAX_FRAME_DT    = 0.5     # most one frame may add to any clock (Wi-Fi gaps)
+SHORT_GAP_S     = 0.3     # body lost no longer than this: keep the smoothing
 SIDE_SWITCH_VIS = 0.10    # the other side must be this much clearer to switch
 TOE_WINDOW_S    = 1.5     # "Toes not in view" shows when the toes were missing
-TOE_WARN_FRAC   = 0.5     # in more than this share of the tracked frames over
-TOE_CLEAR_FRAC  = 0.2     # the window; it clears below TOE_CLEAR_FRAC
+TOE_WARN_FRAC   = 0.7     # in more than this share of the tracked frames over
+TOE_CLEAR_FRAC  = 0.4     # the window; it clears below TOE_CLEAR_FRAC
 
 SMOOTH_FRAMES   = 3       # median window, as in the other rep counters
 MIN_VIS         = 0.50    # landmark visibility floor
@@ -315,6 +329,7 @@ class PushUpTest:
         self.end_reason = None
         self.gap_elapsed = 0.0
         self._last_t = None
+        self._lost_since = None    # when the body was last lost (None = seen)
         self.side = None           # the side being read (MediaPipe naming)
         self._sm = MedianSmoother()
         self.m = None              # smoothed readings this frame (None = not seen)
@@ -407,10 +422,16 @@ class PushUpTest:
         self._note_toes(None if raw is None else raw["knee_h"] is not None, now)
         if raw is None:
             # Not seen. The phase is kept - the body is still wherever it
-            # was - but stale frames must not blend into the next reading.
-            self._sm.reset()
+            # was. The smoothing is kept too for a short gap: its last frames
+            # are recent, and they out-vote one wild frame on return. After a
+            # longer gap they are stale and are dropped.
+            if self._lost_since is None:
+                self._lost_since = now
+            if now - self._lost_since > SHORT_GAP_S:
+                self._sm.reset()
             self.m = None
             return None
+        self._lost_since = None
         m = self._sm.push(raw)
         if not self._sm.full:
             # Just (re)found: one wild frame would decide on its own.
