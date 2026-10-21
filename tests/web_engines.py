@@ -3682,6 +3682,9 @@ class PushUpEngine(BaseWebEngine):
             "not_counted_total": t.total_not_counted,
             "problem": t.problem if t.tracked else None,
             "no_toes": t.no_toes and t.tracked,
+            "toes_ok": t.toes_ok,
+            "slow_camera": t.slow_camera,
+            "fps": round(t.fps) if t.fps is not None else None,
             "pose_detected": self.pose_detected,
             "status_msg": t.status_msg,
             "last_save": self.last_save,
@@ -3690,8 +3693,12 @@ class PushUpEngine(BaseWebEngine):
     # ── actions (screen4 buttons) ───────────────────────────────────────
     def action_start(self, value=None):
         with self._lock:
-            if not self.test.start():
-                return {"ok": False, "error": "Test already started"}
+            # Strict: no START until the toes are in view (the knees can't
+            # be checked without them).
+            why = self.test.start_problem()
+            if why:
+                return {"ok": False, "error": why}
+            self.test.start()
             return {"ok": True}
 
     def action_reset(self, value=None):

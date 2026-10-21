@@ -840,7 +840,8 @@
               ],
               showCalibOverlay(state) { return false; },
               buttonDisabled(btnId, state) {
-                  if (btnId === 'start') return !state.running || state.test_started;
+                  // START waits for the toes: without them the knees can't be checked.
+                  if (btnId === 'start') return !state.running || state.test_started || !state.toes_ok;
                   return !state.running;
               },
               renderStatus(state) {
@@ -848,6 +849,12 @@
                   // Without the toes the knees can't be fully checked.
                   if (state.no_toes) {
                       lines.push('\u26a0 Toes not in view - move the phone back so the feet are in the picture');
+                  }
+                  // A slow or flaky camera can miss push-ups; tell the coach.
+                  if (state.slow_camera) {
+                      lines.push('\u26a0 Camera too slow / dropping frames' +
+                                 (state.fps ? ` (${state.fps} fps)` : '') +
+                                 ' - push-ups may be missed. Close other apps or move closer to the Wi-Fi');
                   }
                   lines.push(`Push-ups: ${state.count}`);
                   if (state.body_tracked) {
@@ -864,12 +871,15 @@
                   } else if (state.test_started) {
                       lines.push(`${state.elapsed_sec}s elapsed   ` +
                                  `Since last push-up: ${state.gap_s} / ${state.gap_limit_s} s`);
+                  } else if (!state.toes_ok) {
+                      lines.push('START waits until the toes are in view');
                   } else {
                       lines.push('Get into the up position, then tap START as you call "GO"');
                   }
                   const nc = state.not_counted || {};
                   const why = [['knees', 'knees down'], ['back', 'back bent'],
-                               ['shallow', 'not to 90°'], ['not_straight', 'arms not straight']]
+                               ['shallow', 'not to 90°'], ['not_straight', 'arms not straight'],
+                               ['toes', 'toes not in view']]
                       .filter(([k]) => nc[k]).map(([k, w]) => `${nc[k]} ${w}`);
                   if (why.length) lines.push(`Not counted: ${why.join(', ')}`);
                   if (state.status_msg) lines.push(state.status_msg);

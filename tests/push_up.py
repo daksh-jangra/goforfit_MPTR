@@ -50,29 +50,32 @@ What the camera checks (owner's choices, 2026-10-14)
   knee push-up with the feet raised (~90-120). Isometric push-up's straight
   legs read 163-178 and slightly soft knees 147-162: those still count -
   strict, but not so strict that a student on the toes with soft knees
-  loses push-ups (owner, 2026-10-19). Without the toes in view the knee
-  height can't be read, so the angle is the only knee check and the line
-  is KNEE_MIN_NO_TOES_DEG (150) instead, to catch the shins-flat knee
-  push-up below. Which line applies is decided once per PUSH-UP, not per
-  frame: 145 if the toes were seen for FAULT_MIN_S while the height check
-  runs (elbow >= 130), else 150. Per frame, the pose model dropping the toe
-  now and then switched soft knees (147) to the 150 line: with the toes
-  missing in 10% of frames, 74% of those push-ups were lost (now 0). With the shins flat on the mat a knee
+  loses push-ups (owner, 2026-10-19). With the shins flat on the mat a knee
   push-up's knee only bends to ~140-150 at the top and straightens toward
-  ~170 at the bottom, so the knee HEIGHT catches it too: kneeling, the knee
+  ~170 at the bottom, so the knee HEIGHT catches it: kneeling, the knee
   sits on the floor line through the hands and toes (~0.1 thigh lengths -
   the joint is a few cm up); on the toes it is ~0.4-0.5 thigh lengths up at
   the top. The line follows the floor at any camera height (points on the
   floor stay on one line in the picture). At the BOTTOM of a good push-up
   the knee is legitimately low too (~0.15), so the height is only checked
-  while the elbow is >= KNEE_CHECK_DEG (130). It needs the toes in view;
-  without them only the angle is used (at 150, see above), and the screen
-  WARNS "Toes not in view" once they have been missing in more than 70%
-  of the frames over the last TOE_WINDOW_S (clears below 40%). Not lower:
-  with the knee line chosen per push-up, counting is right with the toes
-  missing in 30% of frames, and at 50% / 20% the warning showed a fifth of
-  the time there and sent the coach to move the phone for nothing. The
-  warning never changes the count.
+  while the elbow is >= KNEE_CHECK_DEG (130).
+  Accepted limit: knees that tap the floor ONLY at the bottom still count
+  (~0.15 vs ~0.08 thigh lengths, inside the reading's wobble) - the coach's
+  call.
+
+  TOES must be seen (owner, 2026-10-21: "toes completely needs to be
+  detected"). The knee height needs them, and without them the angle alone
+  let ~1 in 4 shins-flat knee push-ups through. So:
+    * START is refused until the toes are in view (toes_ok).
+    * A push-up only counts if the toes were seen for FAULT_MIN_S while
+      the height check runs (elbow >= 130); otherwise "toes not in view".
+      Decided per push-up, not per frame: the pose model drops the toe now
+      and then, and per-frame rules lost good push-ups to that flicker.
+      Cost: with the toes missing in half the frames, ~7% of good push-ups
+      are rejected; at 30% or less, none.
+  The screen WARNS "Toes not in view" once they have been missing in more
+  than 70% of the frames over the last TOE_WINDOW_S (clears below 40%).
+  The warning itself never changes the count.
 
   BACK: the hip more than BACK_MAX_DEG off the shoulder-ankle line, either
   way ("reasonably straight"). The isometric push-up's hold limit is 28.
@@ -126,7 +129,13 @@ Tracking dropouts
   clean tracking unchanged.
   Accepted limit: at 8 fps, a lost frame right at the top of a push-up that
   goes straight into the next one (no pause) can hide the straight arms,
-  and that push-up is not counted (~1 session in 400).
+  and that push-up is not counted (~1 session in 400). Rather than chase
+  that, the screen WARNS "Camera too slow / dropping frames" (owner,
+  2026-10-21) when, over the last SLOW_WINDOW_S, fewer than SLOW_FPS frames
+  a second are processed, or the student - mostly in view - is lost in
+  more than LOSS_WARN_FRAC of them. It clears at CLEAR_FPS and below
+  LOSS_CLEAR_FRAC. Never changes the count; doesn't block START.
+
   The 3 s beat itself is played by the browser (screen4); this file only
   ends the test.
 
@@ -175,8 +184,7 @@ SHALLOW_DIP_DEG = 140.0   # a dip from the top must go below this to be a
                           # top (see the docstring)
 REBOUND_DEG     = 130.0   # from the bottom up past this, then back down to
                           # DOWN_DEG = the arms were not straightened
-KNEE_MIN_DEG    = 145.0   # knee bent more than this = knees down (toes seen)
-KNEE_MIN_NO_TOES_DEG = 150.0  # ...the same without the toes (no height check)
+KNEE_MIN_DEG    = 145.0   # knee bent more than this = knees down
 KNEE_LOW        = 0.25    # knee lower than this above the hands-toes line, in
                           # thigh lengths = kneeling (see the docstring)
 KNEE_CHECK_DEG  = 130.0   # ...checked only while the elbow is at least this
@@ -192,6 +200,13 @@ SIDE_SWITCH_VIS = 0.10    # the other side must be this much clearer to switch
 TOE_WINDOW_S    = 1.5     # "Toes not in view" shows when the toes were missing
 TOE_WARN_FRAC   = 0.7     # in more than this share of the tracked frames over
 TOE_CLEAR_FRAC  = 0.4     # the window; it clears below TOE_CLEAR_FRAC
+SLOW_WINDOW_S   = 3.0     # "Camera too slow / dropping frames" is judged over this
+SLOW_FPS        = 10.0    # fewer frames a second than this -> warn
+CLEAR_FPS       = 12.0    # ...clears at this many
+LOSS_WARN_FRAC  = 0.2     # student lost in more than this share of frames -> warn
+LOSS_CLEAR_FRAC = 0.1     # ...clears below this
+PRESENT_FRAC    = 0.5     # (losses only count while the student is in view in
+                          # at least this share - not before they arrive)
 
 SMOOTH_FRAMES   = 3       # median window, as in the other rep counters
 MIN_VIS         = 0.50    # landmark visibility floor
@@ -225,6 +240,7 @@ NOT_COUNTED = {
     "not_straight": "arms not straightened at the top",
     "knees":        "knees touched the floor",
     "back":         "back not straight",
+    "toes":         "toes not in view",
 }
 
 END_GAP     = "no push-up for 6 s"
@@ -358,11 +374,14 @@ class PushUpTest:
         self.in_position = False   # body roughly horizontal
         self.problem = None        # what is wrong right now, for the screen
         self._fault_t = {"knees": 0.0, "back": 0.0}
-        self._knee_soft_t = 0.0    # knee between the two lines (145-150), this rep
         self._toes_seen_t = 0.0    # toes seen while the height check runs, this rep
         self._peak = None          # highest elbow since reaching the bottom
         self._dip = None           # lowest elbow since leaving the top
         self.no_toes = False       # the "toes not in view" warning is showing
+        self.slow_camera = False   # the "camera too slow" warning is showing
+        self.fps = None            # frames processed per second, last SLOW_WINDOW_S
+        self._frames = deque()     # (t, body seen) for every frame processed
+        self._toe_missing = None   # share of recent tracked frames without toes
         self._toes = deque()       # (t, toes seen) on tracked frames
         self.status_msg = "Press START when ready"
 
@@ -380,6 +399,21 @@ class PushUpTest:
             return 0.0
         end = self.end_t if self.stopped else (time.time() if now is None else now)
         return max(0.0, end - self.start_t)
+
+    @property
+    def toes_ok(self):
+        """The toes are in view now: seen in most of the last TOE_WINDOW_S
+        of tracked frames. START waits for this."""
+        return (len(self._toes) >= 3 and self._toe_missing is not None
+                and self._toe_missing <= TOE_CLEAR_FRAC)
+
+    def start_problem(self):
+        """Why START can't go yet (plain words), or None."""
+        if self.started:
+            return "Test already started"
+        if not self.toes_ok:
+            return "Toes not in view - move the phone back so the feet are in the picture"
+        return None
 
     def gap_progress(self):
         if not self.started or self.stopped:
@@ -411,7 +445,6 @@ class PushUpTest:
     def _clear_faults(self):
         for k in self._fault_t:
             self._fault_t[k] = 0.0
-        self._knee_soft_t = 0.0
         self._toes_seen_t = 0.0
         self._peak = None
 
@@ -443,6 +476,7 @@ class PushUpTest:
 
         raw = self._pick(sides)
         self._note_toes(None if raw is None else raw["knee_h"] is not None, now)
+        self._note_frame(raw is not None, now)
         if raw is None:
             # Not seen. The phase is kept - the body is still wherever it
             # was. The smoothing is kept too for a short gap: its last frames
@@ -523,12 +557,33 @@ class PushUpTest:
             self._toes.popleft()
         if not self._toes:
             self.no_toes = False
+            self._toe_missing = None
             return
         missing = sum(1 for _, s in self._toes if not s) / len(self._toes)
+        self._toe_missing = missing
         if missing > TOE_WARN_FRAC:
             self.no_toes = True
         elif missing < TOE_CLEAR_FRAC:
             self.no_toes = False
+
+    def _note_frame(self, seen, now):
+        """Keep the "camera too slow / dropping frames" warning up to date.
+        Called for every frame processed, seen or not."""
+        self._frames.append((now, seen))
+        while self._frames and now - self._frames[0][0] > SLOW_WINDOW_S:
+            self._frames.popleft()
+        span = self._frames[-1][0] - self._frames[0][0]
+        if span < 1.5:
+            return                      # not enough to judge yet
+        self.fps = (len(self._frames) - 1) / span
+        seen_share = sum(1 for _, s in self._frames if s) / len(self._frames)
+        # Losses only mean "dropping frames" while the student is there;
+        # before they arrive (or after they leave) the body is simply absent.
+        lost = (1.0 - seen_share) if seen_share >= PRESENT_FRAC else 0.0
+        if self.fps < SLOW_FPS or lost > LOSS_WARN_FRAC:
+            self.slow_camera = True
+        elif self.fps >= CLEAR_FPS and lost < LOSS_CLEAR_FRAC:
+            self.slow_camera = False
 
     def _step(self, m, dt, counting):
         """The phase machine. Returns "rep", "not_counted" or None."""
@@ -544,10 +599,9 @@ class PushUpTest:
         toes = m["knee_h"] is not None
         knees = (m["knee"] < KNEE_MIN_DEG
                  or (toes and e >= KNEE_CHECK_DEG and m["knee_h"] < KNEE_LOW))
-        knee_soft = KNEE_MIN_DEG <= m["knee"] < KNEE_MIN_NO_TOES_DEG
         back = abs(m["bend"]) > BACK_MAX_DEG
         self.problem = ("Knees down - legs straight, on the toes"
-                        if (knees or (knee_soft and self.no_toes))
+                        if knees
                         else ("Hips too high - body straight" if m["bend"] > 0
                               else "Hips sagging - body straight") if back
                         else None)
@@ -570,8 +624,6 @@ class PushUpTest:
             self._fault_t["knees"] += dt
         if back:
             self._fault_t["back"] += dt
-        if knee_soft:
-            self._knee_soft_t += dt
         if toes and e >= KNEE_CHECK_DEG:
             self._toes_seen_t += dt
 
@@ -592,11 +644,10 @@ class PushUpTest:
             self.phase = PH_UP
             if not counting:
                 return None
-            # Toes not seen long enough this rep for the height check: the
-            # knee angle is the only knee check, so it uses the stricter line.
-            if (self._toes_seen_t < FAULT_MIN_S - 1e-9
-                    and self._fault_t["knees"] + self._knee_soft_t >= FAULT_MIN_S - 1e-9):
-                return self._reject("knees", counting)
+            # The toes must have been seen during this push-up: without them
+            # the knees can't be checked (owner: strict).
+            if self._toes_seen_t < FAULT_MIN_S - 1e-9:
+                return self._reject("toes", counting)
             for fault in ("knees", "back"):
                 if self._fault_t[fault] >= FAULT_MIN_S - 1e-9:
                     return self._reject(fault, counting)
@@ -694,6 +745,16 @@ def draw_hud(frame, test, pts=None):
         size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
         x0 = max(12, (w - size[0]) // 2 - 14)
         y0 = 262 if test.problem else 214
+        draw_panel(frame, x0, y0, min(w - 12, x0 + size[0] + 28), y0 + 40, C_BAD, 0.8)
+        cv2.putText(frame, warn, (x0 + 14, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    C_TEXT, 2, cv2.LINE_AA)
+
+    if test.slow_camera:
+        warn = "Camera too slow / dropping frames - push-ups may be missed"
+        size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
+        x0 = max(12, (w - size[0]) // 2 - 14)
+        y0 = 214 + 48 * (bool(test.problem and test.m is not None)
+                         + bool(test.no_toes and test.tracked))
         draw_panel(frame, x0, y0, min(w - 12, x0 + size[0] + 28), y0 + 40, C_BAD, 0.8)
         cv2.putText(frame, warn, (x0 + 14, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                     C_TEXT, 2, cv2.LINE_AA)
@@ -827,7 +888,11 @@ def main():
             if key == ord("q"):
                 break
             elif key == ord(" "):
-                test.start(now)
+                why = test.start_problem()
+                if why:
+                    print(f"[START] {why}")
+                else:
+                    test.start(now)
             elif key == ord("r"):
                 test.reset()
                 staged = False

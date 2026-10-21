@@ -781,10 +781,10 @@ TESTS = {
             "They lower the body until the elbows are bent to 90\u00b0, then push back "
             "up to straight arms. That is one push-up.",
             "Keep a pace of about one push-up every 3 seconds. The screen beeps the pace.",
-            "Tap START on 'GO'.",
+            "START only works once the camera sees the toes. Tap START on 'GO'.",
             "A push-up is NOT counted if the knees touch the floor, the arms don't "
-            "straighten at the top, the elbows don't reach 90\u00b0, or the back isn't "
-            "kept reasonably straight. The screen says why.",
+            "straighten at the top, the elbows don't reach 90\u00b0, the back isn't "
+            "kept reasonably straight, or the toes are out of view. The screen says why.",
             "The test ends by itself after 6 seconds with no push-up (two beats), or when "
             "the coach taps STOP.",
             "One trial. The score is the number of correct push-ups.",
@@ -798,9 +798,11 @@ TESTS = {
         "tip": [
             "Camera on the floor or just above it, SIDE-ON to the student, 1.5 to 2.5 m "
             "away.",
-            "Keep the whole body, from the hands to the toes, in frame. The toes matter: "
-            "they show whether the knees are down.",
+            "Keep the whole body, from the hands to the toes, in frame. The toes must be "
+            "seen: they show whether the knees are down.",
             "Turn the phone's sound up for the beep.",
+            "If the screen says the camera is too slow or dropping frames, close other "
+            "apps or move closer to the Wi-Fi.",
             "Only the student should be in frame.",
         ],
         "params": [],
