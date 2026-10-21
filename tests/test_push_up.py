@@ -371,6 +371,34 @@ def check_single_frame_spikes_change_nothing():
             assert test.count == 8, (fps, seed, test.count, test.not_counted)
 
 
+def check_two_wild_frames_in_a_row_change_nothing():
+    # Two bad readings back to back get past the 3-frame median. Low ones
+    # while resting at the top must not add a push-up or a "not to 90";
+    # high ones at the bottom must not count one early.
+    for fps in (8, 15, 30):
+        for wild, at in ((70.0, TOP), (178.0, 88.0)):
+            test, t = started(fps)
+            t = run(test, reps(on_toes, 2), fps=fps, t0=t)
+            if at != TOP:            # go down and stay at the bottom a moment
+                t = run(test, [(1.5, lambda tt: on_toes(rep_curve(tt, 3.0)))], fps=fps, t0=t)
+            n = 0
+
+            def glitch(tt):
+                nonlocal n
+                n += 1
+                m = on_toes(at)              # the body really is here...
+                if n in (5, 6):
+                    m["elbow"] = wild        # ...but two readings say otherwise
+                return m
+            t = run(test, [(1.5, glitch)], fps=fps, t0=t)
+            if at != TOP:            # then finish the push-up properly
+                t = run(test, [(1.5, lambda tt: on_toes(rep_curve(tt + 1.5, 3.0)))], fps=fps, t0=t)
+            run(test, [(0.5, hold(on_toes))], fps=fps, t0=t)
+            want = 2 if at == TOP else 3
+            assert test.count == want and test.total_not_counted == 0, \
+                (fps, wild, test.count, test.not_counted)
+
+
 def check_reps_before_start_dont_count():
     test = pu.PushUpTest()
     t = run(test, [(0.5, hold(on_toes))] + reps(on_toes, 3))
