@@ -111,6 +111,22 @@ Tracking dropouts
   two good frames while it refilled: at 8 fps with 20% of frames lost that
   hid the top or bottom of 14% of push-ups (now 0; 30% lost: 33% -> 3%).
   The kept frames are recent and out-vote one wild frame on return.
+
+  Two wild frames in a row get past the 3-frame median: two bad low
+  readings at the top looked like a trip to the bottom (a phantom push-up
+  or a fake "not to 90"), two high ones at the bottom the reverse. They
+  show up as a JUMP: more than JUMP_DEG (40) in one reading, where a real
+  push-up moves ~11 per reading at 8 fps and the 3 s pace (after a gap,
+  JUMP_SPEED per second since the last trusted reading). A jumped frame is
+  skipped until the new value has held JUMP_HOLD_FRAMES (3) readings; if it
+  comes back first it was a glitch. The whole frame is skipped, not just
+  the elbow, so the knees and back are never judged against a different
+  moment's elbow (an early version did, and rejected a soft-kneed rep).
+  Stress test with 1% wild frames: sessions with an error 22 -> 4 of 1500;
+  clean tracking unchanged.
+  Accepted limit: at 8 fps, a lost frame right at the top of a push-up that
+  goes straight into the next one (no pause) can hide the straight arms,
+  and that push-up is not counted (~1 session in 400).
   The 3 s beat itself is played by the browser (screen4); this file only
   ends the test.
 
@@ -169,6 +185,9 @@ FAULT_MIN_S     = 0.2     # a fault must be seen this long within one rep
 BODY_TILT_MAX_DEG = 50.0  # shoulder-ankle line flatter than this = in position
 MAX_FRAME_DT    = 0.5     # most one frame may add to any clock (Wi-Fi gaps)
 SHORT_GAP_S     = 0.3     # body lost no longer than this: keep the smoothing
+JUMP_DEG        = 40.0    # elbow reading this far from the trusted one = a jump
+JUMP_SPEED      = 300.0   # ...or further than this many deg/s since it, after a gap
+JUMP_HOLD_FRAMES = 3      # ...trusted only once it has held this many readings
 SIDE_SWITCH_VIS = 0.10    # the other side must be this much clearer to switch
 TOE_WINDOW_S    = 1.5     # "Toes not in view" shows when the toes were missing
 TOE_WARN_FRAC   = 0.7     # in more than this share of the tracked frames over
@@ -330,6 +349,9 @@ class PushUpTest:
         self.gap_elapsed = 0.0
         self._last_t = None
         self._lost_since = None    # when the body was last lost (None = seen)
+        self._e_ok = None          # last trusted elbow reading
+        self._e_pend = []          # readings since a jump, not trusted yet
+        self._e_ok_t = None        # when the trusted reading was taken
         self.side = None           # the side being read (MediaPipe naming)
         self._sm = MedianSmoother()
         self.m = None              # smoothed readings this frame (None = not seen)
@@ -407,6 +429,7 @@ class PushUpTest:
         if best != self.side:
             self.side = best
             self._sm.reset()    # the other side's numbers must not blend in
+            self._e_ok, self._e_pend = None, []
         return cands[best]
 
     def update(self, sides, now=None):
@@ -429,12 +452,18 @@ class PushUpTest:
                 self._lost_since = now
             if now - self._lost_since > SHORT_GAP_S:
                 self._sm.reset()
+                self._e_ok, self._e_pend = None, []
             self.m = None
             return None
         self._lost_since = None
         m = self._sm.push(raw)
         if not self._sm.full:
             # Just (re)found: one wild frame would decide on its own.
+            self.m = None
+            return None
+        if not self._trust(m["elbow"], now):
+            # A jump not yet confirmed: skip the whole frame, so the knees
+            # and back are never judged against a different moment's elbow.
             self.m = None
             return None
         self.m = m
@@ -453,6 +482,37 @@ class PushUpTest:
             self.status_msg = f"No push-up for {self.gap_s:.0f} s - test over"
             return END_GAP
         return None
+
+    def _trust(self, e, now):
+        """The elbow the phases run on. Two wild frames in a row get past the
+        3-frame median; they show up as a JUMP no real push-up makes (~11
+        degrees per reading at 8 fps and the 3 s pace). A jumped reading is
+        only trusted once it has held JUMP_HOLD_FRAMES readings; if it comes
+        back first it was a glitch and is ignored. Returns False for a
+        reading not trusted (yet)."""
+        if self._e_ok is None:
+            self._e_ok, self._e_ok_t = e, now
+            return True
+        # After a gap the arm really may have moved further.
+        limit = max(JUMP_DEG, JUMP_SPEED * (now - self._e_ok_t))
+        if not self._e_pend:
+            if abs(e - self._e_ok) <= limit:
+                self._e_ok, self._e_ok_t = e, now
+                return True
+            self._e_pend = [e]
+            return False
+        if abs(e - self._e_ok) <= JUMP_DEG:
+            self._e_pend = []           # came back: it was a glitch
+            self._e_ok, self._e_ok_t = e, now
+            return True
+        if abs(e - self._e_pend[-1]) > JUMP_DEG:
+            self._e_pend = [e]          # jumped again: start over
+            return False
+        self._e_pend.append(e)
+        if len(self._e_pend) >= JUMP_HOLD_FRAMES:
+            self._e_ok, self._e_ok_t, self._e_pend = e, now, []
+            return True
+        return False
 
     def _note_toes(self, seen, now):
         """Keep the "toes not in view" warning up to date. seen is None when
