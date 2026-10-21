@@ -340,6 +340,52 @@ def check_start_waits_for_the_toes():
     assert test.start_problem() == "Test already started"
 
 
+def check_start_button_doesnt_flicker():
+    # START follows the "Toes not in view" warning, so the two always agree.
+    # Toes flickering out in 30% of frames (counting is fine): never blocked.
+    # 50% is a borderline camera: the warning may show now and then, and the
+    # button with it, but it doesn't keep flipping (was ~8 times in 10 s).
+    for miss, max_flips in ((0.3, 0), (0.5, 3)):
+        for fps in (8, 20):
+            rnd = random.Random(1)
+            test, t = pu.PushUpTest(), 0.0
+            flips, prev = 0, None
+            for i in range(10 * fps):
+                m = on_toes(TOP + rnd.uniform(-2, 2))
+                if rnd.random() < miss:
+                    m["knee_h"] = None
+                test.update({L: m, R: None}, now=t)
+                t += 1 / fps
+                if i > 2 * fps:
+                    assert test.toes_ok == (not test.no_toes), (miss, fps, i)
+                    if prev is not None and test.toes_ok != prev:
+                        flips += 1
+                    prev = test.toes_ok
+            assert flips <= max_flips, (miss, fps, flips)
+            if max_flips == 0:
+                assert prev, (miss, fps)
+    # Toes never seen: START stays blocked the whole time.
+    test, t = pu.PushUpTest(), 0.0
+    t = run(test, [(5, hold(on_toes, knee_h=None))])
+    assert not test.toes_ok and test.no_toes
+
+
+def check_engine_warns_when_frames_stop():
+    # Only the browser engine can tell that frames stopped arriving.
+    import time
+    import web_engines
+    eng = web_engines.PushUpEngine()
+    eng._running = True
+    with eng._lock:
+        assert eng._state_locked()["slow_camera"] is False      # no frame yet
+        eng._last_frame_t = time.time()
+        assert eng._state_locked()["slow_camera"] is False      # fresh frame
+        eng._last_frame_t = time.time() - 3.0
+        st = eng._state_locked()
+        assert st["slow_camera"] is True and st["fps"] == 0     # stopped
+    eng._running = False
+
+
 def check_slow_camera_warning():
     def warned(fps, lost=0.0, secs=6.0, seed=1):
         rnd = random.Random(seed)
