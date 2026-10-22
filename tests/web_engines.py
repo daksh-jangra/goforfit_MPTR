@@ -4111,6 +4111,8 @@ class BenchPressEngine(BaseWebEngine):
             "arm_tracked": t.tracked,
             "in_position": t.in_position,
             "elbow_deg": None if m is None else round(m["elbow"]),
+            "hand_fa": None if m is None else round(m["hand"], 2),
+            "hand_up_fa": bpr_mod.HAND_UP_FA,
             "up_deg": bpr_mod.UP_DEG,
             "down_deg": bpr_mod.DOWN_DEG,
             "rest_s": round(t.rest_elapsed, 1),

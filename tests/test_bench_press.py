@@ -40,11 +40,24 @@ FPS_LIST = (8, 15, 20, 30)
 # ── body model: readings for a given elbow angle ─────────────────────────────────
 def lying(elbow, **chg):
     """Side-on, lying on the bench. The upper arm lies along the body at the
-    chest (elev ~0) and points almost at the ceiling at the top (~85), as on
+    chest (elev ~0) and points almost at the ceiling at the top (~85), and
+    the wrist rises from ~0.9 to ~2.05 forearms above the shoulder, as on
     the reference video's side-on frames."""
     f = (elbow - CHEST) / (TOP - CHEST)
-    m = {"elbow": elbow, "elev": 85.0 * f, "body_tilt": 5.0, "vis": 0.95}
+    m = {"elbow": elbow, "hand": 0.9 + 1.15 * f, "elev": 85.0 * f, "body_tilt": 5.0,
+         "vis": 0.95}
     m.update(chg)
+    return m
+
+
+def flared(elbow, **chg):
+    """Elbows pointing out sideways: past halfway up the camera reads the arm
+    as nearly straight, but the hand is still low (3-D model, 90 deg out:
+    reads 167-177 with the hand 1.0-1.4 forearms up)."""
+    f = (elbow - CHEST) / (TOP - CHEST)
+    m = lying(elbow, **chg)
+    if f > 0.4 and "hand" not in chg:
+        m["elbow"] = 175.0
     return m
 
 
@@ -78,6 +91,7 @@ def run(test, segments, fps=20, t0=0.0, jitter=0.0, spike_p=0.0, seed=1, side=L,
                 m = dict(m)
                 if jitter:
                     m["elbow"] += rnd.uniform(-jitter, jitter)
+                    m["hand"] += rnd.uniform(-jitter, jitter) / 100
                     if m["elev"] is not None:
                         m["elev"] += rnd.uniform(-jitter, jitter)
                 if spike_p and rnd.random() < spike_p:
@@ -183,6 +197,32 @@ def check_elbow_bent_but_arm_raised_is_not_the_chest():
     test, t = started(elbow=TOP)
     run(test, presses(4, bottom=85.0, elev=50.0), t0=t)
     assert test.count == 0, test.count
+
+
+def check_flared_half_press_does_not_count():
+    # Pressed only ~60% of the way up (hand 1.6 forearms) with the elbows out:
+    # the camera reads the elbow as straight, the hand height doesn't.
+    test, t = started()
+    t = run(test, presses(1), t0=t)
+    run(test, presses(1, model=flared, top=CHEST + 0.6 * (TOP - CHEST)), t0=t)
+    assert test.count == 1, test.count
+    assert test.not_counted["not_straight"] == 1, test.not_counted
+
+
+def check_flared_full_press_still_counts():
+    test, t = started()
+    run(test, presses(4, model=flared), t0=t, jitter=3)
+    assert test.count == 4, test.count
+
+
+def check_lowest_video_lockout_hand_counts():
+    # The lowest side-on lockout on the video read 1.83 forearms.
+    def low_lockout(s):
+        f = 0.5 - 0.5 * math.cos(2 * math.pi * (s % 3.5) / 3.5)
+        return lying(CHEST + (TOP - CHEST) * f, hand=0.9 + 0.93 * f)
+    test, t = started()
+    run(test, [(3 * 3.5, low_lockout)], t0=t, jitter=3)
+    assert test.count == 3, test.count
 
 
 def check_without_the_hip_the_elbow_alone_counts():
