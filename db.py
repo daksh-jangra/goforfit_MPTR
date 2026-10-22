@@ -314,6 +314,22 @@ CREATE TABLE IF NOT EXISTS modified_curl_up (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Bench Press ──────────────────────────────────────────────────────────
+-- One trial (Brockport fig. 5.6): a 35 lb barbell pressed from the chest to
+-- straight arms, lying on a bench, as many times as possible - max 50 for
+-- boys, 30 for girls. reps is the score; the trial ends at the max, after a
+-- 4 s rest, with 0 if no rep in 15 s, or when the coach stops it.
+CREATE TABLE IF NOT EXISTS bench_press (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    reps            INTEGER,     -- correct presses, 0-50 / 0-30 (the score)
+    sex             TEXT,        -- 'boy' / 'girl', which max applied
+    duration_sec    REAL,        -- START to the end, for context only
+    end_reason      TEXT,        -- 'max reps', 'rested 4 s', 'no rep in 15 s', 'stopped by coach'
+    rating          TEXT,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -420,7 +436,11 @@ UNION ALL
 UNION ALL
     SELECT 'modified_curl_up', mcu.id, mcu.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, mcu.reps, mcu.rating, mcu.recorded_at
-    FROM modified_curl_up mcu LEFT JOIN sessions s ON mcu.session_id = s.id;
+    FROM modified_curl_up mcu LEFT JOIN sessions s ON mcu.session_id = s.id
+UNION ALL
+    SELECT 'bench_press', bpr.id, bpr.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, bpr.reps, bpr.rating, bpr.recorded_at
+    FROM bench_press bpr LEFT JOIN sessions s ON bpr.session_id = s.id;
 """
 
 
@@ -901,6 +921,26 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Bench Press ──────────────────────────────────────────────────────
+
+    def save_bench_press(
+        self,
+        session_id: int,
+        reps: int,
+        sex: str = None,
+        duration_sec: float = None,
+        end_reason: str = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO bench_press (session_id, reps, sex,
+                        duration_sec, end_reason, rating)
+                   VALUES (?,?,?,?,?,?)""",
+                (session_id, reps, sex, duration_sec, end_reason, rating),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -947,7 +987,7 @@ class GoForFitDB:
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
-        "modified_curl_up",
+        "modified_curl_up", "bench_press",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:

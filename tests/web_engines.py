@@ -26,6 +26,7 @@ SECTIONS IN THIS FILE
   4H. DumbbellPressEngine    wraps dumbbell_press.py    (dumbbell press counter)
   4I. PushUpEngine           wraps push_up.py           (push-up counter)
   4J. ModifiedCurlUpEngine   wraps modified_curl_up.py  (modified curl-up counter)
+  4K. BenchPressEngine       wraps bench_press.py       (bench press counter)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -4017,6 +4018,229 @@ class ModifiedCurlUpEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4K - BENCH PRESS   (wraps bench_press.py)
+# ════════════════════════════════════════════════════════════════════════
+import bench_press as bpr_mod  # noqa: E402
+
+_MODEL_BENCH_PRESS = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+
+
+class BenchPressEngine(BaseWebEngine):
+    """Live bench-press counter. One trial: the coach picks Boy (max 50) or
+    Girl (max 30) and taps START on "GO"; each press from the chest to
+    straight arms counts (elbow angle, side-on - see bench_press.py), and
+    the test ends by itself at the max, after a 4 s rest, or with 0 if no
+    rep counts in 15 s (bpr_mod.BenchPressTest raises the end and the count
+    is staged right then). STOP ends it early. Which side faces the camera
+    doesn't matter. Rep logic and HUD live in bench_press.py."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True,
+                 sex=None):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        # Browser-sourced camera: frames are POSTed to
+        # /api/bench_press/frame -> push_frame().
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.test = bpr_mod.BenchPressTest()
+        if sex in bpr_mod.SEXES:
+            self.test.set_sex(sex)
+        self.pose_detected = False
+        self.last_save = None
+
+    @property
+    def count(self):
+        return self.test.count
+
+    # ── camera plumbing (identical contract to PushUpEngine) ────────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        """Accept one browser-captured JPEG frame and hand it to the loop.
+        Only the newest frame is kept so the annotated feed stays live."""
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_BENCH_PRESS)
+        options = bpr_mod.PoseLandmarkerOptions(
+            base_options=bpr_mod.BaseOptions(model_asset_path=_MODEL_BENCH_PRESS),
+            running_mode=bpr_mod.VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+            output_segmentation_masks=False,
+        )
+        self.landmarker = bpr_mod.PoseLandmarker.create_from_options(options)
+
+    def _release_models(self):
+        if self.landmarker is not None:
+            try:
+                self.landmarker.close()
+            except Exception:
+                pass
+            self.landmarker = None
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        t = self.test
+        m = t.m
+        return {
+            "count": t.count,
+            "max_reps": t.max_reps,
+            "sex": t.sex,
+            "test_started": t.started,
+            "test_done": t.stopped,
+            "end_reason": t.end_reason,
+            "elapsed_sec": round(t.elapsed(), 1),
+            "phase": t.phase,
+            "arm_tracked": t.tracked,
+            "in_position": t.in_position,
+            "elbow_deg": None if m is None else round(m["elbow"]),
+            "up_deg": bpr_mod.UP_DEG,
+            "down_deg": bpr_mod.DOWN_DEG,
+            "rest_s": round(t.rest_elapsed, 1),
+            "rest_limit_s": t.rest_s,
+            "first_rep_limit_s": t.first_rep_s,
+            "not_counted": dict(t.not_counted),
+            "not_counted_total": t.total_not_counted,
+            "problem": t.problem if t.tracked else None,
+            "start_problem": t.start_problem(),
+            "pose_detected": self.pose_detected,
+            "status_msg": t.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_start(self, value=None):
+        with self._lock:
+            why = self.test.start_problem()
+            if why:
+                return {"ok": False, "error": why}
+            self.test.start()
+            return {"ok": True}
+
+    def action_sex(self, value=None):
+        """Boy (max 50) or girl (max 30). Only before START: changing it
+        mid-trial would move the finish line. RESET first."""
+        sex = str(value or "").strip().lower()
+        if sex not in bpr_mod.SEXES:
+            return {"ok": False, "error": "Pick boy or girl"}
+        with self._lock:
+            if not self.test.set_sex(sex):
+                return {"ok": False, "error": "Press RESET before changing boy / girl"}
+            return {"ok": True}
+
+    def action_reset(self, value=None):
+        with self._lock:
+            self.test.reset()
+            self.last_save = None
+            # A second attempt stages its own count.
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        handler = {
+            "start": self.action_start,
+            "reset": self.action_reset,
+            "sex": self.action_sex,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _stage_locked(self):
+        res = self.test.result()
+        self.last_save = res["reps"]
+        self._safe_stage(res["reps"], res["sex"], res["duration_sec"], res["end_reason"])
+
+    def _stage_on_stop(self):
+        # Coach stopped before the test ended by itself. A 0 is staged like
+        # any other count, but only for a trial that actually started.
+        with self._lock:
+            if self._staged or not self.test.started:
+                return
+            self.test.stop(bpr_mod.END_STOPPED)
+            self._stage_locked()
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Mirror BEFORE inference so the landmarks and the overlay
+                # live in the same pixel space. (Which side faces the camera
+                # doesn't matter to this test.)
+                frame = camera.mirror(frame, self.mirror_preview)
+                fh, fw = frame.shape[:2]
+                mp_image = bpr_mod.mp.Image(
+                    image_format=bpr_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                ts = int((time.time() - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+
+                lms = None
+                sides = {bpr_mod.SIDE_LEFT: None, bpr_mod.SIDE_RIGHT: None}
+                pose_detected = bool(results.pose_landmarks)
+                if pose_detected:
+                    lms = results.pose_landmarks[0]
+                    for i, j in bpr_mod._POSE_CONNECTIONS:
+                        if lms[i].visibility >= 0.45 and lms[j].visibility >= 0.45:
+                            p1 = (int(lms[i].x * fw), int(lms[i].y * fh))
+                            p2 = (int(lms[j].x * fw), int(lms[j].y * fh))
+                            cv2.line(frame, p1, p2, (200, 200, 200), 2, cv2.LINE_AA)
+                    sides = bpr_mod.read_sides(lms, fw, fh)
+
+                with self._lock:
+                    ended = self.test.update(sides)
+                    if ended and not self._staged:
+                        # The test's own end (max reps / 4 s rest / no rep in
+                        # 15 s) is how it normally finishes - stage now, so
+                        # screen3 has the count even if nobody taps STOP.
+                        self._stage_locked()
+                    self.pose_detected = pose_detected
+                    pts = None
+                    if self.test.tracked and lms is not None and self.test.side:
+                        pts = bpr_mod.body_points(lms, self.test.side, fw, fh)
+                    # Drawn inside the lock: START/RESET change the test.
+                    bpr_mod.draw_hud(frame, self.test, pts)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -4041,6 +4265,7 @@ __all__ = [
     "TargetStretchEngine",
     "PushUpEngine",
     "ModifiedCurlUpEngine",
+    "BenchPressEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]

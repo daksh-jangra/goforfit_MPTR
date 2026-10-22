@@ -78,7 +78,7 @@ try:
         SitReachEngine, TrunkLiftEngine, ReverseCurlEngine,
         ShoulderStretchEngine, IsometricPushUpEngine,
         SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
-        PushUpEngine, ModifiedCurlUpEngine,
+        PushUpEngine, ModifiedCurlUpEngine, BenchPressEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -92,6 +92,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     DumbbellPressEngine = None
     PushUpEngine = None
     ModifiedCurlUpEngine = None
+    BenchPressEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -135,6 +136,7 @@ _target_stretch_engine = None
 _dumbbell_press_engine = None
 _push_up_engine = None
 _modified_curl_up_engine = None
+_bench_press_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -853,6 +855,55 @@ TESTS = {
         "unit":   "reps",
         "live_feed":   True,
     },
+    "bench_press": {
+        "id":          "bench_press",
+        "title":       "Bench Press",
+        "subtitle":    "Press a 35 lb bar from the chest to straight arms: up to 50 boys, 30 girls",
+        "icon":        "\U0001f3cb\ufe0f",
+        "category":    "Muscular Endurance",
+        "script":      "bench_press.py",
+        "description": [
+            "Tests upper-body strength and endurance, mainly straightening the elbows.",
+            "The student lies on their back on a bench, knees bent, feet on the floor or "
+            "on mats beside the bench. A student who can't lie like this keeps the knees "
+            "bent with the legs supported.",
+            "They hold a 35 lb (15.9 kg) barbell, hands about 1.5 times shoulder width "
+            "apart, thumbs wrapped around the bar.",
+            "Start position: the bar at the chest, elbows bent.",
+            "Pick Boy or Girl, then tap START on 'GO'.",
+            "They press the bar straight up until the arms are straight, then lower it to "
+            "touch the chest. Keep a steady pace of 3 to 4 seconds per rep, without "
+            "resting.",
+            "A rep counts when the bar has come down to the chest and the arms then "
+            "straighten at the top (elbow 155\u00b0 or more).",
+            "A press that doesn't straighten the arms, or a lowering that doesn't reach "
+            "the chest, is NOT counted. The screen says why.",
+            "The test ends by itself at 50 reps for a boy or 30 for a girl, or after a "
+            "4-second rest. A slow press still going up, or a slow lowering still coming "
+            "down, is not a rest.",
+            "If no rep counts within 15 seconds of START, the test ends with a score of 0.",
+            "One trial. The score is the number of correct reps.",
+            "The camera checks the arm nearest it. The far arm is the coach's call: "
+            "correct the count on the results screen.",
+        ],
+        "controls": [
+            ("BOY / GIRL", "Sets the finish: 50 reps for a boy, 30 for a girl. Pick before START"),
+            ("START", "Start counting (the 'GO' signal)"),
+            ("RESET", "Start the trial over (clears the count)"),
+        ],
+        "tip": [
+            "Camera SIDE-ON to the bench, at about bench height, 2 to 3 m away.",
+            "Keep the head, the arm nearest the camera, the bar at the top and the hips "
+            "in frame.",
+            "Spotters stand on the FAR side of the bench, beside the rib cage, not between "
+            "the camera and the student.",
+            "If the screen draws the skeleton on a spotter instead of the student, ask the "
+            "spotter to step back or crouch lower.",
+        ],
+        "params": [],
+        "unit":   "reps",
+        "live_feed":   True,
+    },
     "target_stretch": {
         "id":          "target_stretch",
         "title":       "Target Stretch",
@@ -1078,6 +1129,8 @@ def _is_running(test_id: str) -> bool:
         return _push_up_engine.is_running()
     if test_id == "modified_curl_up" and _modified_curl_up_engine is not None:
         return _modified_curl_up_engine.is_running()
+    if test_id == "bench_press" and _bench_press_engine is not None:
+        return _bench_press_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -1247,6 +1300,14 @@ class PushUpSave(BaseModel):
 class ModifiedCurlUpSave(BaseModel):
     session_id: Optional[int] = None
     reps: Optional[int] = None             # the score: correct curl-ups, 0-75
+    duration_sec: Optional[float] = None
+    end_reason: Optional[str] = None
+    rating: Optional[str] = None
+
+class BenchPressSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None             # the score: 0-50 (boys) / 0-30 (girls)
+    sex: Optional[str] = None              # "boy" / "girl" - which finish applied
     duration_sec: Optional[float] = None
     end_reason: Optional[str] = None
     rating: Optional[str] = None
@@ -1517,6 +1578,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "modified_curl_up" and ModifiedCurlUpEngine is not None:
         return await _launch_modified_curl_up(request)
+
+    if test_id == "bench_press" and BenchPressEngine is not None:
+        return await _launch_bench_press(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -2026,6 +2090,34 @@ async def _launch_modified_curl_up(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_bench_press(request: Request):
+    global _bench_press_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    # Boy (max 50) or girl (max 30) sets the finish. START waits for it; it
+    # can also be picked later, before START, via the "sex" action.
+    sex = str(body.get("sex") or "").strip().lower()
+    if sex not in ("boy", "girl"):
+        sex = None
+
+    def _stage(reps, sex, duration_sec, end_reason):
+        _pending["bench_press"] = {
+            "session_id": session_id, "reps": reps, "sex": sex,
+            "duration_sec": duration_sec, "end_reason": end_reason,
+        }
+
+    try:
+        engine = BenchPressEngine(session_id=session_id, on_stage=_stage, sex=sex)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _bench_press_engine = engine
+    _pending.pop("bench_press", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 # helper function for vertical jump.
 async def _launch_vertical_jump(request: Request):
     """Runs the vertical jump camera loop in-process and streams it to the
@@ -2155,7 +2247,7 @@ def engine_status():
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
                                "dumbbell_press", "push_up", "modified_curl_up",
-                               "vertical_jump"],
+                               "bench_press", "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -2277,6 +2369,12 @@ def stop(test_id: str):
         # stop() hook if the coach stops before 75 or 6 s without a curl-up
         # ended it.
         _modified_curl_up_engine.stop()
+        return {"ok": True}
+    if test_id == "bench_press" and _bench_press_engine is not None:
+        # Like the dumbbell press: the engine stages the count from its own
+        # stop() hook if the coach stops before the max, a 4 s rest or the
+        # 15 s no-rep end.
+        _bench_press_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -2477,6 +2575,11 @@ async def push_up_frame(request: Request):
 @app.post("/api/modified_curl_up/frame")
 async def modified_curl_up_frame(request: Request):
     return await _receive_frame(_modified_curl_up_engine, request)
+
+
+@app.post("/api/bench_press/frame")
+async def bench_press_frame(request: Request):
+    return await _receive_frame(_bench_press_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -3182,6 +3285,45 @@ def modified_curl_up_action(b: ModifiedCurlUpAction):
         _pending.pop("modified_curl_up", None)
     return res
 
+# ── Bench press live-feed control ──────────────────────────────────────
+class BenchPressAction(BaseModel):
+    action: str
+    # `sex` carries "boy"/"girl"; start/reset carry nothing.
+    value: Optional[Any] = None
+
+@app.get("/api/bench_press/feed")
+def bench_press_feed():
+    if _bench_press_engine is None or not _bench_press_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Bench press test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _bench_press_engine is not None and _bench_press_engine.is_running():
+            jpg = _bench_press_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/bench_press/state")
+def bench_press_state():
+    if _bench_press_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_bench_press_engine.get_state()}
+
+@app.post("/api/bench_press/action")
+def bench_press_action(b: BenchPressAction):
+    if _bench_press_engine is None or not _bench_press_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Bench press test isn't running"}, status_code=409)
+    res = _bench_press_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # Drop a count staged by the attempt being thrown away.
+        _pending.pop("bench_press", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -3626,6 +3768,26 @@ def save_modified_curl_up(b: ModifiedCurlUpSave):
     row_id = db.save_modified_curl_up(
         session_id   = b.session_id,
         reps         = b.reps,
+        duration_sec = b.duration_sec,
+        end_reason   = b.end_reason,
+        rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/bench_press")
+def save_bench_press(b: BenchPressSave):
+    """Fields: session_id, reps (0-50 boys / 0-30 girls), sex (opt),
+    duration_sec (opt), end_reason (opt), rating (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    cap = 30 if b.sex == "girl" else 50
+    if b.reps is None or not (0 <= b.reps <= cap):
+        return JSONResponse({"ok": False, "error": f"Reps must be 0 to {cap}"}, status_code=400)
+    row_id = db.save_bench_press(
+        session_id   = b.session_id,
+        reps         = b.reps,
+        sex          = b.sex,
         duration_sec = b.duration_sec,
         end_reason   = b.end_reason,
         rating       = b.rating,

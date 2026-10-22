@@ -150,6 +150,20 @@
       </select>
       {% endif %}
 
+      {% if test.id == 'bench_press' %}
+      <!-- Bench Press: boy (max 50) or girl (max 30). START waits for it.
+           Can be changed until START, and again after RESET. -->
+      <select
+        id="bpr-sex"
+        onchange="onBprSexChange(this)"
+        class="w-full max-w-4xl mx-auto rounded-xl bg-white/10 text-white text-xs sm:text-sm font-bold px-3 py-2 border border-white/20"
+      >
+        <option value="" class="text-black">Pick Boy or Girl (sets the max reps)</option>
+        <option value="boy" class="text-black">Boy: up to 50 reps</option>
+        <option value="girl" class="text-black">Girl: up to 30 reps</option>
+      </select>
+      {% endif %}
+
       <div class="grid grid-cols-2 gap-2 max-w-4xl mx-auto w-full">
         <button
           id="engine-btn"
@@ -1008,6 +1022,66 @@
                       : null;
               },
           },
+          bench_press: {
+              feedUrl:    '/api/bench_press/feed',
+              stateUrl:   '/api/bench_press/state',
+              actionUrl:  '/api/bench_press/action',
+              browserCamera: true,
+              frameUrl:   '/api/bench_press/frame',
+              // The phone stands side-on to the bench, screen toward the
+              // coach - the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              buttons: [
+                  { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET', action: 'reset', color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  // START waits for Boy / Girl: it sets where the test ends.
+                  if (btnId === 'start') return !state.running || state.test_started || !state.sex;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [];
+                  lines.push(`Reps: ${state.count} / ${state.max_reps || '-'}`);
+                  if (state.arm_tracked) {
+                      lines.push(`Elbow: ${state.elbow_deg}\u00b0 (top ${state.up_deg}\u00b0, ` +
+                                 `chest ${state.down_deg}\u00b0)`);
+                      if (state.problem) lines.push(`\u26a0 ${state.problem}`);
+                  } else {
+                      lines.push(state.pose_detected
+                          ? 'Arm not clearly visible - side-on, head to hips in frame'
+                          : 'No participant detected - is a spotter between the camera and the student?');
+                  }
+                  if (state.test_done) {
+                      lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
+                  } else if (state.test_started) {
+                      lines.push(`${state.elapsed_sec}s elapsed` +
+                                 (state.count > 0
+                                     ? `   Rest: ${state.rest_s} / ${state.rest_limit_s} s`
+                                     : `   First rep within ${state.first_rep_limit_s} s, or the score is 0`));
+                  } else if (!state.sex) {
+                      lines.push('Pick Boy or Girl above, then tap START');
+                  } else {
+                      lines.push('Bar at the chest, then tap START as you call "GO"');
+                  }
+                  const nc = state.not_counted || {};
+                  const why = [['not_chest', 'not down to the chest'],
+                               ['not_straight', 'arms not straight']]
+                      .filter(([k]) => nc[k]).map(([k, w]) => `${nc[k]} ${w}`);
+                  if (why.length) lines.push(`Not counted: ${why.join(', ')}`);
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              syncFields(state) {
+                  // Only a trial that was started: STOP/SAVE without START (or
+                  // after RESET) must not send the student a 0 they never earned.
+                  // A started trial with no reps is a real 0 and is sent.
+                  return (state.test_started && state.count !== null && state.count !== undefined)
+                      ? { benchPressScore: state.count }
+                      : null;
+              },
+          },
           target_stretch: {
               feedUrl:    '/api/target_stretch/feed',
               stateUrl:   '/api/target_stretch/state',
@@ -1680,6 +1754,7 @@
           if (sessionId) body['session_id'] = sessionId;
           if (testId === 'target_stretch') body['joint'] = document.getElementById('tst-joint').value;
           if (testId === 'dumbbell_press') body['arm'] = document.getElementById('dbp-arm').value;
+          if (testId === 'bench_press') body['sex'] = document.getElementById('bpr-sex').value;
           
           try {
               const res = await fetch(`/api/launch/${testId}`, {
@@ -1750,6 +1825,7 @@
               dumbbell_press:'DumbbellPress',
               push_up:'PushUp',
               modified_curl_up:'ModifiedCurlUp',
+              bench_press:'BenchPress',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
@@ -1819,6 +1895,30 @@
           } else {
               sel.value = sel.dataset.current || 'auto';
               alert((data && data.error) || 'Could not change the arm');
+          }
+          pollState();
+      }
+      // Bench Press boy / girl picker: same pattern as the arm picker above.
+      // The engine refuses a change after START (it would move the finish).
+      const bprSex = document.getElementById('bpr-sex');
+      if (bprSex) bprSex.dataset.current = bprSex.value;
+      async function onBprSexChange(sel) {
+          if (!runActive || !engineCfg) { sel.dataset.current = sel.value; return; }
+          let data = null;
+          if (sel.value) {
+              try {
+                  const res = await fetch(engineCfg.actionUrl, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'sex', value: sel.value })
+                  });
+                  data = await res.json();
+              } catch (e) {}
+          }
+          if (data && data.ok) {
+              sel.dataset.current = sel.value;
+          } else {
+              sel.value = sel.dataset.current || '';
+              alert((data && data.error) || 'Pick Boy or Girl');
           }
           pollState();
       }
