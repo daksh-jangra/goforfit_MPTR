@@ -1080,8 +1080,6 @@ def _is_running(test_id: str) -> bool:
         return _modified_curl_up_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
-    if test_id == "shuttle_run" and _shuttle_engine is not None:
-        return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
         return _dash50m_engine.is_running()
     if test_id == "run_600m" and _run600m_engine is not None:

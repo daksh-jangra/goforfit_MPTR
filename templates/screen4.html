@@ -931,7 +931,7 @@
               browserCamera: true,
               frameUrl:   '/api/modified_curl_up/frame',
               // The phone sits on the floor side-on to the participant, screen
-              // toward the coach — the back camera. Falls back to a laptop's.
+              // toward the coach - the back camera. Falls back to a laptop's.
               preferBackCamera: true,
               buttons: [
                   { id: 'start', label: 'START', action: 'start', color: 'bg-sky-600' },
@@ -973,7 +973,7 @@
               // every 3 s while counting, and a long low one when the test
               // ends by itself. The beat runs on a local timer (the state poll
               // is too coarse to keep time) and stops itself once polling
-              // stops — STOP, or the engine going away, skips onState.
+              // stops - STOP, or the engine going away, skips onState.
               _prev: null,
               _beat: null,
               _seenAt: 0,
