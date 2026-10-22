@@ -38,6 +38,7 @@
     .badge-dumbbell_press { background:#ede9fe; color:#5b21b6; }
     .badge-push_up { background:#fef3c7; color:#92400e; }
     .badge-modified_curl_up { background:#dcfce7; color:#166534; }
+    .badge-bench_press { background:#e0e7ff; color:#3730a3; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -180,6 +181,7 @@
           <option value="dumbbell_press">🏋️ Dumbbell Press</option>
           <option value="push_up">💪 Push-Up</option>
           <option value="modified_curl_up">🧘 Modified Curl-Up</option>
+          <option value="bench_press">🏋️ Bench Press</option>
         </select>
       </div>
       <div>
@@ -354,6 +356,7 @@ const TEST_META = {
   dumbbell_press: { label: '🏋️ Dumbbell Press', unit: 'reps', extraFn: () => '' },
   push_up:     { label: '💪 Push-Up',        unit: 'reps',    extraFn: () => '' },
   modified_curl_up: { label: '🧘 Modified Curl-Up', unit: 'reps', extraFn: () => '' },
+  bench_press: { label: '🏋️ Bench Press', unit: 'reps', extraFn: () => '' },
 };
 
 // Target Stretch's result is text ("L 2 / R 1"), every other test's is a

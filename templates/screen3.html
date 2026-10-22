@@ -440,6 +440,7 @@
             dumbbell_press: 'reps',
             push_up:     'reps',
             modified_curl_up: 'reps',
+            bench_press: 'reps',
             target_stretch: 'left_score',
             bmi:         'height_cm',
             wingspan:    'wingspan_cm',
@@ -462,6 +463,7 @@
             dumbbell_press: 'reps',
             push_up:     'reps',
             modified_curl_up: 'reps',
+            bench_press: 'reps',
             target_stretch: '',
             bmi:         'cm',
             wingspan:    'cm',
@@ -493,15 +495,17 @@
         // Dumbbell press: a student who can't press the weight up once.
         // Push-up: a student who can't do one correct push-up.
         // Modified curl-up: a student who can't do one correct curl-up.
+        // Bench press: a student who can't press the bar up once.
         const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up',
                                  'seated_push_up', 'dumbbell_press', 'push_up',
-                                 'modified_curl_up']).has(testId);
+                                 'modified_curl_up', 'bench_press']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
         // Counts the database keeps as whole numbers. 7.5 reps can't be saved,
         // so say so here rather than fail with a bare "Could not save".
         const WHOLE_ONLY = new Set(['curl_up', 'pull_up', 'full_pull_up', 'wall_toss',
-                                    'dumbbell_press', 'push_up', 'modified_curl_up']).has(testId);
+                                    'dumbbell_press', 'push_up', 'modified_curl_up',
+                                    'bench_press']).has(testId);
         const notWhole = (v) => WHOLE_ONLY && !Number.isInteger(v);
         const NOT_WHOLE_MSG = 'Enter a whole number (no decimals).';
 
@@ -886,6 +890,15 @@
                     if (testId === 'modified_curl_up' && v > 75) {
                         showSaveMessage('Curl-ups can\'t be more than 75 (the test maximum).', false);
                         return;
+                    }
+                    if (testId === 'bench_press') {
+                        // Girls stop at 30, boys at 50 (picked on the test screen).
+                        const girl = pendingResult && pendingResult.sex === 'girl';
+                        const cap = girl ? 30 : 50;
+                        if (v > cap) {
+                            showSaveMessage(`Reps can't be more than ${cap} (the test maximum for ${girl ? 'girls' : 'boys'}).`, false);
+                            return;
+                        }
                     }
                     if (!pendingResult) {
                         const sid = urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null;
