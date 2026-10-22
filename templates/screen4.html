@@ -1046,7 +1046,8 @@
                   lines.push(`Reps: ${state.count} / ${state.max_reps || '-'}`);
                   if (state.arm_tracked) {
                       lines.push(`Elbow: ${state.elbow_deg}\u00b0 (top ${state.up_deg}\u00b0, ` +
-                                 `chest ${state.down_deg}\u00b0)`);
+                                 `chest ${state.down_deg}\u00b0)   ` +
+                                 `Hand: ${state.hand_fa} forearms up (top ${state.hand_up_fa})`);
                       if (state.problem) lines.push(`\u26a0 ${state.problem}`);
                   } else {
                       lines.push(state.pose_detected

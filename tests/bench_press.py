@@ -31,9 +31,13 @@ What counts as a rep - the ELBOW ANGLE, side-on (owner, 2026-10-22)
             (shoulder -> hip), in degrees. 0 = lying along the body,
             90 = pointing at the ceiling.
 
+    hand    how high the wrist is above the shoulder, across the body line
+            (screen height without the hip), in this frame's forearm lengths
+
     CHEST   elbow <= DOWN_DEG (90) AND elev <= ELEV_DOWN_DEG (30): the bar is
             down at the chest. (Without the hip in view, the elbow alone.)
-    TOP     elbow >= UP_DEG (155): arms straight.
+    TOP     elbow >= UP_DEG (155) AND hand >= HAND_UP_FA (1.75): arms
+            straight and the bar really up.
 
   A rep is chest -> top, counted the moment the arms are straight. It must
   come back to the chest before the next one counts.
@@ -45,6 +49,20 @@ What counts as a rep - the ELBOW ANGLE, side-on (owner, 2026-10-22)
   the picture plane, so it reads cleanly. Hand height was tried and is NOT
   used: with the camera a little high and angled, the bar on the chest
   still read 1.2-1.3 upper arms above the shoulder.
+
+  Why the hand height too (review 2026-10-22, owner chose the fix): a
+  side-on camera can't see how far the elbow sticks out TOWARD it. With the
+  elbows flared out sideways (common with a wide grip) a bent arm looks
+  straight: in a 3-D arm model the camera read 155+ while the real elbow
+  was only ~118 with the elbows 75 deg out, and only ~66 (40% of the way
+  up) at 90 deg out. The hand height doesn't have that blind spot: a true
+  lockout puts the wrist ~2 forearms above the shoulder (the video's side-on
+  lockouts read 1.83-2.11), the flared fakes 1.0-1.7. Each frame's own
+  forearm is the yardstick: it stays upright under the bar at the chest and
+  at the top. When the arm leans toward the lens it looks short, which only
+  makes the reading higher (the video's high camera did that: 2.3-2.6) -
+  measured against the longest forearm seen instead, those real lockouts
+  read ~1.6 and were missed.
 
   Not counted (shown on screen, the count is unchanged):
     * the bar was lowered partway and pressed back up without reaching the
@@ -138,7 +156,9 @@ REST_S      = 4.0    # Dumbbell Press's rest rule (owner's choice)
 FIRST_REP_S = 15.0   # no counted rep this long after START = score 0 (as Dumbbell Press)
 
 # ── Detection tuning ─────────────────────────────────────────────────────────────
-UP_DEG          = 155.0   # elbow at least this = arms straight (the top)
+UP_DEG          = 155.0   # elbow at least this = arms straight (the top)...
+HAND_UP_FA      = 1.75    # ...with the wrist this many forearms above the shoulder
+                          # (true lockouts 1.83-2.11; flared-elbow fakes 1.0-1.7)
 DOWN_DEG        = 90.0    # elbow at most this = bar at the chest...
 ELEV_DOWN_DEG   = 30.0    # ...with the upper arm no more than this above the body line
 SHALLOW_DIP_DEG = 140.0   # a dip from the top must go below this to be a
@@ -224,16 +244,19 @@ def side_metrics(lms, side, w, h):
     """The readings for one side of the body, or None when the shoulder,
     elbow or wrist is unclear or outside the picture (MediaPipe still
     returns a confident-looking guess for joints off the edge). The hip is
-    optional: without it elev and body_tilt are None."""
+    optional: without it elev and body_tilt are None, and the hand height
+    is measured straight up the picture."""
     idxs = SIDE_IDX[side]
     if not all(_clear(lms[i]) for i in idxs[:3]):
         return None
     s, e, wr = (lm_px(lms, i, w, h) for i in idxs[:3])
     upper = e - s
-    if np.linalg.norm(upper) < 1.0 or np.linalg.norm(wr - e) < 1.0:
+    forearm = float(np.linalg.norm(wr - e))
+    if np.linalg.norm(upper) < 1.0 or forearm < 1.0:
         return None
 
     elev = tilt = None
+    up = np.array([0.0, -1.0])     # without the hip: straight up the picture
     if _clear(lms[idxs[3]]):
         hp = lm_px(lms, idxs[3], w, h)
         body = hp - s
@@ -248,9 +271,11 @@ def side_metrics(lms, side, w, h):
                 n = -n
             elev = math.degrees(math.asin(float(np.clip(
                 np.dot(upper, n) / np.linalg.norm(upper), -1.0, 1.0))))
+            up = n
 
     return {
         "elbow": calc_angle(s, e, wr),
+        "hand": float(np.dot(wr - s, up)) / forearm,
         "elev": elev,
         "body_tilt": tilt,
         "vis": float(np.mean([lms[i].visibility for i in idxs[:3]])),
@@ -266,16 +291,18 @@ class MedianSmoother:
     elev / body_tilt may be missing (hip out of view): their median is over
     the frames that had them, and None while this frame doesn't."""
 
+    ALWAYS = ("elbow", "hand")
     OPTIONAL = ("elev", "body_tilt")
 
     def __init__(self, n=SMOOTH_FRAMES):
         self.n = int(n)
-        self.bufs = {k: deque(maxlen=self.n) for k in ("elbow",) + self.OPTIONAL}
+        self.bufs = {k: deque(maxlen=self.n) for k in self.ALWAYS + self.OPTIONAL}
 
     def push(self, m):
         out = dict(m)
-        self.bufs["elbow"].append(float(m["elbow"]))
-        out["elbow"] = float(np.median(self.bufs["elbow"]))
+        for k in self.ALWAYS:
+            self.bufs[k].append(float(m[k]))
+            out[k] = float(np.median(self.bufs[k]))
         for k in self.OPTIONAL:
             self.bufs[k].append(m[k])
             vals = [v for v in self.bufs[k] if v is not None]
@@ -561,7 +588,7 @@ class BenchPressTest:
         self.problem = None
 
         e = m["elbow"]
-        at_top = e >= UP_DEG
+        at_top = e >= UP_DEG and m["hand"] >= HAND_UP_FA
         at_chest = e <= DOWN_DEG and (m["elev"] is None or m["elev"] <= ELEV_DOWN_DEG)
 
         if self.phase == PH_UNKNOWN:
@@ -679,7 +706,7 @@ def draw_hud(frame, test, pts=None, now=None):
     line(f"BENCH PRESS  [{state}]", colour, 0.68, 30)
     line(f"Reps: {test.count} / {test.max_reps or '--'}", C_OK, 0.9, 34)
     if test.m is not None:
-        line(f"Elbow: {test.m['elbow']:.0f}  (top {UP_DEG:.0f}, chest {DOWN_DEG:.0f})")
+        line(f"Elbow {test.m['elbow']:.0f}/{UP_DEG:.0f}  Hand {test.m['hand']:.1f}/{HAND_UP_FA}")
         line(f"Phase: {test.phase}   Not counted: {test.total_not_counted}")
     else:
         line("Arm not tracked - side-on, head to hips in frame", C_BAD)
@@ -821,7 +848,7 @@ def main():
                 m = test.m
                 elev = "-" if m["elev"] is None else f"{m['elev']:.0f}"
                 print(f"side={test.side} phase={test.phase} elbow={m['elbow']:.0f} "
-                      f"elev={elev} reps={test.count} rest={test.rest_elapsed:.1f}")
+                      f"hand={m['hand']:.2f} elev={elev} reps={test.count} rest={test.rest_elapsed:.1f}")
             draw_hud(frame, test, pts, now=now)
             cv2.imshow(win, frame)
 
