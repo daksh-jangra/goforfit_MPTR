@@ -875,7 +875,10 @@ TESTS = {
             "touch the chest. Keep a steady pace of 3 to 4 seconds per rep, without "
             "resting.",
             "A rep counts when the bar has come down to the chest and the arms then "
-            "straighten at the top (elbow 155\u00b0 or more).",
+            "straighten at the top: elbow 155\u00b0 or more, with the hands pushed all "
+            "the way up above the shoulders.",
+            "The hands matter because elbows flared out to the side can make a bent arm "
+            "look straight to a side-on camera.",
             "A press that doesn't straighten the arms, or a lowering that doesn't reach "
             "the chest, is NOT counted. The screen says why.",
             "The test ends by itself at 50 reps for a boy or 30 for a girl, or after a "

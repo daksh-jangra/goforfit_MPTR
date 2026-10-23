@@ -373,6 +373,38 @@ def check_slow_lowering_does_not_time_out():
     assert not test.stopped and test.count == 3, (test.count, test.end_reason)
 
 
+def check_slow_flared_lowering_does_not_time_out():
+    # Elbows flared: the camera reads the arm as straight from the top down
+    # to ~40% of the way, so only the hand shows the bar coming down.
+    test, t = started()
+    t = run(test, presses(1, model=flared), t0=t)
+    t = run(test, [press_up(), (1.0, hold(flared, elbow=TOP))], t0=t)
+    t = run(test, [(7.0, lambda s: flared(TOP - (TOP - CHEST) * s / 7.0))], t0=t, jitter=3)
+    run(test, [press_up()], t0=t)
+    assert not test.stopped and test.count == 3, (test.count, test.end_reason)
+
+
+def check_repeated_flared_half_presses_end_the_test():
+    test, t = started()
+    t = run(test, presses(2, model=flared), t0=t)
+    run(test, presses(8, model=flared, top=CHEST + 0.6 * (TOP - CHEST)), t0=t)
+    assert test.end_reason == bp.END_REST and test.count == 2, (test.count, test.end_reason)
+
+
+def check_shaky_hand_while_still_still_ends():
+    # Hand reading wobbling +-0.1 forearms while lying still at the chest
+    # or holding the bar up: the 4 s rest still ends it on time.
+    for where, move, count in ((CHEST, [], 3), (TOP, [press_up()], 4)):
+        test, t = started()
+        t = run(test, presses(3) + move, t0=t)
+        t_last = t
+        rnd = random.Random(5)
+        run(test, [(10.0, lambda s: lying(where, hand=lying(where)["hand"] + rnd.uniform(-0.1, 0.1)))],
+            t0=t, jitter=3)
+        assert test.end_reason == bp.END_REST and test.count == count, (where, test.count, test.end_reason)
+        assert 3.5 <= test.end_t - t_last <= 5.5, (where, test.end_t - t_last)
+
+
 def check_repeated_half_presses_end_the_test():
     test, t = started()
     t = run(test, presses(2), t0=t)
