@@ -91,7 +91,10 @@ When the test ends (Dumbbell Press rules, owner 2026-10-22)
     climbing (the elbow opening another PROGRESS_DEG beyond the most it has
     been since the bar was last at the chest), or the bar still coming down
     (the elbow closing another PROGRESS_DEG below the least since the last
-    rep). Getting back to the chest after ONE press that didn't lock out
+    rep). The HAND height counts the same way (PROGRESS_FA, TRAVEL_FA): with
+    the elbows flared the camera reads the arm as straight from the top
+    down to ~40% of the way, so a slow lowering (~7 s) showed no elbow
+    movement and ended the test mid-set. Getting back to the chest after ONE press that didn't lock out
     restarts the clock too (a near miss is still working); a second miss in
     a row doesn't. Each step also needs real TRAVEL (TRAVEL_DEG over TRAVEL_S,
     each end averaged over TRAVEL_AVG_S), so tracking wobble can't keep
@@ -170,6 +173,12 @@ PROGRESS_DEG    = 15.0    # elbow opening / closing this much = still working
 TRAVEL_S        = 1.2     # a "still working" step also needs the elbow to have
 TRAVEL_DEG      = 10.0    # moved this far that way over this long
 TRAVEL_AVG_S    = 0.5     # (each end averaged over this long)
+PROGRESS_FA     = 0.20    # the same for the hand height, in forearms (chest
+TRAVEL_FA       = 0.15    # ~0.9 to top ~2.0). Stress test, 3000 runs: with a
+                          # shaky hand reading (+-0.15) 0.18/0.12 ended 28 late
+                          # (up to 9 s), 0.20/0.15 6 (up to 7.8 s); 0.25/0.15
+                          # only 2 but cut off an 8 s flared lowering, which
+                          # 0.20/0.15 still allows (twice the 3-4 s pace).
 MAX_FRAME_DT    = 0.5     # most one frame may add to any clock (Wi-Fi gaps)
 SHORT_GAP_S     = 0.3     # arm lost no longer than this: keep the smoothing
 JUMP_DEG        = 40.0    # elbow reading this far from the trusted one = a jump
@@ -356,8 +365,10 @@ class BenchPressTest:
         self._best = None          # highest elbow since back at the chest (rest clock)
         self._low = None           # lowest elbow since the last rep (rest clock)
         self._climbed = False      # credited a climb since back at the chest
+        self._hbest = None         # the same two ratchets for the hand height
+        self._hlow = None
         self._misses = 0           # presses not locked out since the last rep
-        self._trail = deque()      # (t, elbow), last TRAVEL_S + TRAVEL_AVG_S
+        self._trail = deque()      # (t, elbow, hand), last TRAVEL_S + TRAVEL_AVG_S
         self.status_msg = ("Press START when ready" if self.sex
                            else "Pick Boy or Girl, then press START")
 
@@ -474,8 +485,8 @@ class BenchPressTest:
             return None
         self.m = m
 
-        e = m["elbow"]
-        self._trail.append((now, e))
+        e, h = m["elbow"], m["hand"]
+        self._trail.append((now, e, h))
         while self._trail and now - self._trail[0][0] > TRAVEL_S + TRAVEL_AVG_S:
             self._trail.popleft()
 
@@ -485,8 +496,8 @@ class BenchPressTest:
         if ev == "rep":
             self.rest_elapsed = 0.0
             self._misses = 0
-            self._best = None       # nothing to climb until it's back down
-            self._low = e           # the lowering is measured from here
+            self._best = self._hbest = None   # nothing to climb until it's back down
+            self._low, self._hlow = e, h      # the lowering is measured from here
             self.status_msg = f"Rep {self.count}"
             if self.count >= self.max_reps:
                 self.stop(END_MAX, now)
@@ -501,12 +512,12 @@ class BenchPressTest:
             # mid-set (stress test: 1 session in 60). A second miss in a row
             # gets no such restart - "can no longer raise the barbell".
             self.rest_elapsed = 0.0
-            self._best = e
+            self._best, self._hbest = e, h
             self._climbed = False
             return None
         if self.count == 0:
             return None             # nothing to rest from before the first rep
-        if self._working(e, now):
+        if self._working(e, h, now):
             self.rest_elapsed = 0.0
             return None
         self.rest_elapsed += dt
@@ -516,34 +527,48 @@ class BenchPressTest:
             return END_REST
         return None
 
-    def _working(self, e, now):
+    def _working(self, e, h, now):
         """A slow press still climbing, or the bar still coming down (see
-        the docstring). Ratchets: the same height again isn't progress."""
-        if self.phase in (PH_DOWN, PH_PRESSING) and self._best is not None:
-            if not self._climbed and e < self._best:
+        the docstring), judged on the elbow and on the hand height.
+        Ratchets: the same height again isn't progress."""
+        climbing = self.phase in (PH_DOWN, PH_PRESSING)
+        lowering = (self.phase in (PH_UP, PH_LOWERING)
+                    or (self.phase == PH_DOWN and not self._climbed))
+        working = False
+        if climbing and self._best is not None:
+            if not self._climbed and (e < self._best or h < self._hbest):
                 # Still settling onto the chest: the climb is measured from
                 # the real bottom, not from where the elbow crossed 90.
-                self._best = e
-            elif e >= self._best + PROGRESS_DEG and self._travelled(now) >= TRAVEL_DEG:
-                self._best = e
-                self._climbed = True
-                return True
-        if (self.phase in (PH_UP, PH_LOWERING)
-                or (self.phase == PH_DOWN and not self._climbed)) and self._low is not None:
-            if e <= self._low - PROGRESS_DEG and self._travelled(now) <= -TRAVEL_DEG:
+                self._best = min(self._best, e)
+                self._hbest = min(self._hbest, h)
+            else:
+                if e >= self._best + PROGRESS_DEG and self._travelled(now, 1) >= TRAVEL_DEG:
+                    self._best = e
+                    working = True
+                if h >= self._hbest + PROGRESS_FA and self._travelled(now, 2) >= TRAVEL_FA:
+                    self._hbest = h
+                    working = True
+                if working:
+                    self._climbed = True
+                    return True
+        if lowering and self._low is not None:
+            if e <= self._low - PROGRESS_DEG and self._travelled(now, 1) <= -TRAVEL_DEG:
                 self._low = e
-                return True
-        return False
+                working = True
+            if h <= self._hlow - PROGRESS_FA and self._travelled(now, 2) <= -TRAVEL_FA:
+                self._hlow = h
+                working = True
+        return working
 
-    def _travelled(self, now):
-        """How far the elbow has really moved over the last TRAVEL_S: the
-        mean of the last TRAVEL_AVG_S minus the mean TRAVEL_S before that.
-        Opening is positive. Jitter nets out near 0. 0 until there is enough
-        history."""
+    def _travelled(self, now, i):
+        """How far the elbow (i=1) or the hand (i=2) has really moved over
+        the last TRAVEL_S: the mean of the last TRAVEL_AVG_S minus the mean
+        TRAVEL_S before that. Up / opening is positive. Jitter nets out near
+        0. 0 until there is enough history."""
         if not self._trail or now - self._trail[0][0] < TRAVEL_S:
             return 0.0
-        recent = [v for t, v in self._trail if t >= now - TRAVEL_AVG_S]
-        old = [v for t, v in self._trail if t <= now - TRAVEL_S]
+        recent = [x[i] for x in self._trail if x[0] >= now - TRAVEL_AVG_S]
+        old = [x[i] for x in self._trail if x[0] <= now - TRAVEL_S]
         if not recent or not old:
             return 0.0
         return sum(recent) / len(recent) - sum(old) / len(old)
