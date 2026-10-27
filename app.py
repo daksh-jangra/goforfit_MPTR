@@ -954,6 +954,49 @@ TESTS = {
         "unit":   "score",
         "live_feed":   True,
     },
+    "modified_thomas": {
+        "id":          "modified_thomas",
+        "title":       "Modified Thomas Test",
+        "subtitle":    "Hip flexor length: left and right, scored 0 to 3 by the coach",
+        "icon":        "\U0001f9b5",
+        "category":    "Musculoskeletal",
+        # No camera: the pose model can't find the thigh lying on the table
+        # (it puts both legs on the knee pulled to the chest), and 3 vs 2 is
+        # "touching" vs "about 1 cm up", finer than it can read. The coach
+        # checks with the file cards and enters both scores.
+        "script":      None,
+        "description": [
+            "Tests how tight the muscles at the front of the hip are. There is no camera: "
+            "the coach checks the leg and enters the score.",
+            "Put a strip of tape on the table 28 cm (11 in) from one short end.",
+            "The student lies on their back with the hip joint level with the tape and "
+            "the lower legs hanging off the end of the table.",
+            "To test the RIGHT hip, the student pulls the LEFT knee to the chest with both "
+            "hands until the lower back is flat on the table. The coach may help.",
+            "Check the back is flat: a hand slid under the lower back should not fit.",
+            "Look at the RIGHT thigh at the table edge and score it:",
+            "3 - the thigh stays touching the table.",
+            "2 - the thigh lifts, but the 7.6 cm side of the small card won't slide under it.",
+            "1 - the 7.6 cm side slides under, but the 15.2 cm side of the large card doesn't.",
+            "0 - the 15.2 cm side slides under.",
+            "Then pull the RIGHT knee in and score the LEFT thigh the same way. One trial "
+            "per leg.",
+            "If the back won't go flat even with help, score it anyway.",
+            "Both scores are saved. The website gets the lower of the two.",
+        ],
+        "controls": [],
+        "tip": [
+            "A sturdy table with the tape mark 28 cm from one short end.",
+            "Two file cards: 3 x 5 in (the 7.6 cm side) and 4 x 6 in (the 15.2 cm side).",
+            "Or a ruler: measure straight up from the table edge to the back of the thigh.",
+            "Warm up the hips before testing.",
+            "A leg that can't be tested can be marked Not tested.",
+        ],
+        "params": [],
+        "unit":   "score",
+        "live_feed":   False,
+        "manual_entry": True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -1316,6 +1359,11 @@ class BenchPressSave(BaseModel):
     end_reason: Optional[str] = None
     rating: Optional[str] = None
 
+class ModifiedThomasSave(BaseModel):
+    session_id: Optional[int] = None
+    left_score: Optional[int] = None       # 0-3, None = leg not tested
+    right_score: Optional[int] = None
+
 class VerticalJumpSave(BaseModel):
     session_id: Optional[int] = None
     jump_cm: Optional[float] = None
@@ -1598,6 +1646,12 @@ async def launch(test_id: str, request: Request):
     cfg = TESTS.get(test_id)
     if cfg is None:
         return JSONResponse({"ok": False, "error": f"Unknown test '{test_id}'"}, status_code=404)
+
+    if cfg.get("manual_entry"):
+        return JSONResponse(
+            {"ok": False, "error": "This test has no camera. The coach enters the score."},
+            status_code=400,
+        )
 
     # This test is supposed to run as an in-browser live feed (like wingspan) —
     # if we get this far it's because its engine class is None, i.e. its engine
@@ -3795,6 +3849,26 @@ def save_bench_press(b: BenchPressSave):
         duration_sec = b.duration_sec,
         end_reason   = b.end_reason,
         rating       = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/modified_thomas")
+def save_modified_thomas(b: ModifiedThomasSave):
+    """Fields: session_id, left_score / right_score (0-3; one may be missing
+    if that leg was not tested, but not both)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.left_score is None and b.right_score is None:
+        return JSONResponse({"ok": False, "error": "Neither leg was scored"}, status_code=400)
+    for sc in (b.left_score, b.right_score):
+        if sc is not None and sc not in (0, 1, 2, 3):
+            return JSONResponse({"ok": False, "error": "Scores are 0, 1, 2 or 3"},
+                                status_code=400)
+    row_id = db.save_modified_thomas(
+        session_id  = b.session_id,
+        left_score  = b.left_score,
+        right_score = b.right_score,
     )
     return {"ok": True, "id": row_id}
 

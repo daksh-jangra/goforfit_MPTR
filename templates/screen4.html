@@ -36,7 +36,61 @@
   <body
     class="bg-[#111] h-full h-[100dvh] flex flex-col font-mono select-none overflow-hidden justify-between"
   >
-    {% if test.live_feed %}
+    {% if test.manual_entry %}
+
+    <!-- Modified Thomas Test: no camera. The dashboard opens this screen
+         directly, so the coach picks both scores here. -->
+    <div class="flex-1 overflow-y-auto min-h-0 w-full px-4 py-4">
+      <div class="max-w-md mx-auto text-white space-y-3 text-xs sm:text-sm">
+        <div class="font-bold text-base">{{ test.title }}</div>
+        <div class="text-white/70">
+          No camera for this test. Check each thigh at the table edge with the
+          file cards and pick its score below.
+        </div>
+        <ul class="text-white/80 space-y-1">
+          <li>3 - the thigh stays touching the table</li>
+          <li>2 - lifted, but the 7.6 cm side of the small card won't slide under</li>
+          <li>1 - the 7.6 cm side slides under, the 15.2 cm side of the large card doesn't</li>
+          <li>0 - the 15.2 cm side slides under</li>
+        </ul>
+        <div class="text-white/70">
+          Pull the LEFT knee to the chest to score the RIGHT hip, and the RIGHT
+          knee to score the LEFT hip. The lower back must be flat on the table.
+        </div>
+        <div class="text-white/70">
+          Pick LEFT and RIGHT below (the hip being scored), then press SAVE.
+        </div>
+        <div id="mtt-status" class="hidden bg-white/10 text-amber-300 rounded-lg px-3 py-2 text-center"></div>
+      </div>
+    </div>
+
+    <div
+      class="bg-black border-t border-white/10 px-3 py-2 safe-bottom flex flex-col gap-2 z-50 w-full shrink-0"
+    >
+      <div class="grid grid-cols-2 gap-2 max-w-4xl mx-auto w-full">
+        {% for side in ['left', 'right'] %}
+        <select
+          id="mtt-{{ side }}"
+          class="w-full rounded-xl bg-white/10 text-white text-xs sm:text-sm font-bold px-3 py-2 border border-white/20"
+        >
+          <option value="" class="text-black">{{ side|upper }}: score?</option>
+          <option value="3" class="text-black">{{ side|upper }}: 3</option>
+          <option value="2" class="text-black">{{ side|upper }}: 2</option>
+          <option value="1" class="text-black">{{ side|upper }}: 1</option>
+          <option value="0" class="text-black">{{ side|upper }}: 0</option>
+          <option value="none" class="text-black">{{ side|upper }}: not tested</option>
+        </select>
+        {% endfor %}
+      </div>
+      <button
+        onclick="mttSave()"
+        class="max-w-4xl mx-auto w-full bg-rose-600 active:bg-rose-800 text-white font-bold py-2.5 sm:py-3.5 rounded-xl text-xs sm:text-base tracking-wide shadow-lg transition active:scale-95"
+      >
+        SAVE
+      </button>
+    </div>
+
+    {% elif test.live_feed %}
 
     <!-- Video Feed Container: Flex-1 with min-h-0 forces image to scale within remaining space -->
     <div
@@ -1922,6 +1976,47 @@
               alert((data && data.error) || 'Pick Boy or Girl');
           }
           pollState();
+      }
+      // Modified Thomas Test: stage both scores for the results screen and
+      // send the dashboard one number, the lower (tighter) leg - the same
+      // message shape STOP / SAVE sends for the camera tests.
+      async function mttSave() {
+          const status = document.getElementById('mtt-status');
+          const say = (msg) => { status.innerText = msg; status.classList.remove('hidden'); };
+          // '' = not picked yet, 'none' = not tested (null), else 0-3.
+          const pick = (s) => {
+              const v = document.getElementById(`mtt-${s}`).value;
+              return v === '' ? undefined : v === 'none' ? null : parseInt(v, 10);
+          };
+          const left = pick('left'), right = pick('right');
+          if (left === undefined || right === undefined) return say('Pick a score for both hips (or not tested).');
+          if (left === null && right === null) return say('Score at least one hip.');
+          try {
+              const res = await fetch(`/api/stage/${testId}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ session_id: sessionId, left_score: left, right_score: right })
+              });
+              const data = await res.json();
+              if (!data.ok) return say(data.error || 'Could not save the scores.');
+          } catch (e) {
+              return say('Could not save the scores - is the server running?');
+          }
+          const score = Math.min(...[left, right].filter(v => v !== null));
+          if (window.opener) {
+              window.opener.postMessage({
+                  type: 'AI_SYNC_DATA',
+                  exerciseType: 'ModifiedThomasTest',
+                  testId,
+                  sessionId,
+                  modifiedThomasTestScore: score,
+              }, 'https://nep.goforfit.in');
+              setTimeout(() => { window.close(); }, 500);
+          } else {
+              // Not opened by the dashboard: save it on the results screen.
+              const back = new URLSearchParams({ test: testId });
+              if (sessionId) back.set('session_id', sessionId);
+              window.location.href = `/screen3?${back.toString()}`;
+          }
       }
       function onTstJointChange(sel) {
           if (runActive) {

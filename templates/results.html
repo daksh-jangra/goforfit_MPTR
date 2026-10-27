@@ -39,6 +39,7 @@
     .badge-push_up { background:#fef3c7; color:#92400e; }
     .badge-modified_curl_up { background:#dcfce7; color:#166534; }
     .badge-bench_press { background:#e0e7ff; color:#3730a3; }
+    .badge-modified_thomas { background:#fae8ff; color:#86198f; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -182,6 +183,7 @@
           <option value="push_up">💪 Push-Up</option>
           <option value="modified_curl_up">🧘 Modified Curl-Up</option>
           <option value="bench_press">🏋️ Bench Press</option>
+          <option value="modified_thomas">🦵 Modified Thomas Test</option>
         </select>
       </div>
       <div>
@@ -357,14 +359,17 @@ const TEST_META = {
   push_up:     { label: '💪 Push-Up',        unit: 'reps',    extraFn: () => '' },
   modified_curl_up: { label: '🧘 Modified Curl-Up', unit: 'reps', extraFn: () => '' },
   bench_press: { label: '🏋️ Bench Press', unit: 'reps', extraFn: () => '' },
+  // Result is text, "L 3 / R 2": the coach's 0-3 score for each hip.
+  modified_thomas: { label: '🦵 Modified Thomas Test', unit: '', extraFn: () => '' },
 };
 
-// Target Stretch's result is text ("L 2 / R 1"), every other test's is a
-// number, and comparing the two scrambles the sort. Sort it by its two
-// scores added up, so it sits among the numbers.
+// Target Stretch's and Modified Thomas Test's results are text ("L 2 / R 1"),
+// every other test's is a number, and comparing the two scrambles the sort.
+// Sort them by their two scores added up, so they sit among the numbers.
+const LR_TEXT_TESTS = new Set(['target_stretch', 'modified_thomas']);
 function sortKey(r) {
   const v = r[sortCol];
-  if (sortCol === 'primary_result' && r.test === 'target_stretch' && typeof v === 'string')
+  if (sortCol === 'primary_result' && LR_TEXT_TESTS.has(r.test) && typeof v === 'string')
     return (v.match(/\d+/g) || []).reduce((sum, d) => sum + Number(d), 0);
   return v ?? '';
 }
