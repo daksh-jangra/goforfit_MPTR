@@ -330,6 +330,21 @@ CREATE TABLE IF NOT EXISTS bench_press (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Modified Thomas Test ──────────────────────────────────────────────────
+-- One trial per leg (Brockport fig. 5.28): lying on the back, hip 28 cm from
+-- the table edge, the other knee pulled to the chest. The coach scores each
+-- thigh 0-3 by its height above the table edge (3 = touching, 2 = under
+-- 7.6 cm, 1 = 7.6-15.2 cm, 0 = over 15.2 cm). No camera. A leg that was not
+-- tested is NULL; score is the lower of the two, which the website gets.
+CREATE TABLE IF NOT EXISTS modified_thomas (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    left_score      INTEGER,     -- 0-3, left hip
+    right_score     INTEGER,     -- 0-3, right hip
+    score           INTEGER,     -- the lower of the two
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,7 +455,13 @@ UNION ALL
 UNION ALL
     SELECT 'bench_press', bpr.id, bpr.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, bpr.reps, bpr.rating, bpr.recorded_at
-    FROM bench_press bpr LEFT JOIN sessions s ON bpr.session_id = s.id;
+    FROM bench_press bpr LEFT JOIN sessions s ON bpr.session_id = s.id
+UNION ALL
+    SELECT 'modified_thomas', mtt.id, mtt.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL,
+           'L ' || COALESCE(mtt.left_score, '-') || ' / R ' || COALESCE(mtt.right_score, '-'),
+           NULL, mtt.recorded_at
+    FROM modified_thomas mtt LEFT JOIN sessions s ON mtt.session_id = s.id;
 """
 
 
@@ -941,6 +962,25 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Modified Thomas Test ─────────────────────────────────────────────
+
+    def save_modified_thomas(
+        self,
+        session_id: int,
+        left_score: int = None,
+        right_score: int = None,
+    ) -> int:
+        """Both legs' 0-3 scores; a leg not tested is None."""
+        score = min(s for s in (left_score, right_score) if s is not None)
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO modified_thomas (session_id, left_score,
+                        right_score, score)
+                   VALUES (?,?,?,?)""",
+                (session_id, left_score, right_score, score),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -987,7 +1027,7 @@ class GoForFitDB:
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
-        "modified_curl_up", "bench_press",
+        "modified_curl_up", "bench_press", "modified_thomas",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:

@@ -82,7 +82,7 @@
             {% if test.tip is string %}
             <div class="mt-3 text-xs text-gray-500">{{ test.tip }}</div>
             {% else %}
-            <div class="mt-3 text-xs font-semibold text-gray-600 mb-1">Camera setup</div>
+            <div class="mt-3 text-xs font-semibold text-gray-600 mb-1">{{ 'What you need' if test.manual_entry else 'Camera setup' }}</div>
             <ul class="list-disc pl-5 space-y-0.5 text-xs text-gray-500">
                 {% for line in test.tip %}<li>{{ line }}</li>{% endfor %}
             </ul>
@@ -224,6 +224,25 @@
                     </div>
                 </div>
             </div>
+            {% elif test.id == 'modified_thomas' %}
+            <!-- One trial per leg, 0-3 each (Brockport fig. 5.28). No camera:
+                 the coach checks with the file cards and picks the scores. -->
+            <div class="max-w-md mx-auto w-full grid grid-cols-2 gap-3">
+                {% for side in ['left', 'right'] %}
+                <div>
+                    <label for="mtt-{{ side }}" class="block text-xs font-semibold text-gray-500 mb-1 text-center">{{ side|upper }} hip</label>
+                    <select id="mtt-{{ side }}"
+                            class="w-full border border-gray-300 rounded-lg px-2 py-3 text-sm font-semibold text-indigo-950 bg-white focus:outline-none focus:border-indigo-500">
+                        <option value="">Pick a score</option>
+                        <option value="3">3 - touching the table</option>
+                        <option value="2">2 - up, under 7.6 cm</option>
+                        <option value="1">1 - 7.6 to 15.2 cm</option>
+                        <option value="0">0 - over 15.2 cm</option>
+                        <option value="none">Not tested</option>
+                    </select>
+                </div>
+                {% endfor %}
+            </div>
             {% else %}
             <div class="max-w-md mx-auto w-full">
                 <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
@@ -234,7 +253,9 @@
             {% endif %}
 
             <div class="space-y-2.5 pt-2 max-w-md mx-auto">
+                {% if not test.manual_entry %}
                 <button onclick="goToAI()" class="w-full bg-amber-500 text-white py-2.5 rounded text-sm font-medium">Switch to AI</button>
+                {% endif %}
                 <button id="save-btn" onclick="saveResult()" class="w-full bg-indigo-700 text-white py-2.5 rounded text-sm font-medium hover:bg-indigo-800">Save to Database</button>
             </div>
             <p id="save-message" class="text-center text-xs font-semibold hidden"></p>
@@ -480,9 +501,13 @@
         // Target Stretch: one joint, a 0-2 score per side, decided by the
         // camera. It has its own read-only display, render and save path.
         const IS_TST = testId === 'target_stretch';
+        // Modified Thomas Test: no camera, the coach picks a 0-3 score per leg.
+        const IS_MTT = testId === 'modified_thomas';
         // Pass/fail tests are decided by the camera and their box is locked,
         // so "enter a value manually" would be wrong advice there.
-        const NO_READING_MSG = (IS_PASS_FAIL || IS_TST)
+        const NO_READING_MSG = IS_MTT
+            ? 'Pick a score for each leg, then press Save.'
+            : (IS_PASS_FAIL || IS_TST)
             ? 'No result yet - run the test; the camera decides it.'
             : 'No AI reading staged. Enter a value manually below, or use Switch to AI.';
         // Rep counts where zero is a real score: a kid who manages no pull-up
@@ -567,6 +592,8 @@
                     document.getElementById(`tst-${s}-deg`).innerHTML = '&nbsp;';
                 });
                 document.getElementById('tst-joint-label').textContent = '';
+            } else if (IS_MTT) {
+                ['left', 'right'].forEach(s => { document.getElementById(`mtt-${s}`).value = ''; });
             } else if (!TEST_TIMED) {
                 const el = document.getElementById('override-input');
                 if (el) el.value = '';
@@ -695,6 +722,74 @@
             btn.innerText = 'Save to Database';
         }
 
+        // ---- Modified Thomas Test ------------------------------------------
+        // Scores entered on the test screen arrive staged; the coach can
+        // change them here. A leg not tested is null ("Not tested").
+        function renderMttPending() {
+            const p = pendingResult;
+            ['left', 'right'].forEach(s => {
+                const v = p ? p[`${s}_score`] : undefined;
+                document.getElementById(`mtt-${s}`).value =
+                    v === undefined ? '' : v === null ? 'none' : String(v);
+            });
+            document.getElementById('pending-summary').innerHTML = p
+                ? 'Scores entered on the test screen - change them here if needed, then press Save.'
+                : `<span class="text-gray-400">${NO_READING_MSG}</span>`;
+        }
+
+        async function saveMttResult() {
+            // '' = not picked yet, 'none' = Not tested (null), else 0-3.
+            const pick = (s) => {
+                const v = document.getElementById(`mtt-${s}`).value;
+                return v === '' ? undefined : v === 'none' ? null : parseInt(v, 10);
+            };
+            const left = pick('left'), right = pick('right');
+            if (left === undefined || right === undefined) {
+                showSaveMessage('Pick a score for both legs (or Not tested).', false);
+                return;
+            }
+            if (left === null && right === null) {
+                showSaveMessage('Score at least one leg.', false);
+                return;
+            }
+            // A score staged from the test screen keeps its session; one
+            // entered here starts a session for the picked student, as
+            // Switch to AI does for the camera tests.
+            let sid = pendingResult && pendingResult.session_id;
+            if (!sid) {
+                const st = currentStudent();
+                if (!st) { showSaveMessage('Select a student first.', false); return; }
+                sid = await newSessionFor(st);
+                if (!sid) { showSaveMessage('Could not start a session for this student.', false); return; }
+            }
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+            try {
+                const res = await fetch('/api/save/modified_thomas', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sid, left_score: left, right_score: right })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    await fetch(`/api/pending/${testId}/clear`, { method: 'POST' });
+                    showSaveMessage('Result saved.', true);
+                    pendingResult = null;
+                    renderMttPending();
+                    loadSavedResults();
+                    // The website gets one number: the lower (tighter) leg.
+                    syncResultToLaravel(Math.min(...[left, right].filter(v => v !== null)));
+                } else {
+                    showSaveMessage(data.error || 'Could not save result.', false);
+                }
+            } catch (e) {
+                showSaveMessage('Could not save result.', false);
+            }
+            btn.disabled = false;
+            btn.innerText = 'Save to Database';
+        }
+
         function renderPendingResult() {
             if (pendingForAnother()) { renderOtherStudentPending(); return; }
             renderPendingValue();
@@ -707,6 +802,7 @@
 
         function renderPendingValue() {
             if (IS_TST) { renderTstPending(); return; }
+            if (IS_MTT) { renderMttPending(); return; }
             const panel = document.getElementById('pending-panel');
             if (!pendingResult) { if (TEST_TIMED) panel.classList.add('hidden'); return; }
 
@@ -844,6 +940,7 @@
         async function saveResult() {
             if (pendingForAnother()) { showSaveMessage(otherStudentMsg(), false); return; }
             if (IS_TST) return saveTstResult();
+            if (IS_MTT) return saveMttResult();
             if (!TEST_TIMED) {
                 // Single-input layout: the box itself is the value to save —
                 // no separate "Apply" step needed.
@@ -1031,6 +1128,7 @@
                     let val = (r[field] !== undefined && r[field] !== null) ? r[field] : '-';
                     if (IS_PASS_FAIL && val !== '-') val = passFailLabel(val);
                     if (IS_TST) val = `${TST_JOINTS[r.joint] || r.joint}: L ${r.left_score ?? '-'} / R ${r.right_score ?? '-'}`;
+                    if (IS_MTT) val = `L ${r.left_score ?? '-'} / R ${r.right_score ?? '-'}`;
                     tr.innerHTML = `<td class="py-1.5 pr-3 text-gray-500">${ts}</td><td class="py-1.5 pr-3 font-semibold text-indigo-950">${val}</td>`;
                     tbody.appendChild(tr);
                 });
@@ -1038,6 +1136,27 @@
                 console.warn('Could not load saved results:', e);
             }
         }
+        // A session names the student a result belongs to. isOwner() checks
+        // these same fields.
+        async function newSessionFor(student) {
+            try {
+                const res = await fetch('/api/session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        student_name: student.name,
+                        grade: student.grade,
+                        notes: `Roll: ${student.roll_no || '-'} | Reg: ${student.reg_no || '-'}`
+                    })
+                });
+                const data = await res.json();
+                return data.ok ? data.session_id : null;
+            } catch(e) {
+                console.warn('Could not create session:', e);
+                return null;
+            }
+        }
+
         async function goToAI() {
             const cls = document.getElementById('class-select').value;
             const student = currentStudent();
@@ -1057,22 +1176,7 @@
             const btn = document.querySelector('button[onclick="goToAI()"]');
             btn.disabled = true;
             btn.innerText = 'Starting…';
-            let sessionId = null;
-            try {
-                const res = await fetch('/api/session', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        student_name: student.name,
-                        grade: student.grade,
-                        notes: `Roll: ${student.roll_no || '-'} | Reg: ${student.reg_no || '-'}`
-                    })
-                });
-                const data = await res.json();
-                if (data.ok) sessionId = data.session_id;
-            } catch(e) {
-                console.warn('Could not create session:', e);
-            }
+            const sessionId = await newSessionFor(student);
             btn.disabled = false;
             btn.innerText = 'Switch to AI';
 
