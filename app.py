@@ -79,6 +79,7 @@ try:
         ShoulderStretchEngine, IsometricPushUpEngine,
         SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
         PushUpEngine, ModifiedCurlUpEngine, BenchPressEngine,
+        ModifiedApleyEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -93,6 +94,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     PushUpEngine = None
     ModifiedCurlUpEngine = None
     BenchPressEngine = None
+    ModifiedApleyEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -137,6 +139,7 @@ _dumbbell_press_engine = None
 _push_up_engine = None
 _modified_curl_up_engine = None
 _bench_press_engine = None
+_modified_apley_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -997,6 +1000,46 @@ TESTS = {
         "live_feed":   False,
         "manual_entry": True,
     },
+    "modified_apley": {
+        "id":          "modified_apley",
+        "title":       "Modified Apley Test",
+        "subtitle":    "Upper-body flexibility: left and right arm, scored 0 to 3",
+        "icon":        "\U0001f646",
+        "category":    "Musculoskeletal",
+        "script":      "modified_apley.py",
+        "description": [
+            "Tests how far each arm can reach behind the head.",
+            "The student stands or sits with their BACK to the camera.",
+            "LEFT arm first: reach back behind the head and touch the top inner corner "
+            "of the RIGHT shoulder blade. Hold it for 1 to 2 seconds.",
+            "If they can't, touch the top of the head and hold. If they can't do that, "
+            "turn to face the camera and touch the mouth and hold.",
+            "Score: 3 - shoulder blade, 2 - top of the head, 1 - mouth, 0 - can't reach "
+            "the mouth. Every touch must be held for 1 second.",
+            "The arm ends by itself on a 3. Otherwise press NEXT once the student has "
+            "tried.",
+            "Then the RIGHT arm, to the LEFT shoulder blade, the same way.",
+            "The camera decides the score. Both arms are saved; the website gets the lower "
+            "of the two.",
+        ],
+        "controls": [
+            ("NEXT",  "End the arm under way now (keeps its best hold)"),
+            ("RESET", "Start the run over (both arms)"),
+        ],
+        "tip": [
+            "Camera BEHIND the student, at shoulder height, 1.5 to 2 m away. Use the "
+            "back camera.",
+            "Keep the head, both shoulders and the upper back in frame.",
+            "Only the student should be in frame. Don't hold your fingertips on the "
+            "shoulder blade as a target: a second hand confuses the camera.",
+            "Practice first. Help is allowed in practice, not during the test.",
+            "Warm up with some shoulder stretches before testing.",
+            "In a wheelchair, the chair back must not hide the shoulder blades.",
+        ],
+        "params": [],
+        "unit":   "score",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -1178,6 +1221,8 @@ def _is_running(test_id: str) -> bool:
         return _modified_curl_up_engine.is_running()
     if test_id == "bench_press" and _bench_press_engine is not None:
         return _bench_press_engine.is_running()
+    if test_id == "modified_apley" and _modified_apley_engine is not None:
+        return _modified_apley_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -1362,6 +1407,11 @@ class BenchPressSave(BaseModel):
 class ModifiedThomasSave(BaseModel):
     session_id: Optional[int] = None
     left_score: Optional[int] = None       # 0-3, None = leg not tested
+    right_score: Optional[int] = None
+
+class ModifiedApleySave(BaseModel):
+    session_id: Optional[int] = None
+    left_score: Optional[int] = None       # 0-3, None = arm not tested
     right_score: Optional[int] = None
 
 class VerticalJumpSave(BaseModel):
@@ -1633,6 +1683,9 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "bench_press" and BenchPressEngine is not None:
         return await _launch_bench_press(request)
+
+    if test_id == "modified_apley" and ModifiedApleyEngine is not None:
+        return await _launch_modified_apley(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -2148,6 +2201,29 @@ async def _launch_modified_curl_up(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_modified_apley(request: Request):
+    global _modified_apley_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    def _stage(res):
+        _pending["modified_apley"] = {
+            "session_id": session_id,
+            "left_score": res["left_score"], "right_score": res["right_score"],
+            "score": res["score"],
+        }
+
+    try:
+        engine = ModifiedApleyEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _modified_apley_engine = engine
+    _pending.pop("modified_apley", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 async def _launch_bench_press(request: Request):
     global _bench_press_engine
     body = await _json_body(request)
@@ -2305,7 +2381,7 @@ def engine_status():
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
                                "dumbbell_press", "push_up", "modified_curl_up",
-                               "bench_press", "vertical_jump"],
+                               "bench_press", "modified_apley", "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -2433,6 +2509,12 @@ def stop(test_id: str):
         # stop() hook if the coach stops before the max, a 4 s rest or the
         # 15 s no-rep end.
         _bench_press_engine.stop()
+        return {"ok": True}
+    if test_id == "modified_apley" and _modified_apley_engine is not None:
+        # The engine stages from its own stop() hook: the arm under way
+        # closes on its best hold, an arm not reached stays not tested, and
+        # nothing measured stages nothing.
+        _modified_apley_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -2638,6 +2720,11 @@ async def modified_curl_up_frame(request: Request):
 @app.post("/api/bench_press/frame")
 async def bench_press_frame(request: Request):
     return await _receive_frame(_bench_press_engine, request)
+
+
+@app.post("/api/modified_apley/frame")
+async def modified_apley_frame(request: Request):
+    return await _receive_frame(_modified_apley_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -3382,6 +3469,44 @@ def bench_press_action(b: BenchPressAction):
         _pending.pop("bench_press", None)
     return res
 
+# ── Modified Apley live-feed control ───────────────────────────────────
+class ModifiedApleyAction(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+@app.get("/api/modified_apley/feed")
+def modified_apley_feed():
+    if _modified_apley_engine is None or not _modified_apley_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Modified Apley test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _modified_apley_engine is not None and _modified_apley_engine.is_running():
+            jpg = _modified_apley_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/modified_apley/state")
+def modified_apley_state():
+    if _modified_apley_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_modified_apley_engine.get_state()}
+
+@app.post("/api/modified_apley/action")
+def modified_apley_action(b: ModifiedApleyAction):
+    if _modified_apley_engine is None or not _modified_apley_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Modified Apley test isn't running"}, status_code=409)
+    res = _modified_apley_engine.action(b.action, b.value)
+    if b.action == "reset" and res.get("ok"):
+        # The run being thrown away may already have staged its scores.
+        _pending.pop("modified_apley", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -3866,6 +3991,26 @@ def save_modified_thomas(b: ModifiedThomasSave):
             return JSONResponse({"ok": False, "error": "Scores are 0, 1, 2 or 3"},
                                 status_code=400)
     row_id = db.save_modified_thomas(
+        session_id  = b.session_id,
+        left_score  = b.left_score,
+        right_score = b.right_score,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/modified_apley")
+def save_modified_apley(b: ModifiedApleySave):
+    """Fields: session_id, left_score / right_score (0-3; one may be missing
+    if that arm was not tested, but not both)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.left_score is None and b.right_score is None:
+        return JSONResponse({"ok": False, "error": "Neither arm was scored"}, status_code=400)
+    for sc in (b.left_score, b.right_score):
+        if sc is not None and sc not in (0, 1, 2, 3):
+            return JSONResponse({"ok": False, "error": "Scores are 0, 1, 2 or 3"},
+                                status_code=400)
+    row_id = db.save_modified_apley(
         session_id  = b.session_id,
         left_score  = b.left_score,
         right_score = b.right_score,

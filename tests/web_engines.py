@@ -27,6 +27,7 @@ SECTIONS IN THIS FILE
   4I. PushUpEngine           wraps push_up.py           (push-up counter)
   4J. ModifiedCurlUpEngine   wraps modified_curl_up.py  (modified curl-up counter)
   4K. BenchPressEngine       wraps bench_press.py       (bench press counter)
+  4L. ModifiedApleyEngine    wraps modified_apley.py    (modified Apley, 0-3 per arm)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -4243,6 +4244,224 @@ class BenchPressEngine(BaseWebEngine):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  SECTION 4L — MODIFIED APLEY TEST   (wraps modified_apley.py)
+# ════════════════════════════════════════════════════════════════════════
+import modified_apley as apl_mod  # noqa: E402
+
+_MODEL_APL_POSE = os.path.join(_TESTS_DIR, "pose_landmarker_full.task")
+_MODEL_APL_HAND = os.path.join(_TESTS_DIR, "hand_landmarker.task")
+
+
+class ModifiedApleyEngine(BaseWebEngine):
+    """Live Brockport modified Apley engine (fig. 5.24). LEFT arm, then
+    RIGHT arm, each scored 0-3: the best of opposite shoulder blade (3), top
+    of the head (2) and mouth (1) held for 1 second.
+
+    The camera goes BEHIND the student, like the Shoulder Stretch, and the
+    frames are never mirrored: the reach direction (left hand to the right
+    shoulder blade = right of the picture) is read from the picture as
+    filmed from behind.
+
+    The engine decides the scores - there is no coach override. An arm ends
+    by itself on a held 3; NEXT ends the arm under way, RESET starts over.
+    Stopping mid-run stages whatever arms were measured; nothing measured
+    stages nothing. All the geometry and the state machine live in
+    modified_apley.py - this class only replaces the desktop loop."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        self.mirror_preview = False
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.landmarker = None
+        self.hand_det = None
+        self.tracker = apl_mod.ApleyTracker()
+        self.meter = apl_mod.ApleyMeter()
+        self.pose_detected = False
+        self.last_save = None
+
+    # ── camera plumbing (same contract as TargetStretchEngine) ──────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    def set_facing(self, facing):
+        """NEVER mirrored, whichever camera sends the frames: it films the
+        student's back, and mirroring would make the left hand's reach look
+        like the right hand's."""
+        super().set_facing(facing)
+        self.mirror_preview = False
+
+    def _load_models(self):
+        _ensure_pose_model(_MODEL_APL_POSE)
+        _ensure_pose_model(_MODEL_APL_HAND, url=apl_mod.MODEL_URLS["hand_landmarker.task"])
+        self.landmarker = apl_mod.PoseLandmarker.create_from_options(
+            apl_mod.PoseLandmarkerOptions(
+                base_options=apl_mod.BaseOptions(model_asset_path=_MODEL_APL_POSE),
+                running_mode=apl_mod.VisionRunningMode.VIDEO,
+                num_poses=1,
+                # 0.45 like the Shoulder Stretch: seen from behind with an
+                # arm over the head, 0.55 drops the pose on good frames.
+                min_pose_detection_confidence=0.45,
+                min_pose_presence_confidence=0.45,
+                min_tracking_confidence=0.45,
+                output_segmentation_masks=False,
+            ))
+        self.hand_det = apl_mod.HandLandmarker.create_from_options(
+            apl_mod.HandLandmarkerOptions(
+                base_options=apl_mod.BaseOptions(model_asset_path=_MODEL_APL_HAND),
+                running_mode=apl_mod.VisionRunningMode.VIDEO,
+                num_hands=2,
+                min_hand_detection_confidence=0.5,
+                min_hand_presence_confidence=0.45,
+                min_tracking_confidence=0.45,
+            ))
+
+    def _release_models(self):
+        for name in ("landmarker", "hand_det"):
+            det = getattr(self, name, None)
+            if det is not None:
+                try:
+                    det.close()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        state = {
+            "side": tr.side,
+            "side_num": tr.side_idx + 1 if tr.side else None,
+            "pose_detected": self.pose_detected,
+            "current_level": tr.current,
+            "held_level": tr.held,
+            "best_level": tr.best,
+            "best_text": apl_mod.LEVEL_TEXT.get(tr.best) if tr.best else None,
+            "resolved": tr.resolved,
+            "score": tr.score(),
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+        for s in apl_mod.SIDES:
+            state[f"{s}_score"] = tr.results[s]
+            state[f"{s}_done"] = tr.end_reasons[s] is not None
+        return state
+
+    # ── actions (screen4 buttons) ───────────────────────────────────────
+    def action_reset(self, value=None):
+        with self._lock:
+            self.tracker.reset()
+            self.meter.reset()
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action_next(self, value=None):
+        """End the arm under way now, on the best it has held so far."""
+        with self._lock:
+            if self.tracker.resolved:
+                return {"ok": False, "error": "Both arms are already done"}
+            if self.tracker.next_side() is not None:
+                self._maybe_stage_locked()
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        handler = {
+            "reset": self.action_reset,
+            "next": self.action_next,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _maybe_stage_locked(self):
+        """Stage once the run is over and at least one arm was measured.
+        Called with self._lock held."""
+        if not self.tracker.resolved or not self.tracker.measured_any:
+            return
+        res = self.tracker.result()
+        self.last_save = " / ".join(
+            f"{s[0].upper()} {res[s + '_score']}" if res[s + "_score"] is not None
+            else f"{s[0].upper()} -" for s in apl_mod.SIDES)
+        self._safe_stage(res)
+
+    def _stage_on_stop(self):
+        """STOP pressed: the arm under way closes on what it has held, an arm
+        not reached stays not tested. Nothing measured stages nothing."""
+        with self._lock:
+            if self._staged:
+                return
+            if self.tracker.finish() is not None:
+                self._maybe_stage_locked()
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        last_ts = -1
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                # Never mirrored (see set_facing).
+                fh, fw = frame.shape[:2]
+                mp_image = apl_mod.mp.Image(
+                    image_format=apl_mod.mp.ImageFormat.SRGB,
+                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                )
+                now = time.time()
+                ts = int((now - stream_start) * 1000)
+                if ts <= last_ts:
+                    ts = last_ts + 1
+                last_ts = ts
+                results = self.landmarker.detect_for_video(mp_image, ts)
+                lms = results.pose_landmarks[0] if results.pose_landmarks else None
+                hands = self.hand_det.detect_for_video(mp_image, ts).hand_landmarks or []
+
+                apl_mod.draw_pose(frame, lms)
+
+                with self._lock:
+                    # Under the lock: RESET and NEXT touch the tracker from
+                    # the request thread.
+                    self.pose_detected = lms is not None
+                    marks = {}
+                    if not self.tracker.resolved:
+                        rd = self.meter.measure(lms, hands, fw, fh, self.tracker.side, now=now)
+                        marks = rd.marks
+                        if self.tracker.update(rd.level, now=now, problem=rd.problem) is not None:
+                            self._maybe_stage_locked()
+                    apl_mod.draw_hud(frame, self.tracker, marks)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  SECTION 5 / 6 — re-export the two engines that already existed, so
 #  every live-feed engine in the app can be imported from ONE module.
 #  Their code is untouched (still lives in its own file) to avoid any
@@ -4268,6 +4487,7 @@ __all__ = [
     "PushUpEngine",
     "ModifiedCurlUpEngine",
     "BenchPressEngine",
+    "ModifiedApleyEngine",
     "WingspanEngine",
     "VerticalJumpEngine",
 ]

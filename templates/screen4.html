@@ -1196,6 +1196,67 @@
                   return null;
               },
           },
+          modified_apley: {
+              feedUrl:    '/api/modified_apley/feed',
+              stateUrl:   '/api/modified_apley/state',
+              actionUrl:  '/api/modified_apley/action',
+              browserCamera: true,
+              frameUrl:   '/api/modified_apley/frame',
+              // The phone stands behind the student, screen toward the
+              // coach - the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              buttons: [
+                  { id: 'next',  label: 'NEXT ARM', action: 'next',  color: 'bg-sky-600' },
+                  { id: 'reset', label: 'RESET',    action: 'reset', color: 'bg-amber-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'next') return !state.running || state.resolved;
+                  return !state.running;
+              },
+              renderStatus(state) {
+                  const lines = [];
+                  if (!state.resolved) {
+                      const other = state.side === 'left' ? 'RIGHT' : 'LEFT';
+                      lines.push(`${(state.side || '').toUpperCase()} arm (${state.side_num} of 2) - ` +
+                                 `reach to the ${other} shoulder blade`);
+                      const lv = (v) => (v === null || v === undefined) ? '-' : v;
+                      lines.push(`Now: ${lv(state.current_level)}   Held 1 s: ${lv(state.held_level)}`);
+                      lines.push(state.best_level
+                          ? `Best held: ${state.best_level} (${state.best_text})`
+                          : '3 shoulder blade, 2 top of the head, 1 mouth - each held 1 s');
+                  }
+                  const sideTxt = (s) => {
+                      const v = state[`${s}_score`];
+                      if (v !== null && v !== undefined) return `${s.toUpperCase()}: ${v}`;
+                      return `${s.toUpperCase()}: ${state[`${s}_done`] ? 'not tested' : 'to do'}`;
+                  };
+                  lines.push(`${sideTxt('left')}   ${sideTxt('right')}`);
+                  // No "no student" line from pose_detected: from behind the
+                  // body drops out while the hand is on the back, and the
+                  // status message already says when nobody is seen.
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              // A beep each time an arm finishes, so the student knows to
+              // switch without looking at the screen. RESET is silent.
+              _prev: null,
+              onState(state) {
+                  const now = { left: !!state.left_done, right: !!state.right_done };
+                  const prev = this._prev;
+                  this._prev = now;
+                  if (!prev || !state.running) return;
+                  if (now.left && !prev.left) beep(660, 0.4);
+                  if (now.right && !prev.right) beep(440, 0.8);
+              },
+              syncFields(state) {
+                  // One number for the website: the lower arm. Nothing until
+                  // an arm has been scored.
+                  return (state.score !== null && state.score !== undefined)
+                      ? { modifiedApleyTestScore: state.score }
+                      : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1881,6 +1942,7 @@
               push_up:'PushUp',
               modified_curl_up:'ModifiedCurlUp',
               bench_press:'BenchPress',
+              modified_apley:'ModifiedApleyTest',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
