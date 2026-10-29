@@ -40,6 +40,7 @@
     .badge-modified_curl_up { background:#dcfce7; color:#166534; }
     .badge-bench_press { background:#e0e7ff; color:#3730a3; }
     .badge-modified_thomas { background:#fae8ff; color:#86198f; }
+    .badge-modified_apley { background:#ffedd5; color:#9a3412; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -184,6 +185,7 @@
           <option value="modified_curl_up">🧘 Modified Curl-Up</option>
           <option value="bench_press">🏋️ Bench Press</option>
           <option value="modified_thomas">🦵 Modified Thomas Test</option>
+          <option value="modified_apley">🙆 Modified Apley Test</option>
         </select>
       </div>
       <div>
@@ -361,12 +363,14 @@ const TEST_META = {
   bench_press: { label: '🏋️ Bench Press', unit: 'reps', extraFn: () => '' },
   // Result is text, "L 3 / R 2": the coach's 0-3 score for each hip.
   modified_thomas: { label: '🦵 Modified Thomas Test', unit: '', extraFn: () => '' },
+  // Result is text, "L 3 / R 2": the camera's 0-3 score for each arm.
+  modified_apley: { label: '🙆 Modified Apley Test', unit: '', extraFn: () => '' },
 };
 
-// Target Stretch's and Modified Thomas Test's results are text ("L 2 / R 1"),
+// Target Stretch's and the Modified Thomas and Apley Tests' results are text ("L 2 / R 1"),
 // every other test's is a number, and comparing the two scrambles the sort.
 // Sort them by their two scores added up, so they sit among the numbers.
-const LR_TEXT_TESTS = new Set(['target_stretch', 'modified_thomas']);
+const LR_TEXT_TESTS = new Set(['target_stretch', 'modified_thomas', 'modified_apley']);
 function sortKey(r) {
   const v = r[sortCol];
   if (sortCol === 'primary_result' && LR_TEXT_TESTS.has(r.test) && typeof v === 'string')

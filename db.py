@@ -345,6 +345,21 @@ CREATE TABLE IF NOT EXISTS modified_thomas (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Modified Apley Test ───────────────────────────────────────────────────
+-- One trial per arm (Brockport fig. 5.24), scored by the camera from behind:
+-- 3 = touches the top inner corner of the opposite shoulder blade, 2 = the
+-- top of the head, 1 = the mouth, 0 = can't reach the mouth, each held 1 s.
+-- An arm that was not tested is NULL; score is the lower of the two, which
+-- the website gets.
+CREATE TABLE IF NOT EXISTS modified_apley (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    left_score      INTEGER,     -- 0-3, left arm
+    right_score     INTEGER,     -- 0-3, right arm
+    score           INTEGER,     -- the lower of the two
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -461,7 +476,13 @@ UNION ALL
            NULL, NULL,
            'L ' || COALESCE(mtt.left_score, '-') || ' / R ' || COALESCE(mtt.right_score, '-'),
            NULL, mtt.recorded_at
-    FROM modified_thomas mtt LEFT JOIN sessions s ON mtt.session_id = s.id;
+    FROM modified_thomas mtt LEFT JOIN sessions s ON mtt.session_id = s.id
+UNION ALL
+    SELECT 'modified_apley', mat.id, mat.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL,
+           'L ' || COALESCE(mat.left_score, '-') || ' / R ' || COALESCE(mat.right_score, '-'),
+           NULL, mat.recorded_at
+    FROM modified_apley mat LEFT JOIN sessions s ON mat.session_id = s.id;
 """
 
 
@@ -981,6 +1002,25 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Modified Apley Test ──────────────────────────────────────────────
+
+    def save_modified_apley(
+        self,
+        session_id: int,
+        left_score: int = None,
+        right_score: int = None,
+    ) -> int:
+        """Both arms' 0-3 scores; an arm not tested is None."""
+        score = min(s for s in (left_score, right_score) if s is not None)
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO modified_apley (session_id, left_score,
+                        right_score, score)
+                   VALUES (?,?,?,?)""",
+                (session_id, left_score, right_score, score),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -1027,7 +1067,7 @@ class GoForFitDB:
         "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
-        "modified_curl_up", "bench_press", "modified_thomas",
+        "modified_curl_up", "bench_press", "modified_thomas", "modified_apley",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:
