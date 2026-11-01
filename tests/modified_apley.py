@@ -41,13 +41,18 @@ How it's read from the camera
   3  a hand pointing DOWN (it came over the head, not up the back) whose
      fingertips are past the middle of the head toward the opposite side
      by REACH_CROSS_MIN, below the ears by REACH_DEPTH_MIN, with the wrist
-     no lower than REACH_WRIST_MAX below the ears. Measured on the demo
-     video's held reaches (both arms): fingertips 0.75-2.0 across,
-     1.45-2.1 below, wrist -0.3..+0.3. Two things are refused:
+     no lower than REACH_WRIST_MAX below the ears, and the hand slanting
+     toward the far side (fingertips further across than the wrist).
+     Measured on the demo video's held reaches (both arms): fingertips
+     0.75-2.0 across, 1.45-2.1 below, wrist -0.3..+0.3, slant +0.2..+1.0.
+     Three things are refused:
        * the regular Apley reach down the SAME side of the back (the
          FITNESSGRAM-style reach in the "Fitnessgram and Brockport Fitness
          Tips" video, BjO9ZtPC7Rw): its fingertips stay on the hand's own
          side, 0 to -1.0 across;
+       * that same reach with the OTHER arm: its fingertips land where the
+         right arm's would, but the hand slants back toward the middle of
+         the back (-0.1 to -1.0 on the same video);
        * a hand on the FRONT of the opposite shoulder, facing the camera:
          the wrist is down at the chest, far below REACH_WRIST_MAX.
   2  a hand resting on top of the head: the palm's middle between
@@ -142,6 +147,10 @@ DOWN_MIN        = 0.5    # wrist -> middle knuckle pointing down (+1 = straight 
 REACH_CROSS_MIN = 0.35   # fingertips past the middle of the head, toward the far side
 REACH_DEPTH_MIN = 1.1    # fingertips below the ears
 REACH_WRIST_MAX = 0.8    # wrist no lower than this below the ears (it came over the head)
+# Fingertips minus wrist, across toward the far side. The arm under test
+# slants its hand that way (+0.2..+1.0); the other arm reaching down its own
+# side lands in the same place but slants back (-0.1..-1.0).
+REACH_SLANT_MIN = 0.0
 
 # Score 2, hand tracker: the palm's middle above the ears. A hand on the
 # forehead sits ~0.5 palm up, a hand stretched straight overhead 3.5+.
@@ -172,6 +181,9 @@ HEAD_KEEP_GAP_S = 1.0
 # video). One the pose made up for a head cut off the picture sits level
 # with the shoulders or below them (kid video close-ups: -0.6 to +0.3).
 HEAD_RISE_MIN   = 0.6
+# The same check before any hand has given a palm length, in shoulder
+# widths: real heads 0.34+ (demo video), made-up ones -0.6 to +0.15 (kid).
+HEAD_RISE_MIN_SW = 0.25
 
 MIN_VIS = 0.50           # pose landmark visibility floor
 
@@ -261,6 +273,10 @@ def shoulder_blade_touch(hand, ears, unit, side):
     far = opposite(side).upper()
     if across < REACH_CROSS_MIN:
         return False, f"Reach ACROSS behind the head to the {far} shoulder blade"
+    slant = (tips[0] - hand[H_WRIST][0]) * reach_dir(side) / unit
+    if slant < REACH_SLANT_MIN:
+        return False, (f"Use the {side.upper()} arm - reach ACROSS behind the head to the "
+                       f"{far} shoulder blade")
     if below < REACH_DEPTH_MIN:
         return False, f"Lower - down to the top of the {far} shoulder blade"
     return True, None
@@ -375,8 +391,13 @@ class ApleyMeter:
             return False
         if not (_vis(lms[SH_L]) and _vis(lms[SH_R])):
             return True
-        rise = 0.5 * (_px(lms[SH_L], w, h)[1] + _px(lms[SH_R], w, h)[1]) - ears[1]
-        return rise > HEAD_RISE_MIN * self.palms.unit(0.0)
+        sh_l, sh_r = _px(lms[SH_L], w, h), _px(lms[SH_R], w, h)
+        rise = 0.5 * (sh_l[1] + sh_r[1]) - ears[1]
+        palm = self.palms.unit(0.0)
+        if palm > 0:
+            return rise > HEAD_RISE_MIN * palm
+        # No hand seen yet: the shoulders give the size instead.
+        return rise > HEAD_RISE_MIN_SW * float(np.hypot(*(sh_l - sh_r)))
 
     def measure(self, lms, hands, w, h, side, now=None):
         """lms: one body's 33 pose landmarks (normalised) or None. hands: the

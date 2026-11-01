@@ -83,6 +83,20 @@ def test_same_side_reach_is_not_3():
     assert not ap.shoulder_blade_touch(hand(wrist=(0.6, 1.0), tips=(0.5, 2.8)), EARS, PALM, R)[0]
 
 
+def test_same_side_reach_with_the_other_arm_is_not_3():
+    # The RIGHT arm reaching down its own side during the LEFT arm's turn:
+    # the fingertips land where the left hand's would, but the hand slants
+    # back toward the middle (kid video, BjO9ZtPC7Rw: wrist 1.0-1.8 across,
+    # fingertips 0.4-0.9, slant -0.5 to -1.0).
+    for wrist, tips in (((1.4, 0.1), (0.85, 1.9)), ((1.0, 0.7), (0.5, 2.2)),
+                        ((1.8, -0.8), (0.9, 1.4))):
+        ok, why = ap.shoulder_blade_touch(hand(wrist, tips), EARS, PALM, L)
+        assert not ok and "Use the LEFT arm" in why, (wrist, tips, why)
+        mirrored = hand((-wrist[0], wrist[1]), (-tips[0], tips[1]))
+        ok, why = ap.shoulder_blade_touch(mirrored, EARS, PALM, R)
+        assert not ok and "Use the RIGHT arm" in why, (wrist, tips, why)
+
+
 def test_hand_only_behind_the_neck_is_not_3():
     ok, why = ap.shoulder_blade_touch(hand(wrist=(0.0, -0.4), tips=(0.6, 0.8)), EARS, PALM, L)
     assert not ok and "Lower" in why
@@ -203,6 +217,21 @@ def test_made_up_head_is_refused():
     off = _pose()
     off[ap.EAR_L].y = off[ap.EAR_R].y = -0.2
     assert m.measure(off, up_back, 1000, 1000, L, now=0.2).level is None
+
+
+def test_made_up_head_is_refused_before_any_hand_is_seen():
+    # No palm length yet: the shoulders give the size. A head level with
+    # the shoulders and the pose's own wrist + finger just above it must not
+    # read as a hand on top of the head.
+    flat = _pose(shoulder_y=EARS[1] + 20)
+    flat[15] = SimpleNamespace(x=0.50, y=(EARS[1] - 15) / 1000, z=0.0, visibility=0.9)
+    flat[19] = SimpleNamespace(x=0.50, y=(EARS[1] - 18) / 1000, z=0.0, visibility=0.9)
+    rd = ap.ApleyMeter().measure(flat, [], 1000, 1000, L, now=0.0)
+    assert rd.level is None and "Head not in view" in rd.problem
+    # A real head (ears 120 px over 360 px shoulders) still counts.
+    assert ap.ApleyMeter().measure(_pose(), [], 1000, 1000, L, now=0.0).level is None
+    assert "Head not in view" not in (ap.ApleyMeter().measure(
+        _pose(), [], 1000, 1000, L, now=0.0).problem or "")
 
 
 def test_meter_pose_fallback_without_hands():
