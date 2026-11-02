@@ -22,9 +22,11 @@ Distance
   Both hands (left and right index fingers) are tracked every frame.
   The hand that achieves the greater cumulative displacement from START
   is used as the result.
-  Displacement is the true 2D Euclidean distance in the image plane:
-      displacement_px = sqrt((x_now - x_start)^2 + (y_now - y_start)^2)
-  Signed: positive when moving toward the ankles, negative when pulling back.
+  Displacement is how far the fingertip moved ALONG the legs (hips toward
+  ankles), locked at START:
+      displacement_px = (now - start) . reach_unit_vector
+  Positive when moving toward the ankles, negative when pulling back.
+  Moving the hands up or down does not add to it.
   displacement_cm = displacement_px / px_per_cm
   The MAXIMUM displacement recorded during MEASURING is the result.
 
@@ -358,14 +360,16 @@ def ask_leg_length():
 def signed_disp_2d(start: np.ndarray, current: np.ndarray,
                    rvec: np.ndarray) -> float:
     """
-    True 2D displacement of `current` relative to `start`,
-    signed by projection onto the reach unit-vector `rvec`.
-    Positive = moved toward ankles.
+    How far `current` moved from `start` along the reach unit-vector `rvec`
+    (hips -> ankles). Positive = moved toward the ankles.
+
+    Only the part along the legs counts. It used to be the full distance
+    moved, signed by direction, so lifting the hands up with any forward
+    lean counted in full as reach (arms raised overhead added ~45 cm on a
+    test clip). On a straight slide along the legs the two agree.
     """
-    delta = current - start
-    magnitude = float(np.linalg.norm(delta))
-    sign = np.sign(float(np.dot(delta, rvec)))
-    return sign * magnitude if sign != 0 else magnitude
+    delta = np.asarray(current, float) - np.asarray(start, float)
+    return float(np.dot(delta, rvec))
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────────

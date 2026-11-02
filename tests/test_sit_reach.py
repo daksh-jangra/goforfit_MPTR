@@ -76,6 +76,42 @@ def test_no_leg_seen_gives_none():
     assert snr.hip_ankle_px(make_pose({}), FW, FH) is None
 
 
+# ── reach: only the part along the legs counts ───────────────────────────────
+REACH = (-1.0, 0.0)          # side-on, ankles to the left of the hips
+START = (500.0, 300.0)
+
+
+def _reach(dx, dy, rvec=REACH):
+    import numpy as np
+    return snr.signed_disp_2d(np.array(START), np.array((START[0] + dx, START[1] + dy)),
+                              np.array(rvec))
+
+
+def test_a_slide_along_the_legs_counts_in_full():
+    assert abs(_reach(-60, 0) - 60) < 1e-9
+
+
+def test_lifting_the_hands_adds_nothing():
+    # Straight up, and up with a little forward lean: the old full-distance
+    # rule read the second as ~102 px of reach.
+    assert abs(_reach(0, -100)) < 1e-9
+    assert abs(_reach(-20, -100) - 20) < 1e-9
+
+
+def test_pulling_back_is_negative():
+    assert abs(_reach(40, 10) - (-40)) < 1e-9
+
+
+def test_reach_follows_a_tilted_leg_line():
+    # Camera rolled: the leg line runs down-left at 30 deg. A slide along it
+    # counts in full; a move square to it counts nothing.
+    import math
+    a = math.radians(30)
+    rvec = (-math.cos(a), math.sin(a))
+    assert abs(_reach(-50 * math.cos(a), 50 * math.sin(a), rvec) - 50) < 1e-9
+    assert abs(_reach(-50 * math.sin(a), -50 * math.cos(a), rvec)) < 1e-9
+
+
 def _main():
     checks = [(n, f) for n, f in sorted(globals().items())
               if n.startswith("test_") and callable(f)]
