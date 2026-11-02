@@ -740,10 +740,14 @@ class CurlUpEngine(BaseWebEngine):
             return {"ok": True}
 
     def _stage_on_stop(self):
-        # Stopped before the 30s timer staged a result — stage the partial rep
-        # count so screen3 has something to review.
-        if self.count > 0:
-            self._safe_stage(self.count)
+        # Stopped before the 30s timer staged a result - stage the partial rep
+        # count so screen3 has something to review. A 0 is staged like any
+        # other count (the timer's own end already stages 0), but only for a
+        # trial that actually started.
+        with self._lock:
+            if self.test_started:
+                self.last_save = self.count
+                self._safe_stage(self.count)
 
     def _run_loop(self):
         stream_start = time.time()
