@@ -68,6 +68,8 @@ VisionRunningMode    = mp_vision.RunningMode
 class _LM:
     LEFT_HIP    = 23
     RIGHT_HIP   = 24
+    LEFT_KNEE   = 25
+    RIGHT_KNEE  = 26
     LEFT_ANKLE  = 27
     RIGHT_ANKLE = 28
     LEFT_INDEX  = 19
@@ -75,6 +77,8 @@ class _LM:
 
 class L_HIP:    value = _LM.LEFT_HIP
 class R_HIP:    value = _LM.RIGHT_HIP
+class L_KNEE:   value = _LM.LEFT_KNEE
+class R_KNEE:   value = _LM.RIGHT_KNEE
 class L_ANKLE:  value = _LM.LEFT_ANKLE
 class R_ANKLE:  value = _LM.RIGHT_ANKLE
 class L_INDEX:  value = _LM.LEFT_INDEX
@@ -164,12 +168,24 @@ def hip_ankle_px(lms, w, h):
     """
     Return average hip→ankle pixel length across visible sides.
     Returns None if neither side is visible.
+
+    Measured as hip→knee + knee→ankle, which stays the same length when the
+    knee bends. The straight hip→ankle line shrinks with a bent knee, so
+    every pixel read as more cm and the reach came out too big. On a
+    straight leg the two agree. Falls back to the straight line when the
+    knee isn't seen.
     """
     segs = []
-    for hip_id, ank_id in [(L_HIP, L_ANKLE), (R_HIP, R_ANKLE)]:
-        if vis(lms, hip_id, ank_id):
-            segs.append(pdist(lm_xy(lms, hip_id, w, h),
-                               lm_xy(lms, ank_id, w, h)))
+    for hip_id, knee_id, ank_id in [(L_HIP, L_KNEE, L_ANKLE), (R_HIP, R_KNEE, R_ANKLE)]:
+        if not vis(lms, hip_id, ank_id):
+            continue
+        hip = lm_xy(lms, hip_id, w, h)
+        ank = lm_xy(lms, ank_id, w, h)
+        if vis(lms, knee_id):
+            knee = lm_xy(lms, knee_id, w, h)
+            segs.append(pdist(hip, knee) + pdist(knee, ank))
+        else:
+            segs.append(pdist(hip, ank))
     return float(np.mean(segs)) if segs else None
 
 def best_calib_segment(lms, w, h):
