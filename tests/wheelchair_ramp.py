@@ -64,8 +64,9 @@ What the app scores vs. what the coach judges
   the spotter, and how the student pushes (any technique is allowed).
 
   The start is checked: before it can score, the rear wheel's front edge must
-  be START_BEHIND_M behind the start line, which puts the front wheels off
-  the ramp.
+  have sat START_BEHIND_M behind the start line for START_HOLD_S, which puts
+  the front wheels off the ramp. That wait counts from before START too, so a
+  student who pushes off the moment START is tapped is scored.
 
 Usage
 -----
@@ -323,20 +324,21 @@ class RampTracker:
 
     def __init__(self):
         self.lines = RampLines()
+        self._clear_track()
         self.reset()
 
     def reset(self):
-        """A new run on the same lines."""
+        """A new run on the same lines. The wheel stays tracked: it's the
+        same wheel, and a student already waiting at the start line can go
+        as soon as START is tapped."""
         self.started = False       # coach pressed START
-        self.armed = False         # wheel seen behind the start since START
+        self.armed = False         # wheel seen behind the start line, so it can score
         self.done = False
         self.end_reason = None
         self.best = None           # furthest line passed (0-2), None until armed
         self.reached_m = None      # furthest the back edge got, metres
         self.status_msg = ""
-        self._behind_since = None
         self._pass = None          # (line index, since, reads) for the next line
-        self._clear_track()
 
     def _clear_track(self):
         self.wheel = None
@@ -344,10 +346,25 @@ class RampTracker:
         self._last_t = None
         self._hist = deque(maxlen=SMOOTH_N)
         self._fresh = None         # (wheel, t) waiting for a second sighting
+        # Since when the wheel has sat behind the start line - counted before
+        # START too, so a student who pushes off the moment START is tapped
+        # (on the coach's "GO") is already cleared to score.
+        self._behind_since = None
 
     def clear_lines(self):
         self.lines.clear()
+        self._clear_track()
         self.reset()
+
+    def _arm(self):
+        self.armed = True
+        self.best = 0
+        self.reached_m = self.back_m
+        self.status_msg = "Ready - GO!"
+
+    def _waited(self, now):
+        return (self._behind_since is not None
+                and now - self._behind_since >= START_HOLD_S - 1e-6)
 
     # The score while the run is live, and what gets staged.
     def score(self):
@@ -368,7 +385,10 @@ class RampTracker:
             return "Already started - RESET to start again"
         self.reset()
         self.started = True
-        self.status_msg = "Roll back so the front wheels are off the ramp"
+        if self.wheel is not None and self._waited(self._last_t):
+            self._arm()
+        else:
+            self.status_msg = "Roll back so the front wheels are off the ramp"
         return None
 
     def finish(self, reason="stopped"):
@@ -400,20 +420,20 @@ class RampTracker:
         front = self.lines.to_m(wheel.cx + d * wheel.r, w, h)
         self._hist.append(back)
         self.back_m = float(np.median(self._hist))
+        # Smoothed like the back edge, so one noisy reading at the line
+        # doesn't restart the wait.
+        if self.back_m + (front - back) <= -START_BEHIND_M:
+            if self._behind_since is None:
+                self._behind_since = now
+        else:
+            self._behind_since = None
         if not self.started or self.done:
             return None
 
         if not self.armed:
-            if front <= -START_BEHIND_M:
-                if self._behind_since is None:
-                    self._behind_since = now
-                if now - self._behind_since >= START_HOLD_S - 1e-6:
-                    self.armed = True
-                    self.best = 0
-                    self.reached_m = self.back_m
-                    self.status_msg = "Ready - GO!"
-            else:
-                self._behind_since = None
+            if self._waited(now):
+                self._arm()
+            elif self._behind_since is None:
                 self.status_msg = "Roll back so the front wheels are off the ramp"
             return None
 

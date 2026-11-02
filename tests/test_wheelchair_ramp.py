@@ -224,6 +224,28 @@ def test_must_start_behind_the_line():
     assert "off the ramp" in tr.status_msg
 
 
+def test_push_off_right_at_start():
+    """Waiting at the line before START, then going the moment START is
+    tapped (the coach's "GO"): the trial is scored."""
+    tr = tracker()
+    now, _ = run(tr, [-0.8] * 6)
+    tr.start()
+    assert tr.armed
+    _, res = run(tr, ramp_path(-0.8, 4.9) + [4.9] * 5, t0=now)
+    assert res and res[0]["score"] == 2
+
+
+def test_wait_too_short_before_start():
+    """Only just arrived at the line when START is tapped: it waits for the
+    wheel to sit there, as before."""
+    tr = tracker()
+    now, _ = run(tr, ramp_path(1.0, -0.8, speed=1.5))
+    tr.start()
+    assert not tr.armed
+    now, _ = run(tr, [-0.8] * 5, t0=now)
+    assert tr.armed
+
+
 def test_nothing_before_start():
     tr = tracker()
     run(tr, ramp_path(-0.8, 4.9))
