@@ -360,6 +360,19 @@ CREATE TABLE IF NOT EXISTS modified_apley (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Wheelchair Ramp Test ──────────────────────────────────────────────────
+-- The student pushes their wheelchair up a 1:12 ramp (Brockport p. 87),
+-- scored by the camera side-on: 2 = the rear wheels got past the 15 ft line,
+-- 1 = past the 8 ft line, 0 = not past the 8 ft line. reached_m is how far
+-- up the ramp the back of the rear wheel got. The website gets the score.
+CREATE TABLE IF NOT EXISTS wheelchair_ramp (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    score           INTEGER NOT NULL,   -- 0-2
+    reached_m       REAL,
+    recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── Vertical Jump Test ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vertical_jump (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -482,7 +495,11 @@ UNION ALL
            NULL, NULL,
            'L ' || COALESCE(mat.left_score, '-') || ' / R ' || COALESCE(mat.right_score, '-'),
            NULL, mat.recorded_at
-    FROM modified_apley mat LEFT JOIN sessions s ON mat.session_id = s.id;
+    FROM modified_apley mat LEFT JOIN sessions s ON mat.session_id = s.id
+UNION ALL
+    SELECT 'wheelchair_ramp', wrt.id, wrt.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, wrt.score, NULL, wrt.recorded_at
+    FROM wheelchair_ramp wrt LEFT JOIN sessions s ON wrt.session_id = s.id;
 """
 
 
@@ -1021,6 +1038,23 @@ class GoForFitDB:
             )
             return cur.lastrowid
 
+    # ── Wheelchair Ramp Test ─────────────────────────────────────────────
+
+    def save_wheelchair_ramp(
+        self,
+        session_id: int,
+        score: int,
+        reached_m: float = None,
+    ) -> int:
+        """The 0-2 score and how far up the back of the rear wheel got."""
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO wheelchair_ramp (session_id, score, reached_m)
+                   VALUES (?,?,?)""",
+                (session_id, score, reached_m),
+            )
+            return cur.lastrowid
+
     # ── Vertical Jump ────────────────────────────────────────────────────
 
     def save_vertical_jump(
@@ -1068,6 +1102,7 @@ class GoForFitDB:
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
         "modified_curl_up", "bench_press", "modified_thomas", "modified_apley",
+        "wheelchair_ramp",
     }
 
     def get_all(self, table: str, session_id: int = None) -> list[dict]:

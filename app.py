@@ -79,7 +79,7 @@ try:
         ShoulderStretchEngine, IsometricPushUpEngine,
         SeatedPushUpEngine, TargetStretchEngine, DumbbellPressEngine,
         PushUpEngine, ModifiedCurlUpEngine, BenchPressEngine,
-        ModifiedApleyEngine,
+        ModifiedApleyEngine, WheelchairRampEngine,
         WingspanEngine, VerticalJumpEngine,
     )
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
@@ -95,6 +95,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     ModifiedCurlUpEngine = None
     BenchPressEngine = None
     ModifiedApleyEngine = None
+    WheelchairRampEngine = None
     WingspanEngine = VerticalJumpEngine = None
     WEB_ENGINES_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
@@ -140,6 +141,7 @@ _push_up_engine = None
 _modified_curl_up_engine = None
 _bench_press_engine = None
 _modified_apley_engine = None
+_wheelchair_ramp_engine = None
 
 
 # ── Jinja templates, with a Flask-style url_for shim ─────────────────────────
@@ -1040,6 +1042,55 @@ TESTS = {
         "unit":   "score",
         "live_feed":   True,
     },
+    "wheelchair_ramp": {
+        "id":          "wheelchair_ramp",
+        "title":       "Wheelchair Ramp Test",
+        "subtitle":    "Push up a ramp: past the 8 ft or 15 ft line, scored 0 to 2",
+        "icon":        "\u267f",
+        "category":    "Muscular Endurance",
+        "script":      "wheelchair_ramp.py",
+        "description": [
+            "Tests upper-body strength and endurance. The student pushes their wheelchair "
+            "up a ramp, any way they like.",
+            "The ramp rises 1 in 12 (2.5 cm up for every 30 cm along) and is at least "
+            "8 ft (2.4 m) long.",
+            "Mark lines across the ramp with tape: 8 ft (2.4 m) and 15 ft (4.6 m) from where "
+            "the slope starts.",
+            "Put the phone on a stand SIDE-ON to the ramp, then tap three points on the "
+            "video: where the slope STARTS, the 8 ft line, then the 15 ft line. On a ramp "
+            "shorter than 15 ft, tap only the first two.",
+            "The student starts with the front wheels off the ramp. Tap START.",
+            "The student pushes up as far as they can. A line counts when the BACK of the "
+            "rear wheel is past it.",
+            "Score: 2 - past the 15 ft line, 1 - past the 8 ft line, 0 - not past the "
+            "8 ft line.",
+            "Not timed, and the student can have more than one try: they can roll back "
+            "down and go again. The best line counts.",
+            "The test ends by itself at the last line. Otherwise tap STOP / SAVE when the "
+            "student has finished.",
+            "The camera decides the score.",
+        ],
+        "controls": [
+            ("CLEAR LINES", "Tap the three lines again"),
+            ("START",       "Start the test (the lines must be tapped first)"),
+            ("RESET",       "Start the test over (the lines stay)"),
+        ],
+        "tip": [
+            "Phone on a stand, side-on to the ramp, square to it, at about seat height, "
+            "4 to 5 m away. Use the back camera.",
+            "Keep a chair's length of floor before the start of the slope, and some ramp "
+            "past the 15 ft line, in the picture.",
+            "Tap each line where the near rear wheel will cross it.",
+            "Don't move the phone after tapping the lines. If it moves, tap CLEAR LINES "
+            "and tap them again.",
+            "The spotter walks behind the chair on the FAR side, so the rear wheel nearest "
+            "the camera stays in view.",
+            "Make sure the chair can't roll off the side of the ramp.",
+        ],
+        "params": [],
+        "unit":   "score",
+        "live_feed":   True,
+    },
     "vertical_jump": {
         "id":          "vertical_jump",
         "title":       "Vertical Jump Test",
@@ -1223,6 +1274,8 @@ def _is_running(test_id: str) -> bool:
         return _bench_press_engine.is_running()
     if test_id == "modified_apley" and _modified_apley_engine is not None:
         return _modified_apley_engine.is_running()
+    if test_id == "wheelchair_ramp" and _wheelchair_ramp_engine is not None:
+        return _wheelchair_ramp_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
@@ -1413,6 +1466,11 @@ class ModifiedApleySave(BaseModel):
     session_id: Optional[int] = None
     left_score: Optional[int] = None       # 0-3, None = arm not tested
     right_score: Optional[int] = None
+
+class WheelchairRampSave(BaseModel):
+    session_id: Optional[int] = None
+    score: Optional[int] = None            # 0-2: furthest line the rear wheels passed
+    reached_m: Optional[float] = None      # how far up the back of the wheel got
 
 class VerticalJumpSave(BaseModel):
     session_id: Optional[int] = None
@@ -1686,6 +1744,8 @@ async def launch(test_id: str, request: Request):
 
     if test_id == "modified_apley" and ModifiedApleyEngine is not None:
         return await _launch_modified_apley(request)
+    if test_id == "wheelchair_ramp" and WheelchairRampEngine is not None:
+        return await _launch_wheelchair_ramp(request)
 
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
@@ -2224,6 +2284,29 @@ async def _launch_modified_apley(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_wheelchair_ramp(request: Request):
+    global _wheelchair_ramp_engine
+    body = await _json_body(request)
+    session_id = body.get("session_id")
+
+    def _stage(res):
+        _pending["wheelchair_ramp"] = {
+            "session_id": session_id,
+            "score": res["score"], "reached_m": res["reached_m"],
+            "max_score": res["max_score"], "end_reason": res["end_reason"],
+        }
+
+    try:
+        engine = WheelchairRampEngine(session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _wheelchair_ramp_engine = engine
+    _pending.pop("wheelchair_ramp", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 async def _launch_bench_press(request: Request):
     global _bench_press_engine
     body = await _json_body(request)
@@ -2381,7 +2464,8 @@ def engine_status():
                                "shoulder_stretch", "isometric_push_up",
                                "seated_push_up", "target_stretch",
                                "dumbbell_press", "push_up", "modified_curl_up",
-                               "bench_press", "modified_apley", "vertical_jump"],
+                               "bench_press", "modified_apley", "wheelchair_ramp",
+                               "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
         "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
@@ -2515,6 +2599,11 @@ def stop(test_id: str):
         # closes on its best hold, an arm not reached stays not tested, and
         # nothing measured stages nothing.
         _modified_apley_engine.stop()
+        return {"ok": True}
+    if test_id == "wheelchair_ramp" and _wheelchair_ramp_engine is not None:
+        # The engine stages from its own stop() hook: the best line so far,
+        # or nothing if the wheel was never seen behind the start line.
+        _wheelchair_ramp_engine.stop()
         return {"ok": True}
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
@@ -2725,6 +2814,11 @@ async def bench_press_frame(request: Request):
 @app.post("/api/modified_apley/frame")
 async def modified_apley_frame(request: Request):
     return await _receive_frame(_modified_apley_engine, request)
+
+
+@app.post("/api/wheelchair_ramp/frame")
+async def wheelchair_ramp_frame(request: Request):
+    return await _receive_frame(_wheelchair_ramp_engine, request)
 
 
 @app.post("/api/sit_reach/frame")
@@ -3507,6 +3601,45 @@ def modified_apley_action(b: ModifiedApleyAction):
         _pending.pop("modified_apley", None)
     return res
 
+# ── Wheelchair ramp live-feed control ──────────────────────────────────
+class WheelchairRampAction(BaseModel):
+    action: str
+    # calib_click carries {x, y} (a line tapped on the video).
+    value: Optional[Any] = None
+
+@app.get("/api/wheelchair_ramp/feed")
+def wheelchair_ramp_feed():
+    if _wheelchair_ramp_engine is None or not _wheelchair_ramp_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Wheelchair ramp test isn't running"}, status_code=409)
+    def gen():
+        boundary = b"--frame"
+        _last_sent = None
+        while _wheelchair_ramp_engine is not None and _wheelchair_ramp_engine.is_running():
+            jpg = _wheelchair_ramp_engine.get_jpeg()
+            if jpg is None or jpg is _last_sent:
+                time.sleep(0.02)
+                continue
+            _last_sent = jpg
+            yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            time.sleep(0.05)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/wheelchair_ramp/state")
+def wheelchair_ramp_state():
+    if _wheelchair_ramp_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_wheelchair_ramp_engine.get_state()}
+
+@app.post("/api/wheelchair_ramp/action")
+def wheelchair_ramp_action(b: WheelchairRampAction):
+    if _wheelchair_ramp_engine is None or not _wheelchair_ramp_engine.is_running():
+        return JSONResponse({"ok": False, "error": "Wheelchair ramp test isn't running"}, status_code=409)
+    res = _wheelchair_ramp_engine.action(b.action, b.value)
+    if b.action in ("reset", "start") and res.get("ok"):
+        # The run being thrown away may already have staged its score.
+        _pending.pop("wheelchair_ramp", None)
+    return res
+
 # ── Shoulder stretch live-feed control ─────────────────────────────────
 class ShoulderStretchAction(BaseModel):
     action: str
@@ -4014,6 +4147,21 @@ def save_modified_apley(b: ModifiedApleySave):
         session_id  = b.session_id,
         left_score  = b.left_score,
         right_score = b.right_score,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/wheelchair_ramp")
+def save_wheelchair_ramp(b: WheelchairRampSave):
+    """Fields: session_id, score (0-2), reached_m (opt)"""
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.score not in (0, 1, 2):
+        return JSONResponse({"ok": False, "error": "The score is 0, 1 or 2"}, status_code=400)
+    row_id = db.save_wheelchair_ramp(
+        session_id = b.session_id,
+        score      = b.score,
+        reached_m  = b.reached_m,
     )
     return {"ok": True, "id": row_id}
 

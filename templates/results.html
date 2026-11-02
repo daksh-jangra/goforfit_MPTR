@@ -41,6 +41,7 @@
     .badge-bench_press { background:#e0e7ff; color:#3730a3; }
     .badge-modified_thomas { background:#fae8ff; color:#86198f; }
     .badge-modified_apley { background:#ffedd5; color:#9a3412; }
+    .badge-wheelchair_ramp { background:#e0f2fe; color:#075985; }
 
     /* Table row hover */
     tbody tr:hover { background: #f8fafc; }
@@ -186,6 +187,7 @@
           <option value="bench_press">🏋️ Bench Press</option>
           <option value="modified_thomas">🦵 Modified Thomas Test</option>
           <option value="modified_apley">🙆 Modified Apley Test</option>
+          <option value="wheelchair_ramp">♿ Wheelchair Ramp Test</option>
         </select>
       </div>
       <div>
@@ -365,6 +367,8 @@ const TEST_META = {
   modified_thomas: { label: '🦵 Modified Thomas Test', unit: '', extraFn: () => '' },
   // Result is text, "L 3 / R 2": the camera's 0-3 score for each arm.
   modified_apley: { label: '🙆 Modified Apley Test', unit: '', extraFn: () => '' },
+  // Result is the camera's 0-2 score: the furthest line the rear wheels passed.
+  wheelchair_ramp: { label: '♿ Wheelchair Ramp Test', unit: '', extraFn: () => '' },
 };
 
 // Target Stretch's and the Modified Thomas and Apley Tests' results are text ("L 2 / R 1"),

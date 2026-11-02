@@ -1264,6 +1264,72 @@
                       : null;
               },
           },
+          wheelchair_ramp: {
+              feedUrl:    '/api/wheelchair_ramp/feed',
+              stateUrl:   '/api/wheelchair_ramp/state',
+              actionUrl:  '/api/wheelchair_ramp/action',
+              browserCamera: true,
+              frameUrl:   '/api/wheelchair_ramp/frame',
+              // The phone stands side-on to the ramp, screen toward the
+              // coach - the back camera. Falls back to a laptop's.
+              preferBackCamera: true,
+              // The START, 8 ft and 15 ft lines are tapped on the video.
+              clickCalibrate: true,
+              buttons: [
+                  { id: 'clear_lines', label: 'CLEAR LINES', action: 'clear_lines', color: 'bg-orange-600' },
+                  { id: 'start',       label: 'START',       action: 'start',       color: 'bg-sky-600' },
+                  { id: 'reset',       label: 'RESET',       action: 'reset',       color: 'bg-rose-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (!state.running) return true;
+                  if (btnId === 'clear_lines') return state.test_started || !state.lines_count;
+                  if (btnId === 'start') return state.test_started || !state.lines_ready;
+                  return false;
+              },
+              renderStatus(state) {
+                  const lines = [];
+                  if (!state.test_started && state.next_line) {
+                      lines.push(`Tap the ${state.next_line} line on the video` +
+                                 (state.lines_count === 2 ? ' (skip it if the ramp is under 15 ft)' : ''));
+                  }
+                  if (!state.test_started && state.lines_ready) {
+                      lines.push(state.wheel_seen
+                          ? 'Rear wheel found. Front wheels off the ramp, then tap START'
+                          : 'Looking for the rear wheel - side of the chair facing the camera');
+                  }
+                  if (state.back_m !== null && state.back_m !== undefined) {
+                      lines.push(`Back of the rear wheel: ${state.back_m.toFixed(1)} m up the ramp`);
+                  }
+                  if (state.score !== null && state.score !== undefined) {
+                      lines.push(`Score: ${state.score} (${state.score_text})`);
+                  }
+                  if (state.test_done) {
+                      lines.push(`Test ended (${state.end_reason}). Tap STOP / SAVE`);
+                  } else if (state.armed) {
+                      lines.push(`Best line so far counts. Tap STOP / SAVE when finished`);
+                  }
+                  if (state.status_msg) lines.push(state.status_msg);
+                  return lines;
+              },
+              // A beep each time the rear wheels pass a line. RESET is silent.
+              _prev: null,
+              onState(state) {
+                  const now = state.score;
+                  const prev = this._prev;
+                  this._prev = now;
+                  if (!state.running || prev === null || prev === undefined) return;
+                  if (now !== null && now !== undefined && now > prev) beep(660, 0.5);
+              },
+              syncFields(state) {
+                  // Only a run that began (the wheel seen behind the start
+                  // line): STOP / SAVE before that sends nothing. A run that
+                  // never passed 8 ft is a real 0 and is sent.
+                  return (state.armed && state.score !== null && state.score !== undefined)
+                      ? { wheelchairRampTestScore: state.score }
+                      : null;
+              },
+          },
           vertical_jump: {
               feedUrl:    '/api/vertical_jump/feed',
               stateUrl:   '/api/vertical_jump/state',
@@ -1950,6 +2016,7 @@
               modified_curl_up:'ModifiedCurlUp',
               bench_press:'BenchPress',
               modified_apley:'ModifiedApleyTest',
+              wheelchair_ramp:'WheelchairRampTest',
               vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };

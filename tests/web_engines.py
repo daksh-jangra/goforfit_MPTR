@@ -28,6 +28,7 @@ SECTIONS IN THIS FILE
   4J. ModifiedCurlUpEngine   wraps modified_curl_up.py  (modified curl-up counter)
   4K. BenchPressEngine       wraps bench_press.py       (bench press counter)
   4L. ModifiedApleyEngine    wraps modified_apley.py    (modified Apley, 0-3 per arm)
+  4M. WheelchairRampEngine   wraps wheelchair_ramp.py   (wheelchair ramp, 0-2)
   5. WingspanEngine      re-exported, unchanged, from wingspan_web_engine.py
   6. VerticalJumpEngine  re-exported, unchanged, from vertical_jump_web_engine.py
 
@@ -4463,6 +4464,195 @@ class ModifiedApleyEngine(BaseWebEngine):
                         if self.tracker.update(rd.level, now=now, problem=rd.problem) is not None:
                             self._maybe_stage_locked()
                     apl_mod.draw_hud(frame, self.tracker, marks)
+                self._publish(frame)
+        except Exception as e:
+            with self._lock:
+                self._error = str(e)
+            self._running = False
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  SECTION 4M - WHEELCHAIR RAMP TEST   (wraps wheelchair_ramp.py)
+# ════════════════════════════════════════════════════════════════════════
+import wheelchair_ramp as wrt_mod  # noqa: E402
+
+
+class WheelchairRampEngine(BaseWebEngine):
+    """Live Brockport wheelchair ramp engine (p. 87, fig. 5.23). Scores 0-2:
+    the furthest line (8 ft, 15 ft) the back of the rear wheel gets past.
+
+    The phone stands side-on to the ramp. Before START the coach taps the
+    START, 8 ft and 15 ft lines on the video (`calib_click`, in frame
+    pixels); the 15 ft tap is skipped on a shorter ramp. The engine finds the
+    rear wheel itself - no pose model - so the spotter walking behind the
+    chair can't be taken for the student.
+
+    The engine decides the score - there is no coach override. The run ends
+    by itself once the last line is passed; otherwise STOP / SAVE stages the
+    best line so far. Stopping before the wheel was seen behind the start
+    line stages nothing. All the geometry and the state machine live in
+    wheelchair_ramp.py - this class only replaces the desktop loop."""
+
+    def __init__(self, session_id=None, on_stage=None, camera_source=0, mirror=True):
+        super().__init__(session_id, on_stage, camera_source, mirror)
+        self._frame_lock = threading.Lock()
+        self._in_frame = None
+        self._frame_event = threading.Event()
+
+        self.tracker = wrt_mod.RampTracker()
+        self.last_save = None
+        self._frame_size = None   # (w, h) of the frames being published
+        self._view = None         # (mirror, w, h) the lines were tapped on
+
+    # ── camera plumbing (same contract as ModifiedApleyEngine) ──────────
+    def _open_camera(self):
+        with self._frame_lock:
+            self._in_frame = None
+        self._frame_event.clear()
+
+    def push_frame(self, jpeg_bytes):
+        if not self._running or not jpeg_bytes:
+            return False
+        arr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        with self._frame_lock:
+            self._in_frame = frame
+        self._frame_event.set()
+        return True
+
+    # No models: the wheel is found with OpenCV alone.
+
+    # ── state for screen4 ───────────────────────────────────────────────
+    def _state_locked(self):
+        tr = self.tracker
+        return {
+            "lines_count": tr.lines.count,
+            "lines_ready": tr.lines.ready,
+            "next_line": tr.lines.next_name,
+            "max_score": tr.lines.max_score,
+            "test_started": tr.started,
+            "armed": tr.armed,
+            "test_done": tr.done,
+            "end_reason": tr.end_reason,
+            "wheel_seen": tr.wheel is not None,
+            "back_m": None if tr.back_m is None else round(tr.back_m, 2),
+            "score": tr.score(),
+            "score_text": wrt_mod.SCORE_TEXT.get(tr.best),
+            "reached_m": tr.result()["reached_m"],
+            "status_msg": tr.status_msg,
+            "last_save": self.last_save,
+        }
+
+    # ── actions (screen4 buttons and taps) ──────────────────────────────
+    def action_calib_click(self, value=None):
+        """One tap on the video, in frame pixels - {x, y}: the next line."""
+        x = (value or {}).get("x")
+        y = (value or {}).get("y")
+        if x is None or y is None:
+            return {"ok": False, "error": "calib_click needs {x, y}"}
+        with self._lock:
+            if self.tracker.started:
+                return {"ok": False, "error": "The test has started - RESET to change the lines"}
+            if self._frame_size is None:
+                return {"ok": False, "error": "No picture yet"}
+            fw, fh = self._frame_size
+            err = self.tracker.lines.add(float(x) / fw, float(y) / fh)
+            if err:
+                self.tracker.status_msg = err
+                return {"ok": False, "error": err}
+            self._view = (self.mirror_preview, fw, fh)
+            self.tracker.status_msg = ""
+            return {"ok": True, "count": self.tracker.lines.count}
+
+    def action_clear_lines(self, value=None):
+        with self._lock:
+            if self.tracker.started:
+                return {"ok": False, "error": "The test has started - RESET first"}
+            self.tracker.clear_lines()
+            self._view = None
+            return {"ok": True}
+
+    def action_start(self, value=None):
+        with self._lock:
+            err = self.tracker.start()
+            if err:
+                return {"ok": False, "error": err}
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action_reset(self, value=None):
+        """Start the run over. The lines stay."""
+        with self._lock:
+            self.tracker.reset()
+            self.last_save = None
+            self._staged = False
+            return {"ok": True}
+
+    def action(self, name, value=None):
+        handler = {
+            "calib_click": self.action_calib_click,
+            "clear_lines": self.action_clear_lines,
+            "start": self.action_start,
+            "reset": self.action_reset,
+        }.get(name)
+        if handler is None:
+            return {"ok": False, "error": f"Unknown action: {name}"}
+        return handler(value)
+
+    # ── staging ─────────────────────────────────────────────────────────
+    def _stage_locked(self, res):
+        """Called with self._lock held, once the run is over."""
+        if res is None or res["score"] is None:
+            return
+        self.last_save = f"{res['score']} ({wrt_mod.SCORE_TEXT[res['score']]})"
+        self._safe_stage(res)
+
+    def _stage_on_stop(self):
+        """STOP pressed: the best line so far. Never started, or the wheel
+        never seen behind the start line, stages nothing."""
+        with self._lock:
+            if self._staged:
+                return
+            self._stage_locked(self.tracker.finish())
+
+    # ── loop ────────────────────────────────────────────────────────────
+    def _run_loop(self):
+        stream_start = time.time()
+        try:
+            while self._running:
+                if not self._frame_event.wait(timeout=1.0):
+                    continue
+                self._frame_event.clear()
+                with self._frame_lock:
+                    frame = self._in_frame
+                    self._in_frame = None
+                if frame is None:
+                    continue
+
+                if self.mirror_preview:
+                    frame = cv2.flip(frame, 1)
+                fh, fw = frame.shape[:2]
+                now = time.time() - stream_start
+
+                with self._lock:
+                    # Under the lock: taps, START and RESET touch the
+                    # tracker from the request thread.
+                    self._frame_size = (fw, fh)
+                    view = (self.mirror_preview, fw, fh)
+                    if self.tracker.lines.count and self._view is not None and view != self._view:
+                        # Another lens, or the picture flipped: the taps no
+                        # longer sit on the tape.
+                        self.tracker.clear_lines()
+                        self._view = None
+                        self.last_save = None
+                        self.tracker.status_msg = "The camera changed - tap the lines again"
+                    res = self.tracker.update(frame, now)
+                    if res is not None:
+                        self._stage_locked(res)
+                    wrt_mod.draw_hud(frame, self.tracker)
                 self._publish(frame)
         except Exception as e:
             with self._lock:
