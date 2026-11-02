@@ -101,6 +101,25 @@ When the test ends
   The 3 s beat itself is played by the browser (screen4); this file only
   ends the test.
 
+Tracking dropouts and slow cameras
+--------------------------------------------------------------------
+  When the body is lost the phase is kept. The 3-frame smoothing is kept
+  too through a gap of up to SHORT_GAP_S (0.3 s) and only thrown away after
+  a longer one. Throwing it away on every lost frame also wasted the next
+  two good frames while it refilled (the Push-Up found the same): at 6 fps
+  with 10% of frames lost 4% of curl-ups were missed, 20% lost 12% (now
+  0 and 0; 30% lost: 25% -> 3%).
+
+  Counting is right from 4 frames a second at the protocol pace; at 3 fps
+  quick curl-ups are missed and at 2 fps even 3 s ones. So the screen WARNS
+  "Camera too slow / dropping frames" when, over the last SLOW_WINDOW_S,
+  fewer than SLOW_FPS frames a second are processed, or the student -
+  mostly in view - is lost in more than LOSS_WARN_FRAC of them. It clears
+  at CLEAR_FPS and below LOSS_CLEAR_FRAC. The browser engine also shows it
+  when no frame at all has arrived for NO_FRAME_WARN_S (Wi-Fi drop, phone
+  locked): this file only hears about frames that arrive. Never changes
+  the count; doesn't block START.
+
 Usage
 -----
   python modified_curl_up.py
@@ -175,6 +194,14 @@ REF_STILL_DEG   = 6.0    # a lying second this steady may set the lying level
 SMALL_ON        = 0.11   # thigh under this share of the picture width (median
 SMALL_OFF       = 0.12   # of SIZE_S) = too far back; warning clears above OFF
 SIZE_S          = 1.0
+SHORT_GAP_S     = 0.3    # body lost no longer than this: keep the smoothing
+SLOW_WINDOW_S   = 3.0    # "camera too slow / dropping frames" is judged over this
+SLOW_FPS        = 4.0    # fewer frames a second than this -> warn
+CLEAR_FPS       = 5.0    # ...clears at this many
+LOSS_WARN_FRAC  = 0.25   # student lost in more than this share of frames -> warn
+LOSS_CLEAR_FRAC = 0.15   # ...clears below this
+PRESENT_FRAC    = 0.5    # (losses only count while the student is mostly in view)
+NO_FRAME_WARN_S = 1.5    # no frame at all for this long -> warn (the engine)
 MAX_FRAME_DT    = 0.5    # most one frame may add to any clock (Wi-Fi gaps)
 SIDE_SWITCH_VIS = 0.10   # the other side must be this much clearer to switch
 
@@ -373,6 +400,10 @@ class ModifiedCurlUpTest:
         self.problem = None         # what is wrong right now, for the screen
         self.too_small = False      # student small in the picture: camera too far
         self._size = deque()        # (t, thigh share of the picture width)
+        self._lost_since = None     # when the body was last lost (None = seen)
+        self._frames = deque()      # (t, body seen) for every frame processed
+        self.slow_camera = False    # the "camera too slow" warning is showing
+        self.fps = None             # frames processed per second, last SLOW_WINDOW_S
         # Learned while lying still: the lying trunk level, where the
         # fingertip rests, where the foot rests.
         self.lying_ref = None
@@ -472,14 +503,21 @@ class ModifiedCurlUpTest:
             return None
 
         raw = self._pick(pts) if pts else None
+        self._note_frame(raw is not None, now)
         if raw is None:
             # Not seen. The phase is kept - the body is still wherever it
-            # was - but stale frames must not blend into the next reading,
-            # nor count toward a still pause.
-            self._sm.reset()
+            # was. The smoothing is kept too for a short gap: its last frames
+            # are recent, and they out-vote one wild frame on return. After a
+            # longer gap they are stale and are dropped. A still pause starts
+            # over either way.
+            if self._lost_since is None:
+                self._lost_since = now
+            if now - self._lost_since > SHORT_GAP_S:
+                self._sm.reset()
             self._pause.clear()
             self.m = None
             return None
+        self._lost_since = None
         self._check_size(raw, now)
         m = self._sm.push(raw)
         if not self._sm.full:
@@ -505,6 +543,25 @@ class ModifiedCurlUpTest:
             self.status_msg = f"No curl-up for {self.gap_s:.0f} s - test over"
             return END_GAP
         return None
+
+    def _note_frame(self, seen, now):
+        """Keep the "camera too slow / dropping frames" warning up to date.
+        Called for every frame processed, seen or not."""
+        self._frames.append((now, seen))
+        while self._frames and now - self._frames[0][0] > SLOW_WINDOW_S:
+            self._frames.popleft()
+        span = self._frames[-1][0] - self._frames[0][0]
+        if span < 1.5:
+            return                      # not enough to judge yet
+        self.fps = (len(self._frames) - 1) / span
+        seen_share = sum(1 for _, ok in self._frames if ok) / len(self._frames)
+        # Losses only mean "dropping frames" while the student is there;
+        # before they arrive (or after they leave) the body is simply absent.
+        lost = (1.0 - seen_share) if seen_share >= PRESENT_FRAC else 0.0
+        if self.fps < SLOW_FPS or lost > LOSS_WARN_FRAC:
+            self.slow_camera = True
+        elif self.fps >= CLEAR_FPS and lost < LOSS_CLEAR_FRAC:
+            self.slow_camera = False
 
     def _check_size(self, raw, now):
         """Camera too far back? The thigh's share of the picture width over
@@ -773,6 +830,15 @@ def draw_hud(frame, test, bp=None):
         x0 = max(12, (w - size[0]) // 2 - 14)
         draw_panel(frame, x0, 214, min(w - 12, x0 + size[0] + 28), 254, C_BAD, 0.8)
         cv2.putText(frame, warn, (x0 + 14, 242), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    C_TEXT, 2, cv2.LINE_AA)
+
+    if test.slow_camera:
+        warn = "Camera too slow / dropping frames - curl-ups may be missed"
+        size = cv2.getTextSize(warn, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)[0]
+        x0 = max(12, (w - size[0]) // 2 - 14)
+        y0 = 262 if (test.problem and test.m is not None) else 214
+        draw_panel(frame, x0, y0, min(w - 12, x0 + size[0] + 28), y0 + 40, C_BAD, 0.8)
+        cv2.putText(frame, warn, (x0 + 14, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
                     C_TEXT, 2, cv2.LINE_AA)
 
     if test.status_msg:

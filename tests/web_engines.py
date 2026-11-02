@@ -3839,6 +3839,7 @@ class ModifiedCurlUpEngine(BaseWebEngine):
         self.test = mcu_mod.ModifiedCurlUpTest()
         self.pose_detected = False
         self.last_save = None
+        self._last_frame_t = None   # wall time the loop last processed a frame
 
     @property
     def count(self):
@@ -3912,9 +3913,16 @@ class ModifiedCurlUpEngine(BaseWebEngine):
             "not_counted_total": t.total_not_counted,
             "problem": t.problem if t.tracked else None,
             "pose_detected": self.pose_detected,
+            "slow_camera": t.slow_camera or self._frames_stopped(),
+            "fps": 0 if self._frames_stopped() else (round(t.fps) if t.fps is not None else None),
             "status_msg": t.status_msg,
             "last_save": self.last_save,
         }
+
+    def _frames_stopped(self):
+        """No frame processed for NO_FRAME_WARN_S, after the first one."""
+        return (self._running and self._last_frame_t is not None
+                and time.time() - self._last_frame_t > mcu_mod.NO_FRAME_WARN_S)
 
     # ── actions (screen4 buttons) ───────────────────────────────────────
     def action_start(self, value=None):
@@ -3999,6 +4007,7 @@ class ModifiedCurlUpEngine(BaseWebEngine):
                     pts = mcu_mod.read_points(lms, fw, fh)
 
                 with self._lock:
+                    self._last_frame_t = time.time()
                     ended = self.test.update(pts)
                     if ended and not self._staged:
                         # The test's own end (75, or 6 s with no curl-up) is

@@ -1011,14 +1011,21 @@
                   return !state.running;
               },
               renderStatus(state) {
-                  const lines = [`Curl-ups: ${state.count} / ${state.max_reps}`];
+                  const lines = [];
+                  // A slow or flaky camera can miss curl-ups; tell the coach.
+                  if (state.slow_camera) {
+                      lines.push('\u26a0 Camera too slow / dropping frames' +
+                                 (state.fps ? ` (${state.fps} fps)` : '') +
+                                 ' - curl-ups may be missed. Close other apps or move closer to the Wi-Fi');
+                  }
+                  lines.push(`Curl-ups: ${state.count} / ${state.max_reps}`);
                   if (state.body_tracked) {
-                      const up = state.rise_deg === null ? '–' : `${state.rise_deg}°`;
+                      const up = state.rise_deg === null ? '-' : `${state.rise_deg}°`;
                       lines.push(`Fingertips: ${state.reach} (knee ${state.reach_min})   Up: ${up}`);
                       if (state.problem) lines.push(`⚠ ${state.problem}`);
                   } else {
                       lines.push(state.pose_detected
-                          ? 'Body not fully visible — side-on, head to feet in frame'
+                          ? 'Body not fully visible - side-on, head to feet in frame'
                           : 'No participant detected');
                   }
                   if (state.test_done) {

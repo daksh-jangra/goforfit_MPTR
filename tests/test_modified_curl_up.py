@@ -474,6 +474,40 @@ def check_camera_too_far_warns_without_touching_the_count():
     assert not test.too_small
 
 
+def check_lost_frames_dont_hide_curl_ups():
+    # One lost frame used to throw away the 3-frame smoothing, and the next
+    # two good frames went on refilling it: at 6 fps with 20% of frames lost
+    # about 1 curl-up in 8 was missed.
+    for fps in (6, 10):
+        for seed in range(10):
+            test, t = started(fps=fps)
+            run(test, reps(10) + [(1.5, hold())], fps=fps, t0=t, jitter=2.0,
+                drop_p=0.2, seed=seed)
+            assert test.count == 10, (fps, seed, test.count, test.not_counted)
+
+
+def check_slow_camera_warns_without_touching_the_count():
+    # 15 fps, nothing lost: no warning.
+    test, t = started(fps=15, settle=3.0)
+    assert not test.slow_camera, test.fps
+    # 3 fps: warned, before START too; the count is untouched.
+    test, t = started(fps=3, settle=3.0)
+    assert test.slow_camera and test.fps < mcu.SLOW_FPS, test.fps
+    run(test, reps(4, period=4.0) + [(1.5, hold())], fps=3, t0=t)
+    assert test.count == 4, test.count
+    # Back to 10 fps: clears once the last 3 s are fast enough.
+    run(test, [(4.0, hold())], fps=10, t0=test._last_t + 0.1)
+    assert not test.slow_camera, test.fps
+    # Fast, but the student is lost in 40% of frames: warned.
+    test, t = started(fps=15, settle=3.0)
+    run(test, [(3.0, hold())], fps=15, t0=t, drop_p=0.4, seed=3)
+    assert test.slow_camera
+    # Nobody in view at all: that's an empty picture, not a flaky camera.
+    test = mcu.ModifiedCurlUpTest()
+    run(test, [(3.0, lambda tt: None)], fps=15)
+    assert not test.slow_camera
+
+
 def check_stop_and_reset():
     test = mcu.ModifiedCurlUpTest()
     test.stop(now=1.0)
