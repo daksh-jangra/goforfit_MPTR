@@ -803,6 +803,63 @@ def test_touch_progress_tracks_the_run():
     assert tr.passed and tr.touch_progress() == 1.0
 
 
+# ── engine: "student too small" warning ──────────────────────────────────────
+def _shoulders(width_frac, vis_=0.9):
+    """A body seen from behind whose shoulders span width_frac of the frame."""
+    cx, y = FW / 2, 200
+    half = width_frac * FW / 2
+    return make_pose({11: (cx - half, y, vis_), 12: (cx + half, y, vis_)})
+
+
+def test_small_student_warns_to_move_closer():
+    # Wide gym shot: shoulders 6.5% of the width -> warn. A good distance
+    # (27%) never warns, wherever the hands are. On below 10%, off above 12%.
+    import web_engines
+    eng = web_engines.ShoulderStretchEngine()
+    msg = eng.TOO_SMALL_MSG
+    with eng._lock:
+        for i in range(10):
+            eng._note_size_locked(_shoulders(0.27), i * 0.1)
+        assert eng._state_locked()["status_msg"] != msg, "good distance: no warning"
+        for i in range(10, 30):
+            eng._note_size_locked(_shoulders(0.065), i * 0.1)
+        st = eng._state_locked()
+        assert st["status_msg"] == msg and st["too_small"] is True
+        for i in range(30, 50):
+            eng._note_size_locked(_shoulders(0.11), i * 0.1)
+        assert eng._state_locked()["too_small"], "between on and off: stays"
+        for i in range(50, 70):
+            eng._note_size_locked(_shoulders(0.13), i * 0.1)
+        assert eng._state_locked()["status_msg"] != msg, "clears above 12%"
+    eng.action_reset()
+    with eng._lock:
+        assert eng._state_locked()["status_msg"] != msg
+
+
+def test_size_needs_both_shoulders_seen():
+    import web_engines
+    eng = web_engines.ShoulderStretchEngine()
+    with eng._lock:
+        for i in range(20):
+            eng._note_size_locked(_shoulders(0.02, vis_=0.2), i * 0.1)
+            eng._note_size_locked(None, i * 0.1 + 0.05)
+        assert not eng.too_small, "unseen shoulders / no body decide nothing"
+
+
+def test_small_warning_never_changes_the_result():
+    import web_engines
+    eng = web_engines.ShoulderStretchEngine()
+    with eng._lock:
+        for i in range(20):
+            eng._note_size_locked(_shoulders(0.05), i * 0.1)
+        assert eng.too_small
+        assert not eng.tracker.resolved and not eng.tracker.passed
+        eng.tracker.end_trial(now=6.0, by="coach")
+        st = eng._state_locked()
+        # A decided trial shows its verdict, not the warning.
+        assert st["too_small"] is False and st["status_msg"] == eng.tracker.status_msg
+
+
 # ── standalone runner (so this works without pytest) ─────────────────────────
 def _main():
     checks = [(n, f) for n, f in sorted(globals().items())

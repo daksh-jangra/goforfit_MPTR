@@ -2320,6 +2320,21 @@ class ShoulderStretchEngine(BaseWebEngine):
         self.hands_detected = 0      # raw hands the detector returned
         self.hands_measurable = False  # both hands owned AND big enough to measure
         self.last_save = None
+        # "Too small" warning: the shoulders take up under SMALL_ON of the
+        # picture width (median of SIZE_S), clearing above SMALL_OFF. Seen in
+        # a wide gym shot: the student was found but the hands never were
+        # (shoulders 6.5% of the width; 27% at a good distance), and the only
+        # hint said to film from behind, which the coach already was. Judged
+        # by size, not by missing hands: from behind, hands held down in
+        # front of the body are hidden at a good distance too. Display only;
+        # never changes the result.
+        self._size = deque()
+        self.too_small = False
+
+    SMALL_ON = 0.10
+    SMALL_OFF = 0.12
+    SIZE_S = 1.0
+    TOO_SMALL_MSG = "Student too small - move the camera closer"
 
     # ── camera plumbing (identical contract to ReverseCurlEngine) ───────
     def _open_camera(self):
@@ -2439,9 +2454,30 @@ class ShoulderStretchEngine(BaseWebEngine):
             "resolved": tr.resolved,
             "passed": bool(tr.passed) if tr.resolved else None,
             "verdict_by": tr.verdict_by,
-            "status_msg": tr.status_msg,
+            "too_small": self.too_small and not tr.resolved,
+            "status_msg": (self.TOO_SMALL_MSG
+                           if self.too_small and not tr.resolved
+                           else tr.status_msg),
             "last_save": self.last_save,
         }
+
+    def _note_size_locked(self, body, now):
+        """Camera too far back? The shoulders' share of the picture width
+        (normalised x, so any frame size), over the last SIZE_S. A frame
+        without both shoulders clearly seen changes nothing."""
+        if body is None:
+            return
+        l, r = body[11], body[12]
+        if l.visibility < 0.5 or r.visibility < 0.5:
+            return
+        self._size.append((now, abs(l.x - r.x)))
+        while self._size and now - self._size[0][0] > self.SIZE_S:
+            self._size.popleft()
+        size = float(np.median([v for _, v in self._size]))
+        if size < self.SMALL_ON:
+            self.too_small = True
+        elif size > self.SMALL_OFF:
+            self.too_small = False
 
     # ── actions (screen4 buttons) ───────────────────────────────────────
     def action_side(self, value=None):
@@ -2474,6 +2510,8 @@ class ShoulderStretchEngine(BaseWebEngine):
             self.gap_ratio = None
             self.hands_detected = 0
             self.hands_measurable = False
+            self._size.clear()
+            self.too_small = False
             self.last_save = None
             self._staged = False
             return {"ok": True}
@@ -2626,6 +2664,7 @@ class ShoulderStretchEngine(BaseWebEngine):
                     self.pose_detected = pose_detected
                     self.hands_detected = hands_detected
                     self.hands_measurable = ratio is not None
+                    self._note_size_locked(body, now)
                     if not self.tracker.resolved:   # side frozen at the verdict
                         self.selector.update(vote)
                     side = self.selector.side
