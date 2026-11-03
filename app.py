@@ -524,7 +524,12 @@ TESTS = {
             "Measures how far forward the student reaches, in cm.",
             "Enter the student's hip-to-ankle length first. The app uses it to turn the "
             "reach into accurate cm.",
-            "The app keeps the furthest forward reach during the attempt.",
+            "Press MARK when the student's arms are straight out in front, fingertips "
+            "together. The reach is measured from there, so hands at the hips or on the "
+            "floor give a score that is far too big.",
+            "The student slides the hands forward along the legs. The app keeps the "
+            "furthest forward reach during the attempt.",
+            "Press MARK again to lock the result.",
         ],
         "controls": [
             ("SPACE", "Set start position / lock final result"),

@@ -494,6 +494,14 @@
               renderStatus(state) {
                   const lines = [`State: ${state.state}`];
                   if (state.disp_cm !== null) lines.push(`Reach: ${state.disp_cm} cm`);
+                  // The reach is measured from where the hands are at the first
+                  // MARK, so say where they go: hands at the hips or on the floor
+                  // turn the whole slide forward into "reach".
+                  if (state.state === 'IDLE') {
+                      lines.push('Arms straight out in front, fingertips together, then tap MARK / LOCK');
+                  } else if (state.state === 'MEASURING') {
+                      lines.push('Slide the hands forward along the legs, then tap MARK / LOCK to finish');
+                  }
                   return lines;
               },
               syncFields(state) {
