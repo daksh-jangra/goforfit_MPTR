@@ -18,7 +18,7 @@ to the GoForFit dashboard.
 
 The app is designed to:
 
-- Run **18 fitness tests** across anthropometry, strength, endurance, flexibility, speed, agility, power and coordination
+- Run **24 fitness tests** across anthropometry, strength, endurance, flexibility, speed, agility, power and coordination (23 scored by the camera, 1 entered by the coach)
 - Score straight from the **coach's phone browser**: no desktop window, no keyboard and no app install
 - Follow each test's **written protocol** for its start, stop, rep and verdict rules
 - Leave the coach in charge of judging form, while the camera decides the score
@@ -53,7 +53,8 @@ goforfit_MPTR/
     ├── bmi__3_.py  wingspan2.py  parcurlup.py  wtt.py  snr.py  vertical_jump.py
     ├── pullup.py  pullup_full.py  trunk_lift.py  reverse_curl.py
     ├── shoulder_stretch.py  isometric_pushup.py  seated_pushup.py
-    ├── dumbbell_press.py  target_stretch.py
+    ├── dumbbell_press.py  target_stretch.py  push_up.py  modified_curl_up.py
+    ├── bench_press.py  modified_apley.py  wheelchair_ramp.py
     ├── shuttleruntest.py  sprint_timer.py  50m_dash_mod.py
     ├── 600m_new/                 ← 600 m run: colour tracking, lanes, lap counting
     │
@@ -94,12 +95,18 @@ and the browser polls for the live result.
 | `isometric_push_up` | Isometric Push-Up | Muscular Endurance | Phone | seconds (max 40) |
 | `seated_push_up` | Seated Push-Up | Muscular Endurance | Phone | seconds (max 20) |
 | `dumbbell_press` | Dumbbell Press | Muscular Endurance | Phone | reps (max 50) |
+| `push_up` | Push-Up | Muscular Endurance | Phone | reps |
+| `modified_curl_up` | Modified Curl-Up | Muscular Endurance | Phone | reps (max 75) |
+| `bench_press` | Bench Press | Muscular Endurance | Phone | reps (max 50 boys / 30 girls) |
+| `wheelchair_ramp` | Wheelchair Ramp Test | Muscular Endurance | Phone | 0 / 1 / 2 |
 | `wall_toss` | Wall Toss | Coordination | Phone | catches |
 | `sit_reach` | Sit and Reach | Flexibility | Phone | cm |
 | `trunk_lift` | Trunk Lift | Musculoskeletal | Phone | cm (max 30) |
 | `reverse_curl` | Reverse Curl | Musculoskeletal | Phone | pass / fail |
 | `shoulder_stretch` | Shoulder Stretch | Musculoskeletal | Phone | pass / fail |
 | `target_stretch` | Target Stretch (8 joints) | Musculoskeletal | Phone | 0 / 1 / 2 per side |
+| `modified_apley` | Modified Apley Test | Musculoskeletal | Phone | 0 to 3 per arm |
+| `modified_thomas` | Modified Thomas Test | Musculoskeletal | None (coach enters) | 0 to 3 per leg |
 | `vertical_jump` | Vertical Jump | Power | Phone | cm |
 | `run_600m` | 600 m Run | Endurance | One camera | seconds |
 | `shuttle_run` | 10 m Shuttle Run | Agility | Two IP cameras | seconds |
@@ -107,6 +114,18 @@ and the browser polls for the live result.
 
 Notes:
 - For `sit_reach`, enter the student's hip-to-ankle length on the setup screen first.
+  Press MARK with the arms straight out in front, fingertips together: the reach
+  is measured from there, along the legs.
+- `push_up`, `modified_curl_up` and `bench_press` are filmed side-on. Push-Up and
+  Modified Curl-Up beep every 3 s and end by themselves after 6 s with no rep.
+  Bench Press needs Boy or Girl picked on the camera screen first, and ends after
+  a 4 s rest.
+- `wheelchair_ramp` finds the chair's rear wheel. The coach taps the start line,
+  the 8 ft line and (optionally) the 15 ft line on the video, then presses START.
+- `modified_apley` is filmed from behind: left arm first, then right. The
+  dashboard gets the lower of the two arms.
+- `modified_thomas` has no camera. The coach measures with the cards and enters
+  0 to 3 for each leg; the dashboard gets the lower of the two.
 - `vertical_jump` measures how far the hips rise from standing to the top of the
   jump. The older fingertip-reach method is still available: set
   `MEASURE_METHOD = "reach"` in `tests/vertical_jump_web_engine.py`.
@@ -120,7 +139,7 @@ Notes:
 Each test follows a published protocol:
 
 - **Indian FMS battery (Fitness365)**: the main reference. Where its demo video and the Brockport manual disagree, the video wins (for example, the Modified Pull-Up).
-- **Brockport Physical Fitness Test Manual**: Pull-Up, Trunk Lift, Reverse Curl, Shoulder Stretch, Isometric Push-Up, Seated Push-Up, Dumbbell Press and Target Stretch
+- **Brockport Physical Fitness Test Manual**: Pull-Up, Trunk Lift, Reverse Curl, Shoulder Stretch, Isometric Push-Up, Seated Push-Up, Dumbbell Press, Target Stretch, Push-Up, Modified Curl-Up, Bench Press, Modified Thomas Test, Modified Apley Test and Wheelchair Ramp Test
 - **Coach's role**: the app scores; the coach judges form cues that the protocol leaves to the tester
 
 ---
