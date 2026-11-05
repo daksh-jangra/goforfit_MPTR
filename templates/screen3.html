@@ -554,9 +554,11 @@
         // Modified curl-up: a student who can't do one correct curl-up.
         // Bench press: a student who can't press the bar up once.
         // Partial curl-up: a student who does no curl-up in the 30 s.
+        // Wall toss: a student who makes no catch in the 30 s.
         const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up',
                                  'seated_push_up', 'dumbbell_press', 'push_up',
-                                 'modified_curl_up', 'bench_press', 'curl_up']).has(testId);
+                                 'modified_curl_up', 'bench_press', 'curl_up',
+                                 'wall_toss']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
         const passFailLabel = (v) => (v === true || v === 1 || v === '1') ? 'Pass' : 'Fail';
         // Counts the database keeps as whole numbers. 7.5 reps can't be saved,
@@ -1079,6 +1081,7 @@
                 msg.innerText = ZERO_OK ? 'Please enter a number of reps (0 or more).'
                                         : 'Please enter a valid positive number.';
                 if (testId === 'seated_push_up') msg.innerText = 'Please enter the seconds held (0 to 20).';
+                if (testId === 'wall_toss') msg.innerText = 'Please enter a number of catches (0 or more).';
                 msg.classList.remove('hidden');
                 return;
             }

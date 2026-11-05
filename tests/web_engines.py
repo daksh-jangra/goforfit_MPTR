@@ -1253,11 +1253,15 @@ class WallTossEngine(BaseWebEngine):
             return {"ok": True, "ball_colour": self.counter._preset_name}
 
     def _stage_on_stop(self):
-        # Stopped before the 30s timer staged a result — stage the partial
-        # catch count so screen3 has something to review.
-        c = self.counter
-        if c is not None and c.toss_count > 0:
-            self._safe_stage(c.toss_count, c._preset_name)
+        # Stopped before the 30s timer staged a result - stage the partial
+        # catch count so screen3 has something to review. A 0 is staged like
+        # any other count (the timer's own end already stages 0), but only
+        # for a trial that is running.
+        with self._lock:
+            c = self.counter
+            if c is not None and c.active:
+                self.last_save = c.toss_count
+                self._safe_stage(c.toss_count, c._preset_name)
 
     def _run_loop(self):
         try:
