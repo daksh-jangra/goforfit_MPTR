@@ -43,7 +43,7 @@ from urllib.parse import urlencode
 import cv2
 import jinja2
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -4259,6 +4259,21 @@ def export_csv(test_id: str):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{test_id}_results.csv"'},
     )
+
+
+# ── Website links that name the test in the path ──────────────────────────
+# The website opens a test as /fms/<test_id>?id=...&name=...&roll=..., but the
+# test page lives at /screen3?test=<test_id>. Send those links on to screen3
+# with every query value kept. The redirect is relative ("screen3?...") so it
+# stays under /fms/ behind the proxy. Only known test ids match, and this is
+# declared last so it never shadows another page.
+@app.get("/{test_id}")
+def test_link(test_id: str, request: Request):
+    if test_id not in TESTS:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    params = [(k, v) for k, v in request.query_params.multi_items() if k != "test"]
+    query = urlencode([("test", test_id)] + params)
+    return RedirectResponse(f"screen3?{query}", status_code=307)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
