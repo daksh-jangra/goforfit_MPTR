@@ -4261,6 +4261,51 @@ def export_csv(test_id: str):
     )
 
 
+# ── Modified Push-Up tracker (live site page) ─────────────────────────────
+# A page that runs the pose model in the browser, counts modified push-ups and
+# syncs the count to the website window that opened it. It came from the live
+# server's copy of the app and is kept here so a deploy doesn't drop it. It is
+# not one of TESTS, so it isn't listed on the test screens.
+class ModifiedPushUpSave(BaseModel):
+    session_id: Optional[int] = None
+    reps: Optional[int] = None
+    duration_sec: Optional[int] = None
+    notes: Optional[str] = None
+    rating: Optional[str] = None
+
+
+MODIFIED_PUSHUP_PAGE = {
+    "id":       "modified_pushup",
+    "title":    "Modified Push-Up Counter",
+    "subtitle": "Knee push-up muscular endurance test",
+    "unit":     "reps",
+}
+
+
+@app.get("/modified_pushup_tracker", name="modified_pushup_tracker")
+def serve_modified_pushup(request: Request):
+    return templates.TemplateResponse(request, "modified_pushup.html", {
+        "test": MODIFIED_PUSHUP_PAGE,
+        "parent_origin": GOFORFIT_PARENT_ORIGIN,
+    })
+
+
+@app.post("/api/save/modified_pushup")
+def save_modified_pushup(b: ModifiedPushUpSave):
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    try:
+        row_id = db.save_modified_pushup(
+            session_id=b.session_id, reps=b.reps, duration_sec=b.duration_sec,
+            notes=b.notes, rating=b.rating,
+        )
+    except Exception as exc:
+        # e.g. a session_id that doesn't exist here; the page ignores this
+        # reply and syncs to the website either way.
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return {"ok": True, "id": row_id}
+
+
 # ── Website links that name the test in the path ──────────────────────────
 # The website opens a test as /fms/<test_id>?id=...&name=...&roll=..., but the
 # test page lives at /screen3?test=<test_id>. Send those links on to screen3

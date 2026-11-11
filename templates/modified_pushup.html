@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Standard Push-up - Professional Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      background-color: #000000;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Fixed Top Section: Header + Stats Bar */
+    .top-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 2-Row Metadata Header */
+    .pro-header {
+      background: #131b22;
+      border-bottom: 1px solid #1c3340;
+      width: 100%;
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 50px;
+    }
+
+    .header-row.row-top {
+      border-bottom: 1px solid #1c3340;
+      padding-top: 6px;
+      padding-bottom: 5px;
+    }
+
+    .header-row.row-bottom {
+      padding-top: 5px;
+      padding-bottom: 6px;
+    }
+
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .meta-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #688293;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      line-height: 1.2;
+    }
+
+    .meta-val {
+      font-size: 0.82rem;
+      font-weight: 800;
+      color: #00b8d4;
+      line-height: 1.2;
+    }
+
+    /* Exact Dedicated REPS & TIME Bar */
+    .stats-bar {
+      width: 100%;
+      height: 60px;
+      background: #131b22;
+      border-bottom: 1px solid #000000;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 160px;
+    }
+
+    .stat-pill {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .stat-pill .label {
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: 1px;
+      line-height: 1;
+      margin-bottom: 2px;
+    }
+
+    .stat-pill .val {
+      font-size: 2.3rem;
+      font-weight: 900;
+      color: #00b4d8;
+      text-shadow: 0 2px 10px rgba(0, 180, 216, 0.45);
+      line-height: 1;
+    }
+
+    /* Viewport Area below stats bar */
+    .viewport {
+      position: fixed;
+      top: 118px; /* Height of header (58px) + stats bar (60px) */
+      bottom: 96px;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #000000;
+      overflow: hidden;
+    }
+
+    .placeholder-prompt {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      text-align: center;
+      gap: 14px;
+      z-index: 5;
+    }
+
+    .placeholder-prompt svg {
+      width: 64px;
+      height: 64px;
+      fill: #223242;
+    }
+
+    .placeholder-prompt p {
+      font-size: 0.9rem;
+      font-family: monospace;
+      color: #688293;
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .mirror {
+      transform: scaleX(-1);
+    }
+
+    /* Flip Camera Trigger */
+    .cam-toggle {
+      position: absolute;
+      top: 10px;
+      right: 16px;
+      background: rgba(19, 27, 34, 0.85);
+      border: 1px solid #1c3340;
+      color: #cbd5e1;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      z-index: 40;
+      backdrop-filter: blur(4px);
+    }
+
+    /* Posture State HUD */
+    .posture-hud {
+      position: absolute;
+      bottom: 12px;
+      left: 16px;
+      background: rgba(19, 27, 34, 0.9);
+      border: 1px solid #1c3340;
+      padding: 6px 14px;
+      border-radius: 8px;
+      display: none;
+      gap: 14px;
+      z-index: 30;
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+
+    /* Bottom Action Controls */
+    .bottom-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 96px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: #000000;
+      border-top: 1px solid #111;
+      z-index: 50;
+      padding-bottom: 8px;
+    }
+
+    .status-announcer {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #f59e0b;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 16px;
+      width: 100%;
+      max-width: 500px;
+      justify-content: center;
+      padding: 0 16px;
+    }
+
+    .btn-action {
+      flex: 1;
+      height: 44px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-start {
+      background-color: #22c55e;
+      color: #ffffff;
+    }
+
+    .btn-stop {
+      background-color: #e11d48;
+      color: #ffffff;
+    }
+
+    .btn-action:disabled {
+      background-color: #202428;
+      color: #555d65;
+      cursor: not-allowed;
+    }
+
+    #status-toast {
+      position: absolute;
+      bottom: 105px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(19, 27, 34, 0.95);
+      border: 1px solid #1c3340;
+      color: #00b8d4;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      display: none;
+      z-index: 60;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Container: Header + REPS/TIME Bar in normal flow so they never overlap -->
+  <div class="top-container">
+    <header class="pro-header">
+      <div class="header-row row-top">
+        <div class="meta-item">
+          <span class="meta-label">TEST ID:</span>
+          <span class="meta-val" id="meta_test_id">--</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">TEST NAME:</span>
+          <span class="meta-val" id="meta_test_name">Push Ups</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">TRAINER ID:</span>
+          <span class="meta-val" id="meta_trainer_id">--</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">TRAINER NAME:</span>
+          <span class="meta-val" id="meta_trainer_name">--</span>
+        </div>
+      </div>
+      <div class="header-row row-bottom">
+        <div class="meta-item" style="flex: 1.5; align-items: flex-start;">
+          <span class="meta-label">STUDENT</span>
+          <span class="meta-val" id="meta_student_name">--</span>
+        </div>
+        <div class="meta-item" style="flex: 1;">
+          <span class="meta-label">CLASS</span>
+          <span class="meta-val" id="meta_class">--</span>
+        </div>
+        <div class="meta-item" style="flex: 1; align-items: flex-end;">
+          <span class="meta-label">ROLL NO</span>
+          <span class="meta-val" id="meta_roll">--</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Dedicated REPS & TIME Bar -->
+    <div class="stats-bar">
+      <div class="stat-pill">
+        <div class="label">REPS</div>
+        <div class="val" id="rep_count">0</div>
+      </div>
+      <div class="stat-pill">
+        <div class="label">TIME</div>
+        <div class="val" id="timer_display">0.0<span style="font-size: 1.4rem;">s</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera Viewport Area -->
+  <div class="viewport">
+    <button class="cam-toggle" type="button" onclick="switchCamera()">Flip Cam</button>
+
+    <div id="placeholder" class="placeholder-prompt">
+      <svg viewBox="0 0 24 24">
+        <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+      </svg>
+      <p>Tap START TEST below to begin the live feed</p>
+    </div>
+
+    <video id="webcam" autoplay playsinline style="display: none;" class="mirror"></video>
+    <canvas id="output_canvas" style="display: none;" class="mirror"></canvas>
+
+    <div id="posture_hud" class="posture-hud">
+      <span>Elbow: <b id="angle_display" style="color: #00b8d4;">0 deg</b></span>
+      <span>Stage: <b id="stage_display" style="color: #f59e0b;">READY</b></span>
+    </div>
+
+    <div id="status-toast"></div>
+  </div>
+
+  <!-- Bottom Panel -->
+  <div class="bottom-bar">
+    <div class="status-announcer" id="status_announcer">CAMERA READY</div>
+    <div class="button-group">
+      <button type="button" id="start_btn" class="btn-action btn-start" onclick="startWorkout()">START TEST</button>
+      <button type="button" id="stop_btn" class="btn-action btn-stop" onclick="stopAndSaveWorkout()" disabled>STOP / SAVE</button>
+    </div>
+  </div>
+
+  <script>
+    var urlParams    = new URLSearchParams(window.location.search);
+    var testId       = urlParams.get('ex_id') || urlParams.get('test_id') || '56';
+    var exerciseName = urlParams.get('exerciseName') || 'Modified Push Ups';
+    var trainerId    = urlParams.get('trainerId') || urlParams.get('trainerid') || '995';
+    var trainerName  = urlParams.get('traiName') || urlParams.get('trainerName') || 'Mr. Hareram Singh';
+    var studentName  = urlParams.get('name') || 'Student';
+    var classInfo    = urlParams.get('class_info') || 'N/A';
+    var rollNo       = urlParams.get('roll') || 'N/A';
+    var studentId    = urlParams.get('id') || '10730';
+
+    document.getElementById('meta_test_id').innerText      = testId;
+    document.getElementById('meta_test_name').innerText    = exerciseName;
+    document.getElementById('meta_trainer_id').innerText   = trainerId;
+    document.getElementById('meta_trainer_name').innerText = trainerName;
+    document.getElementById('meta_student_name').innerText = studentName;
+    document.getElementById('meta_class').innerText        = classInfo;
+    document.getElementById('meta_roll').innerText         = rollNo;
+
+    var videoElement    = document.getElementById('webcam');
+    var canvasElement   = document.getElementById('output_canvas');
+    var canvasCtx       = canvasElement.getContext('2d');
+    var placeholder     = document.getElementById('placeholder');
+    var postureHud      = document.getElementById('posture_hud');
+    var repDisplay      = document.getElementById('rep_count');
+    var timerDisplay    = document.getElementById('timer_display');
+    var angleDisplay    = document.getElementById('angle_display');
+    var stageDisplay    = document.getElementById('stage_display');
+    var statusAnnouncer = document.getElementById('status_announcer');
+    var startBtn        = document.getElementById('start_btn');
+    var stopBtn         = document.getElementById('stop_btn');
+    var statusToast     = document.getElementById('status-toast');
+
+    var isTracking = false;
+    var isCameraRunning = false;
+    var repCount = 0;
+    var stage = "up";
+    var timerTenths = 0;
+    var timerInterval = null;
+    var currentFacingMode = "user";
+    var currentStream = null;
+    var animationFrameId = null;
+
+    function formatTimeSeconds(tenths) {
+      return (tenths / 10).toFixed(1);
+    }
+
+    function showToast(msg, color) {
+      statusToast.innerText = msg;
+      statusToast.style.color = color || "#00b8d4";
+      statusToast.style.display = "block";
+      setTimeout(function() { statusToast.style.display = "none"; }, 3000);
+    }
+
+    function calculateAngle(a, b, c) {
+      var radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+      var angle = Math.abs(radians * (180.0 / Math.PI));
+      if (angle > 180.0) angle = 360.0 - angle;
+      return Math.round(angle);
+    }
+
+    function calculateBodyTilt(shoulder, hip) {
+      var deltaY = Math.abs(hip.y - shoulder.y);
+      var deltaX = Math.abs(hip.x - shoulder.x);
+      return Math.round(Math.atan2(deltaY, deltaX) * (180.0 / Math.PI));
+    }
+
+    function onResults(results) {
+      canvasElement.width = videoElement.videoWidth || 640;
+      canvasElement.height = videoElement.videoHeight || 480;
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.poseLandmarks) {
+        drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#00b8d4', lineWidth: 2 });
+        drawLandmarks(canvasCtx, results.poseLandmarks, { color: '#ffffff', lineWidth: 1, radius: 3 });
+
+        var l_shoulder = results.poseLandmarks[11];
+        var l_elbow = results.poseLandmarks[13];
+        var l_wrist = results.poseLandmarks[15];
+        var l_hip = results.poseLandmarks[23];
+
+        var r_shoulder = results.poseLandmarks[12];
+        var r_elbow = results.poseLandmarks[14];
+        var r_wrist = results.poseLandmarks[16];
+        var r_hip = results.poseLandmarks[24];
+
+        var leftConf = (l_shoulder ? l_shoulder.visibility || 0 : 0) + (l_elbow ? l_elbow.visibility || 0 : 0);
+        var rightConf = (r_shoulder ? r_shoulder.visibility || 0 : 0) + (r_elbow ? r_elbow.visibility || 0 : 0);
+
+        var shoulder = leftConf >= rightConf ? l_shoulder : r_shoulder;
+        var elbow = leftConf >= rightConf ? l_elbow : r_elbow;
+        var wrist = leftConf >= rightConf ? l_wrist : r_wrist;
+        var hip = leftConf >= rightConf ? l_hip : r_hip;
+
+        if (shoulder && elbow && wrist && shoulder.visibility > 0.4 && elbow.visibility > 0.4) {
+          var elbowAngle = calculateAngle(shoulder, elbow, wrist);
+          angleDisplay.innerText = elbowAngle + " deg";
+
+          if (hip && hip.visibility > 0.3) {
+            var torsoAngle = calculateBodyTilt(shoulder, hip);
+            if (torsoAngle > 75) {
+              stageDisplay.innerText = "STAND/SIT";
+              stageDisplay.style.color = "#ff9f43";
+              statusAnnouncer.innerText = "INCLINE ERROR: LIE DOWN";
+              statusAnnouncer.style.color = "#ff9f43";
+              canvasCtx.restore();
+              return;
+            }
+          }
+
+          stageDisplay.style.color = "#00b8d4";
+
+          if (isTracking) {
+            statusAnnouncer.innerText = "TEST IN PROGRESS";
+            statusAnnouncer.style.color = "#00b8d4";
+
+            if (elbowAngle <= 105) {
+              stage = "down";
+              stageDisplay.innerText = "DOWN";
+            }
+            if (elbowAngle >= 140 && stage === "down") {
+              stage = "up";
+              stageDisplay.innerText = "UP";
+              repCount += 1;
+              repDisplay.innerText = repCount;
+            }
+          }
+        }
+      }
+      canvasCtx.restore();
+    }
+
+    var pose = new Pose({
+      locateFile: function(file) {
+        return "https://cdn.jsdelivr.net/npm/@mediapipe/pose/" + file;
+      }
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.4,
+      minTrackingConfidence: 0.4
+    });
+    pose.onResults(onResults);
+
+    async function initCamera(facingMode) {
+      if (currentStream) {
+        currentStream.getTracks().forEach(function(t) { t.stop(); });
+        currentStream = null;
+      }
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+
+      if (facingMode === "user") {
+        videoElement.classList.add("mirror");
+        canvasElement.classList.add("mirror");
+      } else {
+        videoElement.classList.remove("mirror");
+        canvasElement.classList.remove("mirror");
+      }
+
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        videoElement.srcObject = currentStream;
+
+        await new Promise(function(resolve) {
+          videoElement.onloadedmetadata = function() {
+            videoElement.play();
+            resolve();
+          };
+        });
+
+        isCameraRunning = true;
+        processVideo();
+      } catch (err) {
+        showToast("Camera error: " + err.message, "#e11d48");
+      }
+    }
+
+    async function processVideo() {
+      if (videoElement.readyState >= 2) {
+        await pose.send({ image: videoElement });
+      }
+      animationFrameId = requestAnimationFrame(processVideo);
+    }
+
+    function switchCamera() {
+      currentFacingMode = (currentFacingMode === "user") ? "environment" : "user";
+      showToast("Camera switched to " + (currentFacingMode === "user" ? "Front" : "Back"));
+      if (isCameraRunning) {
+        initCamera(currentFacingMode);
+      }
+    }
+
+    async function startWorkout() {
+      placeholder.style.display = "none";
+      videoElement.style.display = "block";
+      canvasElement.style.display = "block";
+      postureHud.style.display = "flex";
+
+      await initCamera(currentFacingMode);
+
+      isTracking = true;
+      repCount = 0;
+      stage = "up";
+      timerTenths = 0;
+
+      repDisplay.innerText = "0";
+      stageDisplay.innerText = "READY";
+      timerDisplay.innerHTML = '0.0<span style="font-size: 1.4rem;">s</span>';
+      statusAnnouncer.innerText = "TEST IN PROGRESS";
+      statusAnnouncer.style.color = "#00b8d4";
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      clearInterval(timerInterval);
+      timerInterval = setInterval(function() {
+        timerTenths += 1;
+        timerDisplay.innerHTML = formatTimeSeconds(timerTenths) + '<span style="font-size: 1.4rem;">s</span>';
+      }, 100);
+    }
+
+    async function stopAndSaveWorkout() {
+      isTracking = false;
+      isCameraRunning = false;
+      clearInterval(timerInterval);
+      stopBtn.disabled = true;
+      statusAnnouncer.innerText = "SAVING RESULT...";
+      statusAnnouncer.style.color = "#f59e0b";
+
+      if (currentStream) {
+        currentStream.getTracks().forEach(function(t) { t.stop(); });
+        currentStream = null;
+      }
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+
+      var totalSeconds = (timerTenths / 10).toFixed(1);
+
+      fetch("/api/save/modified_pushup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: parseInt(urlParams.get('session_id')) || 1,
+          reps: repCount,
+          duration_sec: Math.round(timerTenths / 10),
+          notes: "Time: " + totalSeconds + "s"
+        })
+      }).catch(function() {});
+
+      if (window.opener && !window.opener.closed) {
+        var syncPayload = {
+          type: "AI_SYNC_DATA",
+          exerciseType: "modified_pushup",
+          student_id: studentId,
+          reps: repCount,
+          score: repCount,
+          duration_sec: totalSeconds,
+          formatted_time: totalSeconds + "s"
+        };
+
+        window.opener.postMessage(syncPayload, "*");
+        showToast("Synced " + repCount + " reps! Closing...");
+        setTimeout(function() { window.close(); }, 1200);
+      } else {
+        showToast("Completed " + repCount + " reps in " + totalSeconds + "s!");
+        startBtn.disabled = false;
+        statusAnnouncer.innerText = "TEST FINISHED";
+      }
+    }
+  </script>
+</body>
+</html>

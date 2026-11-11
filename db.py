@@ -330,6 +330,20 @@ CREATE TABLE IF NOT EXISTS bench_press (
     recorded_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── Modified Push-Up tracker (live site page) ─────────────────────────────
+-- The in-browser tracker at /modified_pushup_tracker counts on the phone and
+-- syncs to the website itself; it also posts its count here. Same columns as
+-- the table already on the live server.
+CREATE TABLE IF NOT EXISTS modified_pushup (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    reps         INTEGER NOT NULL,
+    duration_sec INTEGER,
+    notes        TEXT,
+    rating       TEXT,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ── Modified Thomas Test ──────────────────────────────────────────────────
 -- One trial per leg (Brockport fig. 5.28): lying on the back, hip 28 cm from
 -- the table edge, the other knee pulled to the chest. The coach scores each
@@ -997,6 +1011,25 @@ class GoForFitDB:
                         duration_sec, end_reason, rating)
                    VALUES (?,?,?,?,?,?)""",
                 (session_id, reps, sex, duration_sec, end_reason, rating),
+            )
+            return cur.lastrowid
+
+    # ── Modified Push-Up tracker ─────────────────────────────────────────
+
+    def save_modified_pushup(
+        self,
+        session_id: int,
+        reps: int,
+        duration_sec: int = None,
+        notes: str = None,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO modified_pushup (session_id, reps, duration_sec,
+                        notes, rating)
+                   VALUES (?,?,?,?,?)""",
+                (session_id, reps, duration_sec, notes, rating),
             )
             return cur.lastrowid
 
