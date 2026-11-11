@@ -3,7 +3,7 @@ Logic checks for website links that name the test in the path - no camera,
 no participant.
 
 The website opens a test as /fms/<test_id>?id=...&name=...&roll=..., while the
-test page lives at /screen3?test=<test_id>. Such a link is sent on to screen3
+camera page lives at /screen4?test=<test_id>. Such a link is sent on to screen4
 with every query value kept; anything that is not a test id stays Not Found.
 
       python3 tests/test_test_link.py
@@ -32,11 +32,11 @@ def _go(path):
     return _client.get(path, follow_redirects=False)
 
 
-def test_website_link_goes_to_screen3_with_every_value():
+def test_website_link_goes_to_screen4_with_every_value():
     r = _go("/isometric_push_up?" + WEBSITE_QUERY)
     assert r.status_code == 307, r.status_code
     loc = urlsplit(r.headers["location"])
-    assert loc.path == "screen3", loc
+    assert loc.path == "screen4", loc
     assert dict(parse_qsl(loc.query)) == dict(parse_qsl(WEBSITE_QUERY)), loc.query
 
 
@@ -54,7 +54,7 @@ def test_path_test_id_wins_over_a_different_query_test():
 def test_link_without_query_still_opens_the_test():
     r = _go("/wheelchair_ramp")
     assert r.status_code == 307, r.status_code
-    assert r.headers["location"] == "screen3?test=wheelchair_ramp", r.headers["location"]
+    assert r.headers["location"] == "screen4?test=wheelchair_ramp", r.headers["location"]
 
 
 def test_every_test_id_has_a_link():

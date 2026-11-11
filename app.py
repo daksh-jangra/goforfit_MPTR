@@ -4308,17 +4308,20 @@ def save_modified_pushup(b: ModifiedPushUpSave):
 
 # ── Website links that name the test in the path ──────────────────────────
 # The website opens a test as /fms/<test_id>?id=...&name=...&roll=..., but the
-# test page lives at /screen3?test=<test_id>. Send those links on to screen3
-# with every query value kept. The redirect is relative ("screen3?...") so it
-# stays under /fms/ behind the proxy. Only known test ids match, and this is
-# declared last so it never shadows another page.
+# camera page lives at /screen4?test=<test_id>. Send those links on to screen4,
+# the page the website's other links open directly, with every query value
+# kept, so the student the website picked comes along (screen3 would ask the
+# coach to pick a student again from this server's own roster). The redirect
+# is relative ("screen4?...") so it stays under /fms/ behind the proxy. Only
+# known test ids match, and this is declared last so it never shadows another
+# page.
 @app.get("/{test_id}")
 def test_link(test_id: str, request: Request):
     if test_id not in TESTS:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     params = [(k, v) for k, v in request.query_params.multi_items() if k != "test"]
     query = urlencode([("test", test_id)] + params)
-    return RedirectResponse(f"screen3?{query}", status_code=307)
+    return RedirectResponse(f"screen4?{query}", status_code=307)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
