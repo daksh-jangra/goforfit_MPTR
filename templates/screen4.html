@@ -2002,6 +2002,52 @@
           try { await fetch(`/api/stop/${testId}`, { method: 'POST' }); } catch(e) {}
       }
 
+      // What STOP sends when a test has no result. Not here: Wingspan and
+      // BMI (see NO_ZERO_ON_STOP), Target Stretch (not synced yet) and the
+      // two-camera runs.
+      const ZERO_ON_STOP = {
+          curl_up:           { curlUpScore: 0 },
+          pull_up:           { pullUpScore: 0 },
+          full_pull_up:      { fullPullUpScore: 0 },
+          wall_toss:         { wallTossScore: 0 },
+          sit_reach:         { sitReachScore: 0 },
+          trunk_lift:        { trunkLiftScore: 0, trunkLiftTrial1Cm: 0, trunkLiftTrial1Mm: 0 },
+          reverse_curl:      { reverseCurlScore: 0 },
+          shoulder_stretch:  { shoulderStretchScore: 0 },
+          isometric_push_up: { isometricPushUpScore: 0 },
+          seated_push_up:    { seatedPushUpScore: 0 },
+          dumbbell_press:    { dumbbellPressScore: 0 },
+          push_up:           { pushUpScore: 0 },
+          modified_curl_up:  { modifiedCurlUpScore: 0 },
+          bench_press:       { benchPressScore: 0 },
+          modified_apley:    { modifiedApleyTestScore: 0 },
+          wheelchair_ramp:   { wheelchairRampTestScore: 0 },
+          vertical_jump:     { verticalJumpScore: 0 },
+      };
+      const NO_ZERO_ON_STOP = new Set(['wingspan', 'bmi']);
+
+      function showNoMeasurement() {
+          let box = document.getElementById('no-measure-box');
+          if (!box) {
+              box = document.createElement('div');
+              box.id = 'no-measure-box';
+              box.className = 'fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-6';
+              box.innerHTML = `
+                <div class="bg-white text-black rounded-2xl p-5 max-w-sm w-full text-center shadow-2xl">
+                  <div class="text-lg font-bold mb-1">No measurement</div>
+                  <div class="text-sm mb-4">The camera did not get a reading. Press START and try again.</div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button id="nm-retry" class="bg-emerald-500 active:bg-emerald-700 text-white font-bold py-2.5 rounded-xl">Try again</button>
+                    <button id="nm-close" class="bg-gray-300 active:bg-gray-400 text-black font-bold py-2.5 rounded-xl">Close</button>
+                  </div>
+                </div>`;
+              document.body.appendChild(box);
+              box.querySelector('#nm-retry').onclick = () => box.classList.add('hidden');
+              box.querySelector('#nm-close').onclick = () => window.close();
+          }
+          box.classList.remove('hidden');
+      }
+
       async function handleStopClick() {
           if (runActive) { runActive = false; }
           if (engineCfg) stopFeed();
@@ -2015,9 +2061,19 @@
               } catch (e) {}
           }
 
-          const fields = (engineCfg && engineCfg.syncFields && latestState)
+          let fields = (engineCfg && engineCfg.syncFields && latestState)
               ? engineCfg.syncFields(latestState)
               : null;
+
+          // The owner's rule: a test not done properly scores 0, so STOP
+          // with no result sends 0 and the popup closes as usual. Wingspan
+          // and BMI measure the body, where 0 cm would be a false
+          // measurement, so they say so and wait instead.
+          if (!fields && ZERO_ON_STOP[testId]) {
+              fields = { ...ZERO_ON_STOP[testId] };
+          } else if (!fields && NO_ZERO_ON_STOP.has(testId)) {
+              showNoMeasurement();
+          }
 
           console.log("Calculated sync payload:", fields);
 
