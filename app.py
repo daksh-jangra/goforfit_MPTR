@@ -19,6 +19,7 @@ Usage:
 Interactive API docs (new, courtesy of FastAPI): http://localhost:5000/docs
 """
 
+
 import os
 # ── Force OpenCV into headless mode BEFORE cv2 is imported anywhere ────────
 # Without this, OpenCV's Qt/GTK backend opens a blank window the moment
