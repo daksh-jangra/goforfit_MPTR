@@ -2042,28 +2042,41 @@
                   </div>
                 </div>`;
               document.body.appendChild(box);
-              box.querySelector('#nm-retry').onclick = () => box.classList.add('hidden');
-              box.querySelector('#nm-close').onclick = () => window.close();
+              box.querySelector('#nm-retry').onclick = async () => {
+                  box.classList.add('hidden');
+                  await launchEngine();
+              };
+              box.querySelector('#nm-close').onclick = () => {
+                  box.classList.add('hidden');
+                  saveAndExit();
+              };
           }
           box.classList.remove('hidden');
       }
 
       async function handleStopClick() {
+          const stopButton = document.querySelector('button[onclick="handleStopClick()"]');
+          if (stopButton) stopButton.disabled = true;
           if (runActive) { runActive = false; }
           if (engineCfg) stopFeed();
           try { await fetch(`/api/stop/${testId}`, { method: 'POST' }); }
           catch (e) { console.error('Stop system error:', e); }
 
+          let fields = null;
           if (engineCfg && engineCfg.stateUrl) {
               try {
                   const fresh = await fetch(engineCfg.stateUrl).then(r => r.json());
                   if (fresh) latestState = fresh;
-              } catch (e) {}
+              } catch (e) { console.warn('Could not fetch final test state:', e); }
           }
 
-          let fields = (engineCfg && engineCfg.syncFields && latestState)
-              ? engineCfg.syncFields(latestState)
-              : null;
+          try {
+              fields = (engineCfg && engineCfg.syncFields && latestState)
+                  ? engineCfg.syncFields(latestState)
+                  : null;
+          } catch (e) {
+              console.error('Could not calculate final sync fields:', e);
+          }
 
           // The owner's rule: a test not done properly scores 0, so STOP
           // with no result sends 0 and the popup closes as usual. Wingspan
@@ -2071,8 +2084,6 @@
           // measurement, so they say so and wait instead.
           if (!fields && ZERO_ON_STOP[testId]) {
               fields = { ...ZERO_ON_STOP[testId] };
-          } else if (!fields && NO_ZERO_ON_STOP.has(testId)) {
-              showNoMeasurement();
           }
 
           console.log("Calculated sync payload:", fields);
@@ -2103,14 +2114,40 @@
                   ...fields,
               }, 'https://nep.goforfit.in');
 
-              setTimeout(() => { window.close(); }, 500);
+              // Let the parent receive the result before navigating back.
           } else if (fields && !window.opener) {
               console.warn('No window.opener — page not opened by Laravel, skipping sync.');
           } else if (!fields) {
               console.warn(`No result available yet for '${testId}' — skipping Laravel sync.`);
           }
 
-          saveAndExit();
+          try {
+              await saveAndExit();
+          } finally {
+              if (fields && window.opener) {
+                  setTimeout(returnToStudentSelection, 500);
+              } else {
+                  returnToStudentSelection();
+              }
+          }
+      }
+
+      function returnToStudentSelection() {
+          const returnTo = urlParams.get('return_to');
+          if (returnTo && new URL(returnTo, window.location.origin).origin === window.location.origin) {
+              window.location.replace(returnTo);
+              return;
+          }
+
+          // Direct screen4 links arrive with the student identity in this URL.
+          // Rebuild screen3's query so it can restore the same student.
+          const params = new URLSearchParams();
+          params.set('test', testId);
+          for (const key of ['id', 'name', 'roll', 'class_info', 'trainerId', 'traiName', 'exerdseName']) {
+              const value = urlParams.get(key);
+              if (value !== null) params.set(key, value);
+          }
+          window.location.replace(`/screen3?${params.toString()}`);
       }
 
       if (engineCfg) buildActionRow();

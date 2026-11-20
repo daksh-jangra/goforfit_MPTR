@@ -359,14 +359,11 @@
             try {
                 const r = await fetch('/api/classes');
                 const d = await r.json();
+                const classes = d.classes || [];
                 sel.innerHTML = '<option value="">-- Select Class --</option>';
-                (d.classes || []).forEach(c => sel.add(new Option(c, c)));
-                if (previous) sel.value = previous;
-                if (!(d.classes || []).length) {
-                    // Empty roster is the first-run state, not an error — say so
-                    // where the coach is already looking.
-                    sel.innerHTML = '<option value="">-- No students yet --</option>';
-                }
+                classes.forEach(c => sel.add(new Option(c, c)));
+                if (previous && classes.includes(previous)) sel.value = previous;
+                if (!classes.length) sel.innerHTML = '<option value="">-- No students yet --</option>';
             } catch (e) { console.error('Could not load classes:', e); }
         }
 
@@ -385,6 +382,31 @@
                 roster.forEach(s => sel.add(new Option(
                     s.roll_no ? `${s.name} (roll ${s.roll_no})` : s.name, String(s.id))));
             } catch (e) { console.error('Could not load students:', e); }
+
+            // If an AI/direct link carries a selected student missing from this
+            // server's roster database, add it so the selection survives return.
+            const query = new URLSearchParams(window.location.search);
+            const studentId = query.get('id');
+            const studentName = query.get('name');
+            const studentClass = query.get('class_info');
+            if (studentId && studentName && studentClass === cls && !roster.some(s => String(s.id) === studentId)) {
+                const student = {
+                    id: Number(studentId),
+                    name: studentName,
+                    grade: query.get('class_info') || cls,
+                    roll_no: query.get('roll') || '',
+                    reg_no: query.get('reg_no') || '',
+                };
+                roster.push(student);
+                sel.add(new Option(
+                    student.roll_no ? `${student.name} (roll ${student.roll_no})` : student.name,
+                    studentId
+                ));
+            }
+            const returnStudentId = query.get('id');
+            if (studentClass === cls && returnStudentId && [...sel.options].some(option => option.value === returnStudentId)) {
+                sel.value = returnStudentId;
+            }
             loadStudentMeta();
         }
 
@@ -1190,14 +1212,38 @@
             btn.disabled = true;
             btn.innerText = 'Saving...';
 
-            // Resolve session_id: prefer what's in pendingResult, fall back to URL param
-            const resolvedSid = pendingResult.session_id
+            // The dashboard selection can identify a student without an AI-created
+            // session (manual entry and direct links). Create one on demand so the
+            // saved result always has an owner session.
+            let resolvedSid = pendingResult.session_id
                 || (urlP.get('session_id') ? parseInt(urlP.get('session_id')) : null);
             if (!resolvedSid) {
-                showSaveMessage('No student session. Go back and select a student first.', false);
-                btn.disabled = false;
-                btn.innerText = 'Save to Database';
-                return;
+                let student = currentStudent();
+                if (!student) {
+                    const directStudent = new URLSearchParams(window.location.search);
+                    if (directStudent.has('id') && directStudent.has('name')) {
+                        student = {
+                            id: Number(directStudent.get('id')),
+                            name: directStudent.get('name'),
+                            grade: directStudent.get('class_info') || document.getElementById('class-select').value,
+                            roll_no: directStudent.get('roll') || '',
+                            reg_no: '',
+                        };
+                    }
+                }
+                if (!student) {
+                    showSaveMessage('Select a student first.', false);
+                    btn.disabled = false;
+                    btn.innerText = 'Save to Database';
+                    return;
+                }
+                resolvedSid = await newSessionFor(student);
+                if (!resolvedSid) {
+                    showSaveMessage('Could not create a session for this student.', false);
+                    btn.disabled = false;
+                    btn.innerText = 'Save to Database';
+                    return;
+                }
             }
             const payload = Object.assign({}, pendingResult, { session_id: resolvedSid });
 
@@ -1327,8 +1373,19 @@
         }
 
         async function goToAI() {
-            const cls = document.getElementById('class-select').value;
-            const student = currentStudent();
+            let cls = document.getElementById('class-select').value;
+            let student = currentStudent();
+            const directStudent = new URLSearchParams(window.location.search);
+            if (!student && directStudent.has('id') && directStudent.has('name')) {
+                student = {
+                    id: Number(directStudent.get('id')),
+                    name: directStudent.get('name'),
+                    grade: directStudent.get('class_info') || cls,
+                    roll_no: directStudent.get('roll') || '',
+                    reg_no: '',
+                };
+                cls = student.grade;
+            }
             if(!student) return alert('Select a student first.');
 
             // Only params the launch endpoint actually insists on block the
@@ -1346,6 +1403,11 @@
             btn.disabled = true;
             btn.innerText = 'Starting…';
             const sessionId = await newSessionFor(student);
+            if (!sessionId) {
+                btn.disabled = false;
+                btn.innerText = 'Switch to AI';
+                return alert('Could not create a session for this student. Please try again.');
+            }
             btn.disabled = false;
             btn.innerText = 'Switch to AI';
 
@@ -1363,10 +1425,28 @@
             {% for param in test.params %}
             if ({{ param.name }}) params.set('{{ param.name }}', {{ param.name }});
             {% endfor %}
+            // Preserve the selected student and test setup when the AI screen returns.
+            params.set('return_to', window.location.href);
             window.location.href = `/screen4?${params.toString()}`;
         }
 
         const urlP = new URLSearchParams(window.location.search);
+        const returnStudentId = urlP.get('id');
+        async function restoreReturnedStudent() {
+            if (!returnStudentId) return;
+            const cls = urlP.get('class_info');
+            const classSelect = document.getElementById('class-select');
+            if (cls && ![...classSelect.options].some(option => option.value === cls)) {
+                classSelect.add(new Option(cls, cls));
+            }
+            if (cls) classSelect.value = cls;
+            await updateStudents();
+            const studentSelect = document.getElementById('student-select');
+            if ([...studentSelect.options].some(option => option.value === returnStudentId)) {
+                studentSelect.value = returnStudentId;
+                loadStudentMeta();
+            }
+        }
         if (TEST_TIMED && urlP.has('returnMin')) {
             document.getElementById('min').value = urlP.get('returnMin');
             document.getElementById('sec').value = urlP.get('returnSec');
@@ -1374,7 +1454,18 @@
         }
         // Load immediately, then retry after 1 s so we catch results that
         // the server stages right as the engine stops (tiny race window).
-        loadClasses();
+        loadClasses().then(async () => {
+            const query = new URLSearchParams(window.location.search);
+            const studentClass = query.get('class_info');
+            if (studentClass) {
+                const classSelect = document.getElementById('class-select');
+                if ([...classSelect.options].some(option => option.value === studentClass)) {
+                    classSelect.value = studentClass;
+                    await updateStudents();
+                }
+            }
+            await restoreReturnedStudent();
+        });
         loadPendingResult();
         setTimeout(loadPendingResult, 1000);
         loadSavedResults();
