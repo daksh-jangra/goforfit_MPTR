@@ -2002,9 +2002,8 @@
           try { await fetch(`/api/stop/${testId}`, { method: 'POST' }); } catch(e) {}
       }
 
-      // What STOP sends when a test has no result. Not here: Wingspan and
-      // BMI (see NO_ZERO_ON_STOP), Target Stretch (not synced yet) and the
-      // two-camera runs.
+      // What STOP sends when a test has no result. Wingspan and BMI are
+      // handled manually so the page stays open for someone to save the score.
       const ZERO_ON_STOP = {
           curl_up:           { curlUpScore: 0 },
           pull_up:           { pullUpScore: 0 },
@@ -2024,35 +2023,7 @@
           wheelchair_ramp:   { wheelchairRampTestScore: 0 },
           vertical_jump:     { verticalJumpScore: 0 },
       };
-      const NO_ZERO_ON_STOP = new Set(['wingspan', 'bmi']);
-
-      function showNoMeasurement() {
-          let box = document.getElementById('no-measure-box');
-          if (!box) {
-              box = document.createElement('div');
-              box.id = 'no-measure-box';
-              box.className = 'fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-6';
-              box.innerHTML = `
-                <div class="bg-white text-black rounded-2xl p-5 max-w-sm w-full text-center shadow-2xl">
-                  <div class="text-lg font-bold mb-1">No measurement</div>
-                  <div class="text-sm mb-4">The camera did not get a reading. Press START and try again.</div>
-                  <div class="grid grid-cols-2 gap-2">
-                    <button id="nm-retry" class="bg-emerald-500 active:bg-emerald-700 text-white font-bold py-2.5 rounded-xl">Try again</button>
-                    <button id="nm-close" class="bg-gray-300 active:bg-gray-400 text-black font-bold py-2.5 rounded-xl">Close</button>
-                  </div>
-                </div>`;
-              document.body.appendChild(box);
-              box.querySelector('#nm-retry').onclick = async () => {
-                  box.classList.add('hidden');
-                  await launchEngine();
-              };
-              box.querySelector('#nm-close').onclick = () => {
-                  box.classList.add('hidden');
-                  saveAndExit();
-              };
-          }
-          box.classList.remove('hidden');
-      }
+      const MANUAL_SAVE_TESTS = new Set(['wingspan', 'bmi']);
 
       async function handleStopClick() {
           const stopButton = document.querySelector('button[onclick="handleStopClick()"]');
@@ -2078,15 +2049,18 @@
               console.error('Could not calculate final sync fields:', e);
           }
 
-          // The owner's rule: a test not done properly scores 0, so STOP
-          // with no result sends 0 and the popup closes as usual. Wingspan
-          // and BMI measure the body, where 0 cm would be a false
-          // measurement, so they say so and wait instead.
+          // A test with no result sends 0 unless zero would be a false
+          // measurement, in which case Wingspan/BMI stay open for manual save.
           if (!fields && ZERO_ON_STOP[testId]) {
               fields = { ...ZERO_ON_STOP[testId] };
           }
 
           console.log("Calculated sync payload:", fields);
+
+          if (MANUAL_SAVE_TESTS.has(testId)) {
+              saveAndExit();
+              return;
+          }
 
           const EXERCISE_TYPE = {
               wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp', full_pull_up:'FullPullUp',
@@ -2117,7 +2091,7 @@
               // Let the parent receive the result before navigating back.
           } else if (fields && !window.opener) {
               console.warn('No window.opener — page not opened by Laravel, skipping sync.');
-          } else if (!fields) {
+          } else {
               console.warn(`No result available yet for '${testId}' — skipping Laravel sync.`);
           }
 
