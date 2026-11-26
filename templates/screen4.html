@@ -2002,8 +2002,7 @@
           try { await fetch(`/api/stop/${testId}`, { method: 'POST' }); } catch(e) {}
       }
 
-      // What STOP sends when a test has no result. Wingspan and BMI are
-      // handled manually so the page stays open for someone to save the score.
+      // Fallback scores for tests where an incomplete test counts as zero.
       const ZERO_ON_STOP = {
           curl_up:           { curlUpScore: 0 },
           pull_up:           { pullUpScore: 0 },
@@ -2023,8 +2022,6 @@
           wheelchair_ramp:   { wheelchairRampTestScore: 0 },
           vertical_jump:     { verticalJumpScore: 0 },
       };
-      const MANUAL_SAVE_TESTS = new Set(['wingspan', 'bmi']);
-
       async function handleStopClick() {
           const stopButton = document.querySelector('button[onclick="handleStopClick()"]');
           if (stopButton) stopButton.disabled = true;
@@ -2049,18 +2046,12 @@
               console.error('Could not calculate final sync fields:', e);
           }
 
-          // A test with no result sends 0 unless zero would be a false
-          // measurement, in which case Wingspan/BMI stay open for manual save.
+          // A test with no result sends 0 only when its fallback is defined.
           if (!fields && ZERO_ON_STOP[testId]) {
               fields = { ...ZERO_ON_STOP[testId] };
           }
 
           console.log("Calculated sync payload:", fields);
-
-          if (MANUAL_SAVE_TESTS.has(testId)) {
-              saveAndExit();
-              return;
-          }
 
           const EXERCISE_TYPE = {
               wingspan:'Wingspan', bmi:'BMI', curl_up:'CurlUp', pull_up:'PullUp', full_pull_up:'FullPullUp',
@@ -2098,7 +2089,11 @@
           try {
               await saveAndExit();
           } finally {
-              if (fields && window.opener) {
+              if (testId === 'wingspan' || testId === 'bmi') {
+                  if (fields && window.opener) {
+                      setTimeout(() => { window.close(); }, 500);
+                  }
+              } else if (fields && window.opener) {
                   setTimeout(returnToStudentSelection, 500);
               } else {
                   returnToStudentSelection();

@@ -317,8 +317,22 @@
                 const classes = d.classes || [];
                 sel.innerHTML = '<option value="">-- Select Class --</option>';
                 classes.forEach(c => sel.add(new Option(c, c)));
-                if (previous && classes.includes(previous)) sel.value = previous;
-                if (!classes.length) sel.innerHTML = '<option value="">-- No students yet --</option>';
+                if (previous && classes.includes(previous)) {
+                    sel.value = previous;
+                } else if (urlP.get('class_info') && classes.includes(urlP.get('class_info'))) {
+                    sel.value = urlP.get('class_info');
+                    await updateStudents();
+                    const studentSel = document.getElementById('student-select');
+                    if (urlP.get('id')) {
+                        studentSel.value = urlP.get('id');
+                        loadStudentMeta();
+                    }
+                }
+                if (!classes.length) {
+                    // Empty roster is the first-run state, not an error — say so
+                    // where the coach is already looking.
+                    sel.innerHTML = '<option value="">-- No students yet --</option>';
+                }
             } catch (e) { console.error('Could not load classes:', e); }
         }
 
