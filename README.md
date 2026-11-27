@@ -110,9 +110,14 @@ and the browser polls for the live result.
 | `vertical_jump` | Vertical Jump | Power | Phone | cm |
 | `run_600m` | 600 m Run | Endurance | One camera | seconds |
 | `shuttle_run` | 10 m Shuttle Run | Agility | Two IP cameras | seconds |
+| `pacer` | PACER (15 m / 20 m) | Aerobic Functioning | Two IP cameras | completed laps |
 | `dash_50m` | 50 m Dash | Speed | Two IP cameras | seconds |
 
 Notes:
+- `pacer` counts alternating line crossings on two camera feeds. Select 15 m or 20 m,
+  play the PACER audio recording separately, and stop the app after the permitted
+  recovery beeps when the participant cannot keep pace. The coach determines when
+  the participant has missed the beeps; the app does not detect PACER audio.
 - For `sit_reach`, enter the student's hip-to-ankle length on the setup screen first.
   Press MARK with the arms straight out in front, fingertips together: the reach
   is measured from there, along the legs.

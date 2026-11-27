@@ -176,6 +176,7 @@
           <option value="full_pull_up">🏋️ Pull-Up</option>
           <option value="wall_toss">🎯 Wall Toss</option>
           <option value="shuttle_run">🏃 Shuttle Run</option>
+          <option value="pacer">🏃 PACER (15 m / 20 m)</option>
           <option value="dash_50m">⚡ 50 m Dash</option>
           <option value="sit_reach">🤸 Sit &amp; Reach</option>
           <option value="vertical_jump">🦘 Vertical Jump</option>
@@ -352,6 +353,7 @@ const TEST_META = {
   full_pull_up: { label: '🏋️ Pull-Up',        unit: 'reps',    extraFn: () => '' },
   wall_toss:   { label: '🎯 Wall Toss',      unit: 'catches', extraFn: () => '' },
   shuttle_run: { label: '🏃 Shuttle Run',    unit: 'sec',     extraFn: () => '' },
+  pacer:       { label: '🏃 PACER',           unit: 'laps',    extraFn: r => r.rating ? ` · ${r.rating}` : '' },
   dash_50m:    { label: '⚡ 50 m Dash',      unit: 'sec',     extraFn: () => '' },
   sit_reach:   { label: '🤸 Sit & Reach',    unit: 'cm',      extraFn: () => '' },
   vertical_jump: { label: '🦘 Vertical Jump', unit: 'cm', extraFn: () => '' },

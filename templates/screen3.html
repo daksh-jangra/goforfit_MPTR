@@ -97,7 +97,15 @@
                     {{ param.label }}{% if not param.get('required', True) %}<span class="font-normal text-gray-400"> - optional</span>{% endif %}
                 </label>
                 <div class="flex gap-2">
+                    {% if param.options %}
+                    <select id="{{ param.name }}" class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
+                        {% for option in param.options %}
+                        <option value="{{ option.value }}">{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
                     <input id="{{ param.name }}" type="{{ param.type }}" min="{{ param.min }}" max="{{ param.max }}" placeholder="{{ param.placeholder }}" class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-indigo-500 text-gray-600">
+                    {% endif %}
                     {% if param.camera %}
                     <button type="button" id="test-btn-{{ param.name }}" onclick="testCamera('{{ param.name }}')"
                             class="shrink-0 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 text-xs font-semibold px-3 rounded">
@@ -226,7 +234,7 @@
             </div>
             {% else %}
             <div class="max-w-md mx-auto w-full">
-                <input id="override-input" type="number" inputmode="decimal" step="0.1" min="1"
+                <input id="override-input" type="number" inputmode="decimal" step="{{ '1' if test.id == 'pacer' else '0.1' }}" min="{{ '0' if test.id == 'pacer' else '1' }}"
                        placeholder="Enter value{{ ' (' + test.unit + ')' if test.unit else '' }}"
                        class="w-full border border-gray-300 rounded-lg px-4 py-4 text-2xl font-semibold text-center text-indigo-950 bg-white focus:outline-none focus:border-indigo-500">
                 <p id="override-msg" class="text-xs text-amber-700 mt-1.5 text-center hidden"></p>
@@ -462,6 +470,7 @@
         // Maps each test to the primary numeric field shown in the review panel.
         const RESULT_FIELD_MAP = {
             shuttle_run: 'time_sec',
+            pacer:       'completed_laps',
             dash_50m:    'time_sec',
             curl_up:     'reps',
             pull_up:     'reps',
@@ -485,6 +494,7 @@
         };
         const RESULT_UNIT_MAP = {
             shuttle_run: 's',
+            pacer:       'laps',
             dash_50m:    's',
             curl_up:     'reps',
             pull_up:     'reps',
@@ -532,7 +542,7 @@
         // Push-up: a student who can't do one correct push-up.
         // Modified curl-up: a student who can't do one correct curl-up.
         // Bench press: a student who can't press the bar up once.
-        const ZERO_OK = new Set(['pull_up', 'full_pull_up', 'isometric_push_up',
+        const ZERO_OK = new Set(['pacer', 'pull_up', 'full_pull_up', 'isometric_push_up',
                                  'seated_push_up', 'dumbbell_press', 'push_up',
                                  'modified_curl_up', 'bench_press']).has(testId);
         const badValue = (v) => !Number.isFinite(v) || (ZERO_OK ? v < 0 : v <= 0);
@@ -797,12 +807,14 @@
                 // Single-input layout: drop the AI value straight into the
                 // editable box so the user can review or correct it inline.
                 const val = pendingResult[field];
+                const pacerDistance = testId === 'pacer' && pendingResult.distance_m
+                    ? ` (${pendingResult.distance_m} m)` : '';
                 if (val !== undefined && val !== null) {
                     document.getElementById('override-input').value = val;
                 }
                 document.getElementById('pending-summary').innerHTML =
                     val !== undefined && val !== null
-                        ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}</span> - edit above if it looks wrong.`
+                        ? `AI reading: <span class="font-semibold text-indigo-950">${val} ${unit}${pacerDistance}</span> - edit above if it looks wrong.`
                         : `<span class="text-gray-400">${NO_READING_MSG}</span>`;
                 return;
             }
@@ -1089,6 +1101,7 @@
                     tr.className = 'border-b border-gray-100';
                     const ts = r.recorded_at || r.created_at || r.timestamp || '-';
                     let val = (r[field] !== undefined && r[field] !== null) ? r[field] : '-';
+                    if (testId === 'pacer' && val !== '-') val = `${val} laps (${r.distance_m} m)`;
                     if (IS_PASS_FAIL && val !== '-') val = passFailLabel(val);
                     if (IS_TST) val = `${TST_JOINTS[r.joint] || r.joint}: L ${r.left_score ?? '-'} / R ${r.right_score ?? '-'}`;
                     tr.innerHTML = `<td class="py-1.5 pr-3 text-gray-500">${ts}</td><td class="py-1.5 pr-3 font-semibold text-indigo-950">${val}</td>`;

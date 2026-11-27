@@ -108,12 +108,12 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
     print("=" * 70)
 
 try:
-    from dual_feed_engines import ShuttleRunEngine, Dash50mEngine, Run600mEngine
+    from dual_feed_engines import ShuttleRunEngine, PacerEngine, Dash50mEngine, Run600mEngine
 except Exception as _e:  # pragma: no cover — surfaced to the browser, see below
-    ShuttleRunEngine = Dash50mEngine = Run600mEngine = None
+    ShuttleRunEngine = PacerEngine = Dash50mEngine = Run600mEngine = None
     DUAL_FEED_IMPORT_ERROR = f"{_e.__class__.__name__}: {_e}"
     print("=" * 70)
-    print("[FATAL] Dual-camera engines failed to import — shuttle_run/dash_50m/")
+    print("[FATAL] Dual-camera engines failed to import — shuttle_run/pacer/dash_50m/")
     print("        run_600m will be UNAVAILABLE in the browser until fixed.")
     print("        Root cause:")
     print("-" * 70)
@@ -123,6 +123,7 @@ except Exception as _e:  # pragma: no cover — surfaced to the browser, see bel
 _wingspan_engine = None      
 _vertical_jump_engine = None
 _shuttle_engine = None
+_pacer_engine = None
 _dash50m_engine = None
 _run600m_engine = None
 _bmi_engine = None           
@@ -446,6 +447,56 @@ TESTS = {
             },
         ],
         "timed":  True,
+        "live_feed": True,
+    },
+    "pacer": {
+        "id":          "pacer",
+        "title":       "PACER (15 m / 20 m)",
+        "subtitle":    "Progressive Aerobic Cardiovascular Endurance Run",
+        "icon":        "🏃",
+        "category":    "Aerobic Functioning",
+        "script":      "pacer",
+        "description": [
+            "Run back and forth between two lines in time with the PACER audio recording.",
+            "The cameras count each completed line-to-line lap. The coach stops the test "
+            "when the participant can no longer keep pace after the allowed recovery beeps.",
+            "The score is the number of completed laps; a 15 m score is distinct from a 20 m score.",
+        ],
+        "tip": [
+            "Use a flat, nonslip surface and mark the selected distance accurately.",
+            "Place one camera at each end, with the participant's feet and turn line visible.",
+            "Allow about 1.0–1.5 m of running width per participant; this camera setup scores one runner.",
+            "Play the PACER audio recording separately. This app counts crossings but does not play "
+            "the recording or detect missed beeps; the coach stops the test after the allowed recovery beeps.",
+        ],
+        "params": [
+            {
+                "name":        "cam_a_url",
+                "label":       "Camera A URL/Index (start line)",
+                "type":        "text",
+                "placeholder": "e.g. http://192.168.1.74:4747/video or 0",
+                "arg":         "--cam-a",
+                "camera":      True,
+            },
+            {
+                "name":        "cam_b_url",
+                "label":       "Camera B URL/Index (far line)",
+                "type":        "text",
+                "placeholder": "e.g. http://192.168.1.75:4747/video or 1",
+                "arg":         "--cam-b",
+                "camera":      True,
+            },
+            {
+                "name":        "distance_m",
+                "label":       "PACER distance",
+                "type":        "select",
+                "options":     [
+                    {"value": "20", "label": "20 metres"},
+                    {"value": "15", "label": "15 metres"},
+                ],
+            },
+        ],
+        "unit":      "laps",
         "live_feed": True,
     },
     "dash_50m": {
@@ -1284,6 +1335,8 @@ def _is_running(test_id: str) -> bool:
         return _wheelchair_ramp_engine.is_running()
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         return _shuttle_engine.is_running()
+    if test_id == "pacer" and _pacer_engine is not None:
+        return _pacer_engine.is_running()
     if test_id == "dash_50m" and _dash50m_engine is not None:
         return _dash50m_engine.is_running()
     if test_id == "run_600m" and _run600m_engine is not None:
@@ -1365,6 +1418,13 @@ class ShuttleRunSave(BaseModel):
     session_id: Optional[int] = None
     time_sec: Optional[float] = None
     lane: Optional[int] = 1
+    rating: Optional[str] = None
+
+
+class PacerSave(BaseModel):
+    session_id: Optional[int] = None
+    distance_m: Optional[int] = None
+    completed_laps: Optional[int] = None
     rating: Optional[str] = None
 
 
@@ -1756,6 +1816,9 @@ async def launch(test_id: str, request: Request):
     if test_id == "shuttle_run" and ShuttleRunEngine is not None:
         return await _launch_shuttle_run(request)
 
+    if test_id == "pacer" and PacerEngine is not None:
+        return await _launch_pacer(request)
+
     if test_id == "dash_50m" and Dash50mEngine is not None:
         return await _launch_dash_50m(request)
 
@@ -1779,7 +1842,7 @@ async def launch(test_id: str, request: Request):
     # the "camera opens in another window, and Laravel never gets synced"
     # bug reports we've gotten — so refuse instead of silently degrading.
     if cfg.get("live_feed"):
-        is_dual = test_id in ("shuttle_run", "dash_50m", "run_600m")
+        is_dual = test_id in ("shuttle_run", "pacer", "dash_50m", "run_600m")
         detail = DUAL_FEED_IMPORT_ERROR if is_dual else WEB_ENGINES_IMPORT_ERROR
         return JSONResponse(
             {
@@ -2397,6 +2460,40 @@ async def _launch_shuttle_run(request: Request):
     return {"ok": True, "pid": -1, "mode": "live_feed"}
 
 
+async def _launch_pacer(request: Request):
+    global _pacer_engine
+    if _pacer_engine is not None and _pacer_engine.is_running():
+        _pacer_engine.stop()
+
+    body = await _json_body(request)
+    cam_a = body.get("cam_a_url")
+    cam_b = body.get("cam_b_url")
+    distance_m = body.get("distance_m") or 20
+    session_id = body.get("session_id")
+    if not cam_a or not cam_b:
+        return JSONResponse({"ok": False, "error": "cam_a_url and cam_b_url are required"}, status_code=400)
+    try:
+        distance_m = int(distance_m)
+        if distance_m not in (15, 20):
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "distance_m must be 15 or 20"}, status_code=400)
+
+    def _stage(payload: dict):
+        _pending["pacer"] = payload
+
+    try:
+        engine = PacerEngine(cam_a, cam_b, distance_m=distance_m,
+                             session_id=session_id, on_stage=_stage)
+        engine.start()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    _pacer_engine = engine
+    _pending.pop("pacer", None)
+    return {"ok": True, "pid": -1, "mode": "live_feed"}
+
+
 async def _launch_dash_50m(request: Request):
     global _dash50m_engine
     if _dash50m_engine is not None and _dash50m_engine.is_running():
@@ -2474,7 +2571,7 @@ def engine_status():
                                "vertical_jump"],
         "dual_feed_engines_ok": DUAL_FEED_IMPORT_ERROR is None,
         "dual_feed_engines_error": DUAL_FEED_IMPORT_ERROR,
-        "dual_feed_engines_covers": ["shuttle_run", "dash_50m", "run_600m"],
+        "dual_feed_engines_covers": ["shuttle_run", "pacer", "dash_50m", "run_600m"],
     }
 
 
@@ -2614,6 +2711,10 @@ def stop(test_id: str):
     if test_id == "shuttle_run" and _shuttle_engine is not None:
         _shuttle_engine.maybe_finish()  # stage whatever's finished so far
         _shuttle_engine.stop()
+        return {"ok": True}
+    if test_id == "pacer" and _pacer_engine is not None:
+        _pacer_engine.maybe_finish()
+        _pacer_engine.stop()
         return {"ok": True}
     if test_id == "dash_50m" and _dash50m_engine is not None:
         _dash50m_engine.maybe_finish()
@@ -2840,7 +2941,7 @@ async def vertical_jump_frame(request: Request):
 @app.post("/api/run_600m/frame")
 async def run_600m_frame(request: Request):
     # 600m is single-camera, so it takes browser frames like the Group A
-    # tests. shuttle_run/dash_50m stay on their two-IP-camera model.
+    # tests. shuttle_run/pacer/dash_50m stay on their two-IP-camera model.
     return await _receive_frame(_run600m_engine, request)
 
 
@@ -2965,6 +3066,37 @@ def shuttle_run_action(b: DualFeedAction):
     if _shuttle_engine is None or not _shuttle_engine.is_running():
         return JSONResponse({"ok": False, "error": "Shuttle run isn't running"}, status_code=409)
     return _shuttle_engine.action(b.action, b.value)
+
+
+# ── PACER dual-camera live-feed control ──────────────────────────────────
+@app.get("/api/pacer/feed_a")
+def pacer_feed_a():
+    if _pacer_engine is None or not _pacer_engine.is_running():
+        return JSONResponse({"ok": False, "error": "PACER isn't running"}, status_code=409)
+    return StreamingResponse(_dual_feed_gen(lambda: _pacer_engine, "get_jpeg_a")(),
+                              media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/pacer/feed_b")
+def pacer_feed_b():
+    if _pacer_engine is None or not _pacer_engine.is_running():
+        return JSONResponse({"ok": False, "error": "PACER isn't running"}, status_code=409)
+    return StreamingResponse(_dual_feed_gen(lambda: _pacer_engine, "get_jpeg_b")(),
+                              media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/pacer/state")
+def pacer_state():
+    if _pacer_engine is None:
+        return {"ok": True, "running": False}
+    return {"ok": True, **_pacer_engine.get_state()}
+
+
+@app.post("/api/pacer/action")
+def pacer_action(b: DualFeedAction):
+    if _pacer_engine is None or not _pacer_engine.is_running():
+        return JSONResponse({"ok": False, "error": "PACER isn't running"}, status_code=409)
+    return _pacer_engine.action(b.action, b.value)
 
 
 # ── Dash 50m live-feed control ──────────────────────────────────────────
@@ -3887,6 +4019,23 @@ def save_shuttle_run(b: ShuttleRunSave):
         time_sec   = b.time_sec,
         lane       = b.lane if b.lane is not None else 1,
         rating     = b.rating,
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.post("/api/save/pacer")
+def save_pacer(b: PacerSave):
+    if not b.session_id:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    if b.distance_m not in (15, 20):
+        return JSONResponse({"ok": False, "error": "distance_m must be 15 or 20"}, status_code=400)
+    if b.completed_laps is None or b.completed_laps < 0:
+        return JSONResponse({"ok": False, "error": "completed_laps must be a non-negative integer"}, status_code=400)
+    row_id = db.save_pacer(
+        session_id=b.session_id,
+        distance_m=b.distance_m,
+        completed_laps=b.completed_laps,
+        rating=b.rating,
     )
     return {"ok": True, "id": row_id}
 

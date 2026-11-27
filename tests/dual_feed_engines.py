@@ -16,8 +16,9 @@ SECTIONS
   0. DualFeedEngine     shared 2-camera threading / MJPEG / state plumbing
   1. WhistleMixin       optional mic-based start trigger (sounddevice)
   2. ShuttleRunEngine    wraps shuttleruntest.py's per-lane touch-count logic
-  3. Dash50mEngine       wraps sprint_timer.py's finish-crossing logic
-  4. Run600mEngine       wraps 600m_new/ colour-lane lap counting
+  3. PacerEngine         counts alternating PACER line crossings
+  4. Dash50mEngine       wraps sprint_timer.py's finish-crossing logic
+  5. Run600mEngine       wraps 600m_new/ colour-lane lap counting
 
 NOTE: This file reuses each original script's core detection functions
 (imported, not rewritten) exactly like wingspan_web_engine.py reuses
@@ -428,6 +429,163 @@ class ShuttleRunEngine(DualFeedEngine):
         if laps:
             self._staged = True
             self._safe_stage({"session_id": self.session_id, "laps": laps})
+
+
+class PacerLineTracker:
+    """Detects either-direction ankle crossings at one PACER turn line."""
+
+    def __init__(self, end_label, line_y, manager, pose_api):
+        self.end_label = end_label
+        self.line_y = line_y
+        self.manager = manager
+        self.pose = pose_api.Pose(
+            model_complexity=0,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self.ankle_ids = (
+            pose_api.PoseLandmark.LEFT_ANKLE,
+            pose_api.PoseLandmark.RIGHT_ANKLE,
+        )
+        self._prev_side = None
+
+    def process(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self.pose.process(rgb)
+        if not result.pose_landmarks:
+            return
+
+        landmarks = result.pose_landmarks.landmark
+        visible_y = [
+            landmarks[index].y
+            for index in self.ankle_ids
+            if landmarks[index].visibility >= 0.4
+        ]
+        if not visible_y:
+            return
+
+        ankle_y = int(max(visible_y) * frame.shape[0])
+        side = "far" if ankle_y < self.line_y else "near"
+        if self._prev_side is not None and side != self._prev_side:
+            self.manager.register_touch(1, self.end_label)
+        self._prev_side = side
+
+    def close(self):
+        self.pose.close()
+
+
+class PacerEngine(DualFeedEngine):
+    """Counts a single runner's alternating crossings between two PACER lines."""
+
+    def __init__(self, cam_a_url, cam_b_url, distance_m=20, session_id=None, on_stage=None):
+        if int(distance_m) not in (15, 20):
+            raise ValueError("PACER distance must be 15 or 20 metres")
+        super().__init__(cam_a_url, cam_b_url, session_id=session_id, on_stage=on_stage,
+                         distance_m=int(distance_m))
+        import shuttleruntest as srt
+        self._srt = srt
+        self.distance_m = int(distance_m)
+        self.manager = srt.StudentManager(1, touches_required=1_000_000)
+        self._calib_points = {"a": [], "b": []}
+        self.calib = {"a": None, "b": None}
+        self.trackers = {"a": None, "b": None}
+        self.started = False
+        self._staged = False
+
+    def _release_models(self):
+        for tracker in self.trackers.values():
+            if tracker is not None:
+                tracker.close()
+
+    def _build_tracker(self, side, frame_w, frame_h):
+        y = self._calib_points[side][0][1]
+        self.calib[side] = self._srt.Calibration([0, frame_w], y, frame_w, frame_h)
+        if self.trackers[side] is not None:
+            self.trackers[side].close()
+        self.trackers[side] = PacerLineTracker(
+            side.upper(), y, self.manager, self._srt.mp.solutions.pose
+        )
+
+    def _draw_calibration(self, frame, side):
+        points = self._calib_points[side]
+        if points:
+            x, y = points[0]
+            cv2.circle(frame, (x, y), 6, (0, 255, 0), -1)
+            cv2.line(frame, (0, y), (frame.shape[1], y), (0, 255, 255), 2)
+        cv2.putText(
+            frame, f"Tap PACER line {side.upper()} ({len(points)}/1)",
+            (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2
+        )
+
+    def _process_pair(self, frame_a, frame_b):
+        for side, frame in (("a", frame_a), ("b", frame_b)):
+            if self.calib[side] is None:
+                if self._calib_points[side]:
+                    h, w = frame.shape[:2]
+                    self._build_tracker(side, w, h)
+                else:
+                    self._draw_calibration(frame, side)
+                    continue
+            y = self.calib[side].touch_line_y
+            cv2.line(frame, (0, y), (frame.shape[1], y), (0, 165, 255), 2)
+            if self.started:
+                self.trackers[side].process(frame)
+        return frame_a, frame_b
+
+    def _state_locked(self):
+        touches, _ = self.manager.snapshot()[1]
+        return {
+            "phase": "running" if self.started else "calibrating",
+            "distance_m": self.distance_m,
+            "calibrated_a": self.calib["a"] is not None,
+            "calibrated_b": self.calib["b"] is not None,
+            "completed_laps": touches,
+        }
+
+    def action(self, name, value=None):
+        if name == "calib_click":
+            side = (value or {}).get("cam")
+            x, y = (value or {}).get("x"), (value or {}).get("y")
+            if side not in ("a", "b") or x is None or y is None:
+                return {"ok": False, "error": "calib_click needs {cam:'a'|'b', x, y}"}
+            if self.calib[side] is not None:
+                return {"ok": False, "error": f"Camera {side.upper()} is already calibrated"}
+            self._calib_points[side] = [(int(x), int(y))]
+            return {"ok": True}
+        if name == "reset_calibration":
+            if self.started:
+                return {"ok": False, "error": "Stop PACER before resetting the lines"}
+            side = (value or {}).get("cam")
+            sides = (side,) if side in ("a", "b") else ("a", "b")
+            for camera in sides:
+                tracker = self.trackers[camera]
+                if tracker is not None:
+                    tracker.close()
+                self.trackers[camera] = None
+                self.calib[camera] = None
+                self._calib_points[camera] = []
+            return {"ok": True}
+        if name == "start_test":
+            if self.started:
+                return {"ok": False, "error": "PACER is already running"}
+            if self.calib["a"] is None or self.calib["b"] is None:
+                return {"ok": False, "error": "Calibrate both PACER lines before starting"}
+            self.manager.start()
+            self.started = True
+            return {"ok": True}
+        return {"ok": False, "error": f"Unknown action '{name}'"}
+
+    def maybe_finish(self):
+        if self._staged or not self.started:
+            return
+        touches, _ = self.manager.snapshot()[1]
+        if touches:
+            self._staged = True
+            self._safe_stage({
+                "session_id": self.session_id,
+                "distance_m": self.distance_m,
+                "completed_laps": touches,
+            })
 
 
 # ─────────────────────────────────────────────────────────────────────────

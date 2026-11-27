@@ -153,6 +153,16 @@ CREATE TABLE IF NOT EXISTS shuttle_run (
     recorded_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
 );
 
+-- ── PACER (15 m / 20 m) ────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS pacer (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    distance_m     INTEGER NOT NULL CHECK(distance_m IN (15, 20)),
+    completed_laps INTEGER NOT NULL CHECK(completed_laps >= 0),
+    rating         TEXT,
+    recorded_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime'))
+);
+
 -- ── 50 m Dash Timer ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS dash_50m (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,6 +450,10 @@ UNION ALL
     SELECT 'shuttle_run', r.id, r.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, r.time_sec, r.rating, r.recorded_at
     FROM shuttle_run r LEFT JOIN sessions s ON r.session_id = s.id
+UNION ALL
+    SELECT 'pacer', p.id, p.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
+           NULL, NULL, p.completed_laps, CAST(p.distance_m AS TEXT) || ' m', p.recorded_at
+    FROM pacer p LEFT JOIN sessions s ON p.session_id = s.id
 UNION ALL
     SELECT 'dash_50m', d.id, d.session_id, s.student_name, s.age, s.gender, s.school, s.grade,
            NULL, NULL, d.time_sec, d.rating, d.recorded_at
@@ -756,6 +770,23 @@ class GoForFitDB:
                 """INSERT INTO shuttle_run (session_id, lane, time_sec, rating)
                    VALUES (?,?,?,?)""",
                 (session_id, lane, time_sec, rating),
+            )
+            return cur.lastrowid
+
+    # ── PACER ────────────────────────────────────────────────────────────
+
+    def save_pacer(
+        self,
+        session_id: int,
+        distance_m: int,
+        completed_laps: int,
+        rating: str = None,
+    ) -> int:
+        with _conn() as con:
+            cur = con.execute(
+                """INSERT INTO pacer (session_id, distance_m, completed_laps, rating)
+                   VALUES (?,?,?,?)""",
+                (session_id, distance_m, completed_laps, rating),
             )
             return cur.lastrowid
 
@@ -1131,7 +1162,7 @@ class GoForFitDB:
 
     VALID_TABLES = {
         "bmi", "wingspan", "curl_up", "pull_up", "full_pull_up", "wall_toss",
-        "shuttle_run", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
+        "shuttle_run", "pacer", "dash_50m", "sit_reach", "trunk_lift", "run_600m",
         "vertical_jump", "reverse_curl", "shoulder_stretch", "isometric_push_up",
         "seated_push_up", "target_stretch", "dumbbell_press", "push_up",
         "modified_curl_up", "bench_press", "modified_thomas", "modified_apley",

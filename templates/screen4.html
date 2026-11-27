@@ -1426,6 +1426,38 @@
                   return { shuttleRunScore: Object.fromEntries(finished.map(([lane, l]) => [lane, l.touches])) };
               },
           },
+          pacer: {
+              dualFeed: true,
+              feedUrl:    '/api/pacer/feed_a',
+              feedUrlB:   '/api/pacer/feed_b',
+              stateUrl:   '/api/pacer/state',
+              actionUrl:  '/api/pacer/action',
+              clickCalibrate: true,
+              buttons: [
+                  { id: 'start_test', label: 'START PACER', action: 'start_test', color: 'bg-sky-600' },
+                  { id: 'reset_calibration', label: 'RESET LINES', action: 'reset_calibration', color: 'bg-orange-600' },
+              ],
+              showCalibOverlay(state) { return false; },
+              buttonDisabled(btnId, state) {
+                  if (btnId === 'start_test') return state.started || !state.calibrated_a || !state.calibrated_b;
+                  return state.started;
+              },
+              renderStatus(state) {
+                  if (!state.calibrated_a || !state.calibrated_b) {
+                      return [`PACER ${state.distance_m} m — tap the turn line once on each camera feed`,
+                              `Camera A: ${state.calibrated_a ? 'ready' : 'mark the start line'} • Camera B: ${state.calibrated_b ? 'ready' : 'mark the far line'}`];
+                  }
+                  if (!state.started) {
+                      return [`PACER ${state.distance_m} m — ready`,
+                              'Start the official PACER audio recording, then tap START PACER.'];
+                  }
+                  return [`PACER ${state.distance_m} m — ${state.completed_laps} completed laps`,
+                          'Stop after the participant cannot reach the line on time after two recovery beeps.'];
+              },
+              syncFields(state) {
+                  return state.completed_laps > 0 ? { pacerScore: state.completed_laps } : null;
+              },
+          },
           dash_50m: {
               dualFeed: true,
               feedUrl:    '/api/dash_50m/feed_a',
@@ -1961,6 +1993,7 @@
           if (testId === 'target_stretch') body['joint'] = document.getElementById('tst-joint').value;
           if (testId === 'dumbbell_press') body['arm'] = document.getElementById('dbp-arm').value;
           if (testId === 'bench_press') body['sex'] = document.getElementById('bpr-sex').value;
+          if (testId === 'pacer') body['distance_m'] = urlParams.get('distance_m') || '20';
           
           try {
               const res = await fetch(`/api/launch/${testId}`, {
@@ -2066,7 +2099,7 @@
               bench_press:'BenchPress',
               modified_apley:'ModifiedApleyTest',
               wheelchair_ramp:'WheelchairRampTest',
-              vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun',
+              vertical_jump:'VerticalJump', shuttle_run:'ShuttleRun', pacer:'Pacer',
               dash_50m:'Dash50m', run_600m:'Run600m',
           };
 
